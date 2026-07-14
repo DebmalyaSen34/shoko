@@ -138,3 +138,36 @@ def test_import_premiere_package_extracts_timeline(tmp_path, monkeypatch):
         project_name="project-new",
         output_base_dir=str(data_dir),
     )
+
+
+def test_upload_feedback_parses_and_aligns(tmp_path, monkeypatch):
+    data_dir = tmp_path / "app-storage" / "data"
+    assets_dir = tmp_path / "app-storage" / "assets"
+    project_dir = data_dir / "project-a"
+    project_dir.mkdir(parents=True)
+    
+    # 1. Create dummy timeline file
+    timeline_path = project_dir / "timeline.json"
+    timeline_path.write_text("{}", encoding="utf-8")
+    
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.chdir(tmp_path)
+    client = TestClient(server.app)
+
+    with (
+        mock.patch("server.parse_and_align_feedback") as parse_mock,
+        mock.patch("openai.OpenAI") as openai_mock,
+    ):
+        parse_mock.return_value = str(project_dir / "feedback.json")
+        
+        response = client.post(
+            "/api/projects/project-a/feedback",
+            files={"file": ("feedback.txt", b"some-feedback-text", "text/plain")},
+        )
+        
+    assert response.status_code == 200
+    assert response.json()["project_name"] == "project-a"
+    parse_mock.assert_called_once()
+

@@ -22,6 +22,7 @@ type TimelinePanelProps = {
   findPrompt: (clipName: string) => PromptRecord | null;
   openResultFromVersion: (version: PromptVersion) => void;
   setZoom: Dispatch<SetStateAction<number>>;
+  onUploadFeedback: () => void;
 };
 
 export function TimelinePanel({
@@ -40,6 +41,7 @@ export function TimelinePanel({
   findPrompt,
   openResultFromVersion,
   setZoom,
+  onUploadFeedback,
 }: TimelinePanelProps) {
   return (
     <section className="center-panel">
@@ -48,6 +50,11 @@ export function TimelinePanel({
           <Icon name="timeline" /> Chronological Timeline
         </h2>
         <div className="timeline-stats">
+          {projectData && (
+            <button className="premium-btn" style={{ marginRight: "16px", padding: "6px 12px", fontSize: "12px", height: "30px" }} onClick={onUploadFeedback}>
+              <Icon name="comments" /> Upload Feedback
+            </button>
+          )}
           <span className="stat-badge">{projectData?.sequence_name || "--"}</span>
           <span className="stat-badge">
             <Icon name="clock" /> Duration: {duration}
@@ -74,6 +81,18 @@ export function TimelinePanel({
           </div>
         </div>
       </div>
+
+      {projectData && projectData.feedback.length === 0 && (
+        <div className="no-feedback-banner" style={{ padding: "12px 24px", background: "rgba(192, 192, 200, 0.05)", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "16px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
+            <Icon name="comments" />
+            <span>No feedback has been uploaded for this project yet. Upload a feedback file to align and generate video prompts.</span>
+          </div>
+          <button className="premium-btn" onClick={onUploadFeedback}>
+            <Icon name="plus" /> Upload Feedback File
+          </button>
+        </div>
+      )}
 
       <Timeline
         refEl={refEl}

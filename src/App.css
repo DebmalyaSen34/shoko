@@ -285,6 +285,17 @@ button {
   padding: 16px;
 }
 
+.sidebar-actions {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  gap: 8px;
+}
+
+.sidebar-actions button {
+  width: 100%;
+}
+
 .asset-category {
   margin-bottom: 16px;
   border: 1px solid var(--border-color);

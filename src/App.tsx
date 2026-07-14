@@ -5,6 +5,8 @@ import { AppHeader } from "./components/AppHeader";
 import { AssetsSidebar } from "./components/assets/AssetsSidebar";
 import { ErrorModal, PreviewModal, ResultModal } from "./components/modals/Modals";
 import { NewProjectModal } from "./components/modals/NewProjectModal";
+import { UploadAssetsModal } from "./components/modals/UploadAssetsModal";
+import { UploadFeedbackModal } from "./components/modals/UploadFeedbackModal";
 import { TimelinePanel } from "./components/timeline/TimelinePanel";
 import { ToastStack } from "./components/ToastStack";
 import { apiUrl, API_BASE, staticUrl } from "./lib/api";
@@ -26,6 +28,8 @@ function App() {
   const [result, setResult] = useState<ResultState>(null);
   const [errorLog, setErrorLog] = useState("");
   const [showNewProject, setShowNewProject] = useState(false);
+  const [showUploadAssets, setShowUploadAssets] = useState(false);
+  const [showUploadFeedback, setShowUploadFeedback] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [runningIndexes, setRunningIndexes] = useState<Set<number>>(new Set());
   const [selectedVersions, setSelectedVersions] = useState<Record<string, number>>({});
@@ -236,6 +240,7 @@ function App() {
           onFilterChange={setAssetFilter}
           onPreview={setPreview}
           onToggleCategory={toggleAssetCategory}
+          onAddAssets={() => setShowUploadAssets(true)}
         />
 
         <TimelinePanel
@@ -254,6 +259,7 @@ function App() {
           findPrompt={findPrompt}
           openResultFromVersion={openResultFromVersion}
           setZoom={setZoom}
+          onUploadFeedback={() => setShowUploadFeedback(true)}
         />
       </main>
 
@@ -279,6 +285,28 @@ function App() {
         />
       )}
       {result && <ResultModal result={result} onClose={() => setResult(null)} onCopy={copyPrompt} />}
+      {showUploadAssets && activeProject && (
+        <UploadAssetsModal
+          projectName={activeProject}
+          onClose={() => setShowUploadAssets(false)}
+          onUploaded={() => {
+            setShowUploadAssets(false);
+            notify("Assets uploaded successfully.", "success");
+            void loadProject(activeProject);
+          }}
+        />
+      )}
+      {showUploadFeedback && activeProject && (
+        <UploadFeedbackModal
+          projectName={activeProject}
+          onClose={() => setShowUploadFeedback(false)}
+          onUploaded={() => {
+            setShowUploadFeedback(false);
+            notify("Feedback uploaded and parsed successfully.", "success");
+            void loadProject(activeProject);
+          }}
+        />
+      )}
       <ToastStack toasts={toasts} />
     </div>
   );

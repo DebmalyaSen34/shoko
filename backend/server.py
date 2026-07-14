@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from config.settings import LOKA_STORAGE_DIR
 from src.workflows.project_setup import setup_project_workspace
 from src.workflows.timeline_extraction import extract_timeline_from_project
+from src.workflows.feedback_parsing import parse_and_align_feedback
 
 app = FastAPI(title="Video Project Timeline & Feedback UI")
 
@@ -257,6 +258,51 @@ async def import_premiere_package(project_name: str, package: UploadFile = File(
             raise HTTPException(status_code=500, detail=f"Failed to import Premiere package: {exc}") from exc
 
     return {"project_name": project_name, "timeline_path": timeline_path}
+
+@app.post("/api/projects/{project_name}/feedback")
+async def upload_project_feedback(project_name: str, file: UploadFile = File(...)):
+    project_name = safe_project_name(project_name)
+    filename = safe_upload_name(file.filename)
+    
+    # Check if timeline.json exists
+    project_dir = project_data_dir(project_name)
+    timeline_path = project_dir / "timeline.json"
+    if not timeline_path.exists():
+        raise HTTPException(
+            status_code=400,
+            detail="Timeline must be extracted before feedback can be parsed and aligned. Please import Premiere package first."
+        )
+
+    # Validate file extension
+    ext = Path(filename).suffix.lower()
+    if ext not in {".txt", ".csv", ".xlsx", ".xls"}:
+        raise HTTPException(status_code=400, detail="Feedback file must be a .txt, .csv, .xlsx, or .xls file")
+
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    if not openai_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY environment variable is not set on the server.")
+
+    from openai import OpenAI
+    openai_client = OpenAI(api_key=openai_key)
+
+    ensure_project_asset_tree(project_name)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_file_path = Path(temp_dir) / filename
+        with temp_file_path.open("wb") as out_file:
+            shutil.copyfileobj(file.file, out_file)
+
+        try:
+            feedback_json_path = parse_and_align_feedback(
+                feedback_file_path=str(temp_file_path),
+                timeline_json_path=str(timeline_path),
+                project_name=project_name,
+                openai_client=openai_client,
+                output_base_dir=str(DATA_DIR),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to parse and align feedback: {exc}") from exc
+
+    return {"project_name": project_name, "feedback_path": feedback_json_path}
 
 def find_clip_url(clip_name: str, assets_dir: str | Path) -> Optional[str]:
     clips_dir = Path(assets_dir) / "06_clips"

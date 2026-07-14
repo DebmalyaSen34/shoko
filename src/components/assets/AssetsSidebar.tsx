@@ -13,6 +13,7 @@ type AssetsSidebarProps = {
   onFilterChange: (filter: string) => void;
   onPreview: (preview: PreviewState) => void;
   onToggleCategory: (category: string) => void;
+  onAddAssets: () => void;
 };
 
 export function AssetsSidebar({
@@ -27,6 +28,7 @@ export function AssetsSidebar({
   onFilterChange,
   onPreview,
   onToggleCategory,
+  onAddAssets,
 }: AssetsSidebarProps) {
   return (
     <>
@@ -45,6 +47,13 @@ export function AssetsSidebar({
             <Icon name="chevronLeft" />
           </button>
         </div>
+        {assets && (
+          <div className="sidebar-actions">
+            <button className="premium-btn" onClick={onAddAssets}>
+              <Icon name="plus" /> Add Assets
+            </button>
+          </div>
+        )}
         <div className="asset-search">
           <Icon name="search" />
           <input value={assetFilter} onChange={(event) => onFilterChange(event.target.value)} placeholder="Filter assets..." />

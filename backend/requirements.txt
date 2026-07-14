@@ -55,6 +55,7 @@ pygments
 pytest
 python-dateutil
 python-dotenv
+python-multipart
 pytz
 pyyaml
 regex

@@ -4,6 +4,7 @@ import "./App.css";
 import { AppHeader } from "./components/AppHeader";
 import { AssetsSidebar } from "./components/assets/AssetsSidebar";
 import { ErrorModal, PreviewModal, ResultModal } from "./components/modals/Modals";
+import { NewProjectModal } from "./components/modals/NewProjectModal";
 import { TimelinePanel } from "./components/timeline/TimelinePanel";
 import { ToastStack } from "./components/ToastStack";
 import { apiUrl, API_BASE, staticUrl } from "./lib/api";
@@ -24,6 +25,7 @@ function App() {
   const [preview, setPreview] = useState<PreviewState>(null);
   const [result, setResult] = useState<ResultState>(null);
   const [errorLog, setErrorLog] = useState("");
+  const [showNewProject, setShowNewProject] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [runningIndexes, setRunningIndexes] = useState<Set<number>>(new Set());
   const [selectedVersions, setSelectedVersions] = useState<Record<string, number>>({});
@@ -58,6 +60,24 @@ function App() {
       }
     },
     [],
+  );
+
+  const refreshProjects = useCallback(
+    async (selectProject?: string) => {
+      const response = await fetch(apiUrl("/api/projects"));
+      if (!response.ok) throw new Error("Failed to load project list");
+      const list = (await response.json()) as string[];
+      setProjects(list);
+
+      const nextProject = selectProject || activeProject || list[0];
+      if (nextProject && list.includes(nextProject)) {
+        await loadProject(nextProject);
+      } else if (list.length === 0) {
+        setActiveProject("");
+        setProjectData(null);
+      }
+    },
+    [activeProject, loadProject],
   );
 
   useEffect(() => {
@@ -198,6 +218,7 @@ function App() {
         activeProject={activeProject}
         projects={projects}
         provider={provider}
+        onNewProject={() => setShowNewProject(true)}
         onProjectChange={(project) => void loadProject(project)}
         onProviderChange={setProvider}
       />
@@ -247,6 +268,16 @@ function App() {
 
       {preview && <PreviewModal preview={preview} onClose={() => setPreview(null)} />}
       {errorLog && <ErrorModal errorLog={errorLog} onClose={() => setErrorLog("")} />}
+      {showNewProject && (
+        <NewProjectModal
+          onClose={() => setShowNewProject(false)}
+          onCreated={(projectName) => {
+            setShowNewProject(false);
+            notify("Project imported successfully.", "success");
+            void refreshProjects(projectName);
+          }}
+        />
+      )}
       {result && <ResultModal result={result} onClose={() => setResult(null)} onCopy={copyPrompt} />}
       <ToastStack toasts={toasts} />
     </div>

@@ -66,6 +66,11 @@ export type ProjectData = {
   total_duration_s: number;
 };
 
+export type ProjectImportResult = {
+  project_name: string;
+  timeline_path?: string;
+};
+
 export type PreviewState = {
   file: AssetFile;
 } | null;

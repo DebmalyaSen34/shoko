@@ -6,11 +6,12 @@ type AppHeaderProps = {
   activeProject: string;
   projects: string[];
   provider: Provider;
+  onNewProject: () => void;
   onProjectChange: (project: string) => void;
   onProviderChange: (provider: Provider) => void;
 };
 
-export function AppHeader({ activeProject, projects, provider, onProjectChange, onProviderChange }: AppHeaderProps) {
+export function AppHeader({ activeProject, projects, provider, onNewProject, onProjectChange, onProviderChange }: AppHeaderProps) {
   return (
     <header className="app-header">
       <div className="header-logo">
@@ -24,6 +25,9 @@ export function AppHeader({ activeProject, projects, provider, onProjectChange, 
       </div>
 
       <div className="header-controls">
+        <button className="premium-btn header-action-btn" onClick={onNewProject}>
+          <Icon name="plus" /> New Project
+        </button>
         <label className="project-selector-wrapper">
           <span>AI Provider</span>
           <select className="premium-select provider-select" value={provider} onChange={(event) => onProviderChange(event.target.value as Provider)}>

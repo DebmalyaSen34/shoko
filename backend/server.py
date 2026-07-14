@@ -1,17 +1,21 @@
 import os
 import json
 import asyncio
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from config.settings import LOKA_STORAGE_DIR
+from src.workflows.project_setup import setup_project_workspace
+from src.workflows.timeline_extraction import extract_timeline_from_project
 
 app = FastAPI(title="Video Project Timeline & Feedback UI")
 
@@ -36,6 +40,27 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 # STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
+PROJECT_ASSET_DIRS = {
+    "style": "00_style",
+    "characters": "01_characters",
+    "props": "02_props",
+    "locations": "03_locations",
+    "audio": "04_audio",
+    "references": "05_references",
+    "clips": "06_clips/_final",
+}
+
+REQUIRED_PROJECT_DIRS = [
+    "00_style",
+    "01_characters",
+    "02_props",
+    "03_locations",
+    "04_audio",
+    "05_references",
+    "06_clips/_final",
+    "06_clips/_raw",
+]
+
 def project_data_dir(project_name: str) -> Path:
     return DATA_DIR / safe_project_name(project_name)
 
@@ -48,6 +73,21 @@ def safe_project_name(project_name: str) -> str:
     if Path(project_name).name != project_name:
         raise HTTPException(status_code=400, detail="Invalid project name")
     return project_name
+
+def safe_upload_name(filename: str | None) -> str:
+    if not filename:
+        raise HTTPException(status_code=400, detail="Uploaded file is missing a filename")
+    safe_name = Path(filename).name
+    if safe_name in {"", ".", ".."}:
+        raise HTTPException(status_code=400, detail="Invalid uploaded filename")
+    return safe_name
+
+def ensure_project_asset_tree(project_name: str) -> Path:
+    project_dir = project_assets_dir(project_name)
+    for rel_dir in REQUIRED_PROJECT_DIRS:
+        (project_dir / rel_dir).mkdir(parents=True, exist_ok=True)
+    project_data_dir(project_name).mkdir(parents=True, exist_ok=True)
+    return project_dir
 
 # Helper function to format file sizes
 def format_size(size_bytes: int) -> str:
@@ -147,10 +187,76 @@ def list_projects():
         for item_path in DATA_DIR.iterdir():
             if item_path.is_dir():
                 timeline_path = item_path / "timeline.json"
-                feedback_path = item_path / "feedback.json"
-                if timeline_path.exists() and feedback_path.exists():
+                if timeline_path.exists():
                     projects.append(item_path.name)
     return sorted(projects)
+
+@app.post("/api/projects")
+def create_project(project_name: str = Form(...)):
+    project_name = safe_project_name(project_name.strip())
+    timeline_path = project_data_dir(project_name) / "timeline.json"
+    if timeline_path.exists():
+        raise HTTPException(status_code=409, detail=f"Project {project_name} already exists")
+
+    project_dir = ensure_project_asset_tree(project_name)
+    return {
+        "project_name": project_name,
+        "assets_dir": str(project_dir),
+        "required_directories": REQUIRED_PROJECT_DIRS,
+    }
+
+@app.post("/api/projects/{project_name}/assets/{category}")
+async def upload_project_assets(project_name: str, category: str, files: list[UploadFile] = File(...)):
+    project_name = safe_project_name(project_name)
+    rel_dir = PROJECT_ASSET_DIRS.get(category)
+    if rel_dir is None:
+        valid = ", ".join(sorted(PROJECT_ASSET_DIRS))
+        raise HTTPException(status_code=400, detail=f"Invalid asset category. Use one of: {valid}")
+
+    ensure_project_asset_tree(project_name)
+    target_dir = project_assets_dir(project_name) / rel_dir
+    saved_files = []
+    for upload in files:
+        filename = safe_upload_name(upload.filename)
+        destination = target_dir / filename
+        with destination.open("wb") as out_file:
+            shutil.copyfileobj(upload.file, out_file)
+        saved_files.append(str(destination.relative_to(project_assets_dir(project_name))))
+
+    return {"project_name": project_name, "category": category, "files": saved_files}
+
+@app.post("/api/projects/{project_name}/premiere-package")
+async def import_premiere_package(project_name: str, package: UploadFile = File(...)):
+    project_name = safe_project_name(project_name)
+    filename = safe_upload_name(package.filename)
+    if Path(filename).suffix.lower() != ".zip":
+        raise HTTPException(status_code=400, detail="Premiere package must be a .zip file")
+
+    ensure_project_asset_tree(project_name)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        package_path = Path(temp_dir) / filename
+        with package_path.open("wb") as out_file:
+            shutil.copyfileobj(package.file, out_file)
+
+        try:
+            _project_dir, prproj_path = setup_project_workspace(
+                zip_path=str(package_path),
+                project_name=project_name,
+                assets_dir=str(ASSETS_DIR),
+            )
+            timeline_path = extract_timeline_from_project(
+                prproj_path=prproj_path,
+                project_name=project_name,
+                output_base_dir=str(DATA_DIR),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to import Premiere package: {exc}") from exc
+
+    return {"project_name": project_name, "timeline_path": timeline_path}
 
 def find_clip_url(clip_name: str, assets_dir: str | Path) -> Optional[str]:
     clips_dir = Path(assets_dir) / "06_clips"
@@ -303,14 +409,17 @@ def get_project_data(project_name: str):
     timeline_path = project_dir / "timeline.json"
     feedback_path = project_dir / "feedback.json"
     
-    if not timeline_path.exists() or not feedback_path.exists():
-        raise HTTPException(status_code=404, detail="Project data files not found")
+    if not timeline_path.exists():
+        raise HTTPException(status_code=404, detail="Project timeline not found")
         
     with timeline_path.open("r", encoding="utf-8") as f:
         timeline_data = json.load(f)
         
-    with feedback_path.open("r", encoding="utf-8") as f:
-        feedback_data = json.load(f)
+    if feedback_path.exists():
+        with feedback_path.open("r", encoding="utf-8") as f:
+            feedback_data = json.load(f)
+    else:
+        feedback_data = []
         
     # Map assets directory
     assets_dir = project_assets_dir(project_name)

@@ -1,0 +1,131 @@
+import os
+import json
+import shutil
+import tempfile
+import unittest
+from unittest import mock
+
+from src.workflows.video_generation import run_video_generation_workflow
+
+class TestVideoGenerationWorkflow(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.prompts_path = os.path.join(self.test_dir, "video_prompts.json")
+        self.output_dir = os.path.join(self.test_dir, "seedance_videos")
+
+        # Mock video_prompts.json content
+        self.mock_prompts = [
+            {
+                "clip_used": "clip1.mp4",
+                "generation_type": "none",
+                "video_model_prompt": "",
+                "status": "none"
+            },
+            {
+                "clip_used": "clip2.mp4",
+                "category": "video",
+                "generation_type": "complex",
+                "video_model_prompt": "Warm sunlit hall... Vir enters playfully... mouth moving in sync.",
+                "selected_assets": ["/dummy/vir-sheet.png"],
+                "clip_frame_paths": ["/dummy/frame1.jpg"],
+                "audio_used": "audio1.mp3",
+                "audio_path": "/dummy/audio1.mp3",
+                "audio_url": "data:audio/mp3;base64,dummy_audio",
+                "is_dialogue_active": True,
+                "generate_audio": True,
+                "ratio": "9:16",
+                "duration": 5,
+                "status": "success",
+                "first_frame_url": "data:image/png;base64,dummy_first_frame",
+                "initial_frame_image_path": "/dummy/last_frame.jpg"
+            }
+        ]
+
+        with open(self.prompts_path, "w", encoding="utf-8") as f:
+            json.dump(self.mock_prompts, f)
+
+        # Mock workspace directory structure
+        self.workspace_dir = os.path.join(self.test_dir, "workspace")
+        os.makedirs(os.path.join(self.workspace_dir, "assets", "test_video_project", "06_clips", "_final"), exist_ok=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir)
+
+    @mock.patch("src.workflows.video_generation.build_seedance_content")
+    @mock.patch("src.workflows.video_generation.create_seedance_task")
+    @mock.patch("src.workflows.video_generation.poll_seedance_task")
+    @mock.patch("src.workflows.video_generation.download_video")
+    @mock.patch("os.rename")
+    @mock.patch("os.makedirs")
+    def test_run_video_generation_workflow_successful(
+        self, mock_makedirs, mock_rename, mock_download, mock_poll, mock_create, mock_build
+    ):
+        # Arrange
+        mock_build.return_value = [{"type": "text", "text": "mock prompt"}]
+        mock_create.return_value = {"id": "task_999"}
+        mock_poll.return_value = {
+            "status": "succeeded",
+            "content": {"video_url": "http://example.com/download.mp4"}
+        }
+
+        # Act
+        with mock.patch("os.getcwd", return_value=self.workspace_dir):
+            generated_clips = run_video_generation_workflow(
+                prompts_json_path=self.prompts_path,
+                project_name="test_video_project",
+                ark_api_key="mock_api_key",
+                output_dir=self.output_dir,
+                poll_interval_seconds=1
+            )
+
+        # Assert
+        # Verify calls
+        mock_build.assert_called_once()
+        mock_create.assert_called_once_with(
+            api_key="mock_api_key",
+            model="dreamina-seedance-2-0-260128",
+            content=[{"type": "text", "text": "mock prompt"}],
+            ratio="9:16",
+            duration=5,
+            generate_audio=True,
+            watermark=False
+        )
+        mock_poll.assert_called_once_with(
+            api_key="mock_api_key",
+            task_id="task_999",
+            poll_interval_seconds=1,
+            timeout_seconds=1800
+        )
+        mock_download.assert_called_once_with(
+            "http://example.com/download.mp4",
+            os.path.join(self.output_dir, "task_999.mp4")
+        )
+
+        # Verify output list
+        self.assertEqual(len(generated_clips), 1)
+        expected_final_path = os.path.abspath(
+            os.path.join(self.workspace_dir, "assets", "test_video_project", "06_clips", "_final", "clip2.mp4")
+        )
+        self.assertEqual(generated_clips[0], expected_final_path)
+
+    def test_missing_api_key(self):
+        # Act & Assert
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(ValueError):
+                run_video_generation_workflow(
+                    prompts_json_path=self.prompts_path,
+                    project_name="test_video_project",
+                    ark_api_key=None
+                )
+
+    def test_missing_prompts_file(self):
+        # Act & Assert
+        with self.assertRaises(FileNotFoundError):
+            run_video_generation_workflow(
+                prompts_json_path=os.path.join(self.test_dir, "missing.json"),
+                project_name="test_video_project",
+                ark_api_key="mock_key"
+            )
+
+if __name__ == "__main__":
+    unittest.main()

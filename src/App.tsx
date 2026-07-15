@@ -7,6 +7,7 @@ import { ErrorModal, PreviewModal, ResultModal } from "./components/modals/Modal
 import { NewProjectModal } from "./components/modals/NewProjectModal";
 import { UploadAssetsModal } from "./components/modals/UploadAssetsModal";
 import { UploadFeedbackModal } from "./components/modals/UploadFeedbackModal";
+import { AddManualFeedbackModal } from "./components/modals/AddManualFeedbackModal";
 import { TimelinePanel } from "./components/timeline/TimelinePanel";
 import { ToastStack } from "./components/ToastStack";
 import { apiUrl, API_BASE, staticUrl } from "./lib/api";
@@ -30,6 +31,8 @@ function App() {
   const [showNewProject, setShowNewProject] = useState(false);
   const [showUploadAssets, setShowUploadAssets] = useState(false);
   const [showUploadFeedback, setShowUploadFeedback] = useState(false);
+  const [showAddManualFeedback, setShowAddManualFeedback] = useState(false);
+  const [activeClipForManualFeedback, setActiveClipForManualFeedback] = useState("");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [runningIndexes, setRunningIndexes] = useState<Set<number>>(new Set());
   const [selectedVersions, setSelectedVersions] = useState<Record<string, number>>({});
@@ -136,6 +139,7 @@ function App() {
       initialImage: staticUrl(version.initial_frame_image_path),
       assets: version.selected_assets || [],
       quality: version.quality_report,
+      clipFrames: version.clip_frame_paths || [],
     });
   }, []);
 
@@ -210,8 +214,8 @@ function App() {
   }, [notify, result]);
 
   const timelineStyle = {
-    "--card-width": `${420 * zoom}px`,
-    "--thumbnail-height": `${220 * zoom}px`,
+    "--card-width": `${640 * zoom}px`,
+    "--thumbnail-height": `${320 * zoom}px`,
   } as CSSProperties;
 
   const zoomClass = zoom < 0.75 ? "font-small" : zoom > 1.25 ? "font-large" : "";
@@ -260,6 +264,10 @@ function App() {
           openResultFromVersion={openResultFromVersion}
           setZoom={setZoom}
           onUploadFeedback={() => setShowUploadFeedback(true)}
+          onAddManualFeedback={(clipName) => {
+            setActiveClipForManualFeedback(clipName);
+            setShowAddManualFeedback(true);
+          }}
         />
       </main>
 
@@ -303,6 +311,22 @@ function App() {
           onUploaded={() => {
             setShowUploadFeedback(false);
             notify("Feedback uploaded and parsed successfully.", "success");
+            void loadProject(activeProject);
+          }}
+        />
+      )}
+      {showAddManualFeedback && activeProject && activeClipForManualFeedback && (
+        <AddManualFeedbackModal
+          projectName={activeProject}
+          clipName={activeClipForManualFeedback}
+          onClose={() => {
+            setShowAddManualFeedback(false);
+            setActiveClipForManualFeedback("");
+          }}
+          onAdded={() => {
+            setShowAddManualFeedback(false);
+            setActiveClipForManualFeedback("");
+            notify("Manual feedback added successfully.", "success");
             void loadProject(activeProject);
           }}
         />

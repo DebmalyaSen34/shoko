@@ -28,3 +28,5 @@ __pycache__/
 *.pyc
 .venv/
 docs/
+.env
+api_responses.jsonl

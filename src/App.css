@@ -523,6 +523,24 @@ button {
   border-left: 3px solid var(--accent-primary);
 }
 
+.card-horizontal-layout {
+  display: flex;
+  gap: 20px;
+  width: 100%;
+  align-items: flex-start;
+}
+
+.clip-thumbnail-side {
+  flex: 0 0 auto;
+}
+
+.card-content-side {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .clip-thumbnail-wrapper {
   height: var(--thumbnail-height);
   aspect-ratio: 9 / 16;
@@ -534,6 +552,10 @@ button {
   position: relative;
   border: 1px solid var(--border-color);
   flex: 0 0 auto;
+}
+
+.clip-thumbnail-wrapper.side {
+  margin: 0;
 }
 
 .clip-thumbnail-wrapper video {

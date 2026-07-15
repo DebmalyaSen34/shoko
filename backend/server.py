@@ -12,6 +12,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from config.settings import LOKA_STORAGE_DIR
 from src.workflows.project_setup import setup_project_workspace
@@ -304,6 +305,61 @@ async def upload_project_feedback(project_name: str, file: UploadFile = File(...
 
     return {"project_name": project_name, "feedback_path": feedback_json_path}
 
+class ManualFeedbackRequest(BaseModel):
+    clip_used: str
+    category: str
+    remark: str
+    timestamp: Optional[str] = None
+
+@app.post("/api/projects/{project_name}/feedback/item")
+def add_manual_feedback(project_name: str, item: ManualFeedbackRequest):
+    project_name = safe_project_name(project_name)
+    project_dir = project_data_dir(project_name)
+    feedback_path = project_dir / "feedback.json"
+    
+    # 1. Load existing feedback
+    if feedback_path.exists():
+        try:
+            with feedback_path.open("r", encoding="utf-8") as f:
+                feedback_data = json.load(f)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to load existing feedback: {str(e)}")
+    else:
+        feedback_data = []
+
+    # 2. Add or find group for clip_used
+    found_group = None
+    for group in feedback_data:
+        if group.get("clip_used") == item.clip_used:
+            found_group = group
+            break
+            
+    if not found_group:
+        found_group = {
+            "clip_used": item.clip_used,
+            "previous_clip": None,
+            "audio_used": None,
+            "feedback_items": []
+        }
+        feedback_data.append(found_group)
+        
+    # 3. Add feedback item
+    new_item = {
+        "timestamp": item.timestamp,
+        "category": item.category,
+        "remark": item.remark
+    }
+    found_group["feedback_items"].append(new_item)
+    
+    # 4. Save feedback back
+    try:
+        with feedback_path.open("w", encoding="utf-8") as f:
+            json.dump(feedback_data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save feedback: {str(e)}")
+        
+    return {"status": "success", "project_name": project_name}
+
 def find_clip_url(clip_name: str, assets_dir: str | Path) -> Optional[str]:
     clips_dir = Path(assets_dir) / "06_clips"
     if not clips_dir.exists():
@@ -378,7 +434,8 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
                             "explanation": p_item.get("explanation"),
                             "quality_report": p_item.get("quality_report"),
                             "initial_frame_image_path": p_item.get("initial_frame_image_path"),
-                            "initial_frame_prompt": p_item.get("initial_frame_prompt")
+                            "initial_frame_prompt": p_item.get("initial_frame_prompt"),
+                            "clip_frame_paths": p_item.get("clip_frame_paths", [])
                         })
                         
                     new_entry = {
@@ -389,7 +446,8 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
                         "explanation": gen_item.get("explanation"),
                         "quality_report": gen_item.get("quality_report"),
                         "initial_frame_image_path": gen_item.get("initial_frame_image_path"),
-                        "initial_frame_prompt": gen_item.get("initial_frame_prompt")
+                        "initial_frame_prompt": gen_item.get("initial_frame_prompt"),
+                        "clip_frame_paths": gen_item.get("clip_frame_paths", [])
                     }
                     history.append(new_entry)
                     p_item["history"] = history
@@ -401,6 +459,7 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
                     p_item["quality_report"] = gen_item.get("quality_report")
                     p_item["initial_frame_image_path"] = gen_item.get("initial_frame_image_path")
                     p_item["initial_frame_prompt"] = gen_item.get("initial_frame_prompt")
+                    p_item["clip_frame_paths"] = gen_item.get("clip_frame_paths", [])
                     updated = True
                 break
         
@@ -425,7 +484,8 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
                     "explanation": gen_item.get("explanation"),
                     "quality_report": gen_item.get("quality_report"),
                     "initial_frame_image_path": gen_item.get("initial_frame_image_path"),
-                    "initial_frame_prompt": gen_item.get("initial_frame_prompt")
+                    "initial_frame_prompt": gen_item.get("initial_frame_prompt"),
+                    "clip_frame_paths": gen_item.get("clip_frame_paths", [])
                 }
                 prompts_data.append({
                     "clip_used": matched_clip,
@@ -438,6 +498,7 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
                     "quality_report": gen_item.get("quality_report"),
                     "initial_frame_image_path": gen_item.get("initial_frame_image_path"),
                     "initial_frame_prompt": gen_item.get("initial_frame_prompt"),
+                    "clip_frame_paths": gen_item.get("clip_frame_paths", []),
                     "history": [new_entry]
                 })
             updated = True

@@ -3,6 +3,8 @@ import json
 import unittest
 import shutil
 import tempfile
+from pathlib import Path
+import server
 from server import save_output_to_prompts
 
 class TestHistoryAndErrors(unittest.TestCase):
@@ -21,7 +23,11 @@ class TestHistoryAndErrors(unittest.TestCase):
         self.real_output_json = f"{self.real_project_dir}/output.json"
         self.real_prompts_json = f"{self.real_project_dir}/video_prompts.json"
         
+        self.original_data_dir = server.DATA_DIR
+        server.DATA_DIR = Path("data")
+        
     def tearDown(self):
+        server.DATA_DIR = self.original_data_dir
         if os.path.exists(self.real_project_dir):
             shutil.rmtree(self.real_project_dir)
 

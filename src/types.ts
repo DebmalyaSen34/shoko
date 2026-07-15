@@ -47,6 +47,7 @@ export type PromptVersion = {
   quality_report?: QualityReport;
   initial_frame_image_path?: string;
   initial_frame_prompt?: string;
+  clip_frame_paths?: string[];
 };
 
 export type PromptRecord = PromptVersion & {
@@ -82,6 +83,7 @@ export type ResultState = {
   initialImage?: string;
   assets: string[];
   quality?: QualityReport;
+  clipFrames?: string[];
 } | null;
 
 export type Toast = {

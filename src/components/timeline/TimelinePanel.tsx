@@ -23,6 +23,7 @@ type TimelinePanelProps = {
   openResultFromVersion: (version: PromptVersion) => void;
   setZoom: Dispatch<SetStateAction<number>>;
   onUploadFeedback: () => void;
+  onAddManualFeedback: (clipName: string) => void;
 };
 
 export function TimelinePanel({
@@ -42,6 +43,7 @@ export function TimelinePanel({
   openResultFromVersion,
   setZoom,
   onUploadFeedback,
+  onAddManualFeedback,
 }: TimelinePanelProps) {
   return (
     <section className="center-panel">
@@ -107,6 +109,7 @@ export function TimelinePanel({
         runningIndexes={runningIndexes}
         executeWorkflow={executeWorkflow}
         openResultFromVersion={openResultFromVersion}
+        onAddManualFeedback={onAddManualFeedback}
       />
     </section>
   );
@@ -125,6 +128,7 @@ function Timeline({
   runningIndexes,
   executeWorkflow,
   openResultFromVersion,
+  onAddManualFeedback,
 }: {
   refEl: RefObject<HTMLDivElement | null>;
   className: string;
@@ -138,6 +142,7 @@ function Timeline({
   runningIndexes: Set<number>;
   executeWorkflow: (feedbackIndex: number) => void;
   openResultFromVersion: (version: PromptVersion) => void;
+  onAddManualFeedback: (clipName: string) => void;
 }) {
   const drag = useRef({ down: false, startX: 0, scrollLeft: 0 });
 
@@ -230,6 +235,7 @@ function Timeline({
               runningIndexes={runningIndexes}
               executeWorkflow={executeWorkflow}
               openResultFromVersion={openResultFromVersion}
+              onAddManualFeedback={onAddManualFeedback}
             />
             {index < projectData.timeline.length - 1 && <TimelineConnector />}
           </div>
@@ -251,6 +257,7 @@ function TimelineCard({
   runningIndexes,
   executeWorkflow,
   openResultFromVersion,
+  onAddManualFeedback,
 }: {
   clip: TimelineClip;
   index: number;
@@ -263,95 +270,132 @@ function TimelineCard({
   runningIndexes: Set<number>;
   executeWorkflow: (feedbackIndex: number) => void;
   openResultFromVersion: (version: PromptVersion) => void;
+  onAddManualFeedback: (clipName: string) => void;
 }) {
   const hasFeedback = Boolean(feedback?.feedback_items?.length);
   const latestError = prompt?.latest_error;
 
   return (
     <article className={`timeline-card ${hasFeedback ? "has-feedback" : ""}`}>
-      {clip.clip_url && (
-        <div
-          className="clip-thumbnail-wrapper"
-          onMouseEnter={(event) => {
-            const video = event.currentTarget.querySelector("video");
-            void video?.play();
-          }}
-          onMouseLeave={(event) => {
-            const video = event.currentTarget.querySelector("video");
-            video?.pause();
-          }}
-        >
-          <video src={`${staticUrl(clip.clip_url)}#t=0.5`} preload="metadata" muted playsInline />
-          <div className="thumbnail-hover-overlay">
-            <Icon name="play" />
-          </div>
-        </div>
-      )}
-
-      <div className="card-header">
-        <div className="clip-title-info">
-          <div className="clip-title">{clip.clip}</div>
-          <div className="clip-meta-subtitle">Sequence Position: #{index + 1}</div>
-        </div>
-        <div className="duration-badge">{clip.duration_s.toFixed(2)}s</div>
-      </div>
-
-      <div className="card-details">
-        <Detail label="Start Timecode" value={clip.start_tc} />
-        <Detail label="End Timecode" value={clip.end_tc} />
-        <Detail label="Track Bounds" value={`${clip.start_s.toFixed(2)}s - ${clip.end_s.toFixed(2)}s`} />
-      </div>
-
-      {hasFeedback ? (
-        <div className="feedback-container">
-          <div className="feedback-box-header">
-            <Icon name="comments" /> Clip Feedback ({feedback?.feedback_items.length})
-          </div>
-          <div className="feedback-list">
-            {feedback?.feedback_items.map((item) => (
-              <div className="feedback-item-card" key={item.raw_index}>
-                <div className="feedback-item-header">
-                  <span className={`tag tag-${item.category}`}>{item.category}</span>
-                  <span className="feedback-timestamp">{item.timestamp || "No Timecode"}</span>
-                </div>
-                <div className="feedback-remark">{item.remark}</div>
-
-                {version?.video_model_prompt ? (
-                  <GeneratedPlan
-                    versions={versions}
-                    selectedVersion={selectedVersion}
-                    onSelectVersion={setSelectedVersion}
-                    version={version}
-                    latestError={latestError}
-                    running={runningIndexes.has(item.raw_index)}
-                    onRun={() => executeWorkflow(item.raw_index)}
-                    onDetails={() => openResultFromVersion(version)}
-                  />
-                ) : (
-                  <>
-                    {latestError && <ErrorWarning error={latestError} />}
-                    <div className="workflow-btn-wrapper">
-                      {runningIndexes.has(item.raw_index) ? (
-                        <div className="inline-runner-status">
-                          <Icon name="refresh" /> Running workflow...
-                        </div>
-                      ) : (
-                        <button className="premium-btn" onClick={() => executeWorkflow(item.raw_index)}>
-                          <Icon name="play" /> Execute Feedback Workflow
-                        </button>
-                      )}
-                    </div>
-                  </>
-                )}
+      <div className="card-horizontal-layout">
+        {clip.clip_url && (
+          <div className="clip-thumbnail-side">
+            <div
+              className="clip-thumbnail-wrapper side"
+              onMouseEnter={(event) => {
+                const video = event.currentTarget.querySelector("video");
+                void video?.play();
+              }}
+              onMouseLeave={(event) => {
+                const video = event.currentTarget.querySelector("video");
+                video?.pause();
+              }}
+            >
+              <video src={`${staticUrl(clip.clip_url)}#t=0.5`} preload="metadata" muted playsInline />
+              <div className="thumbnail-hover-overlay">
+                <Icon name="play" />
               </div>
-            ))}
+            </div>
           </div>
+        )}
+
+        <div className="card-content-side">
+          <div className="card-header">
+            <div className="clip-title-info">
+              <div className="clip-title">{clip.clip}</div>
+              <div className="clip-meta-subtitle">Sequence Position: #{index + 1}</div>
+            </div>
+            <div className="duration-badge">{clip.duration_s.toFixed(2)}s</div>
+          </div>
+
+          <div className="card-details">
+            <Detail label="Start Timecode" value={clip.start_tc} />
+            <Detail label="End Timecode" value={clip.end_tc} />
+            <Detail label="Track Bounds" value={`${clip.start_s.toFixed(2)}s - ${clip.end_s.toFixed(2)}s`} />
+          </div>
+
+          {hasFeedback ? (
+            <div className="feedback-container">
+              <div className="feedback-box-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <Icon name="comments" /> Clip Feedback ({feedback?.feedback_items.length})
+                </span>
+                <button
+                  className="icon-btn"
+                  title="Add Clip Feedback"
+                  type="button"
+                  onClick={() => onAddManualFeedback(clip.clip)}
+                  style={{
+                    padding: "4px",
+                    border: "0",
+                    background: "transparent",
+                    cursor: "pointer",
+                    color: "var(--text-secondary)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center"
+                  }}
+                >
+                  <Icon name="plus" />
+                </button>
+              </div>
+              <div className="feedback-list">
+                {feedback?.feedback_items.map((item) => (
+                  <div className="feedback-item-card" key={item.raw_index}>
+                    <div className="feedback-item-header">
+                      <span className={`tag tag-${item.category}`}>{item.category}</span>
+                      <span className="feedback-timestamp">{item.timestamp || "No Timecode"}</span>
+                    </div>
+                    <div className="feedback-remark">{item.remark}</div>
+
+                    {version?.video_model_prompt ? (
+                      <GeneratedPlan
+                        versions={versions}
+                        selectedVersion={selectedVersion}
+                        onSelectVersion={setSelectedVersion}
+                        version={version}
+                        latestError={latestError}
+                        running={runningIndexes.has(item.raw_index)}
+                        onRun={() => executeWorkflow(item.raw_index)}
+                        onDetails={() => openResultFromVersion(version)}
+                      />
+                    ) : (
+                      <>
+                        {latestError && <ErrorWarning error={latestError} />}
+                        <div className="workflow-btn-wrapper">
+                          {runningIndexes.has(item.raw_index) ? (
+                            <div className="inline-runner-status">
+                              <Icon name="refresh" /> Running workflow...
+                            </div>
+                          ) : (
+                            <button className="premium-btn" onClick={() => executeWorkflow(item.raw_index)}>
+                              <Icon name="play" /> Execute Feedback Workflow
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="feedback-container no-feedback" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <Icon name="check" /> No pending feedback on this clip
+              </div>
+              <button
+                className="premium-btn secondary"
+                type="button"
+                style={{ fontSize: "11px", padding: "4px 8px" }}
+                onClick={() => onAddManualFeedback(clip.clip)}
+              >
+                <Icon name="plus" /> Add Feedback
+              </button>
+            </div>
+          )}
         </div>
-      ) : (
-        <div className="feedback-container no-feedback">
-          <Icon name="check" /> No pending feedback on this clip
-        </div>
-      )}
+      </div>
     </article>
   );
 }

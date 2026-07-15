@@ -171,3 +171,45 @@ def test_upload_feedback_parses_and_aligns(tmp_path, monkeypatch):
     assert response.json()["project_name"] == "project-a"
     parse_mock.assert_called_once()
 
+
+def test_add_manual_feedback(tmp_path, monkeypatch):
+    data_dir = tmp_path / "app-storage" / "data"
+    project_dir = data_dir / "project-a"
+    project_dir.mkdir(parents=True)
+    
+    # 1. Start with no feedback file
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    monkeypatch.chdir(tmp_path)
+    client = TestClient(server.app)
+
+    # 2. Add manual feedback item
+    payload = {
+        "clip_used": "clip1.mp4",
+        "category": "video",
+        "remark": "This is a manually added feedback remark.",
+        "timestamp": "00:12"
+    }
+    response = client.post(
+        "/api/projects/project-a/feedback/item",
+        json=payload
+    )
+    
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+    
+    # 3. Read back feedback.json and verify contents
+    feedback_path = project_dir / "feedback.json"
+    assert feedback_path.exists()
+    
+    import json
+    with feedback_path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+        
+    assert len(data) == 1
+    assert data[0]["clip_used"] == "clip1.mp4"
+    assert len(data[0]["feedback_items"]) == 1
+    assert data[0]["feedback_items"][0]["remark"] == "This is a manually added feedback remark."
+    assert data[0]["feedback_items"][0]["category"] == "video"
+    assert data[0]["feedback_items"][0]["timestamp"] == "00:12"
+
+

@@ -158,13 +158,13 @@ def write_markdown_report(results: list, report_path: str):
             initial_frame_image_path = r.get("initial_frame_image_path")
             if initial_frame_image_path:
                 md.append("#### Generated Initial Frame Image")
-                md.append(f"```text\n{initial_frame_image_path}\n```")
+                md.append(f"![Initial Frame](file://{initial_frame_image_path})\n")
             clip_frame_paths = r.get("clip_frame_paths") or []
             if clip_frame_paths:
-                md.append("#### Extracted OpenAI Clip Frames")
-                md.append("```text")
-                md.extend(clip_frame_paths)
-                md.append("```")
+                md.append("#### Extracted Clip Frames")
+                for index, path in enumerate(clip_frame_paths, start=1):
+                    md.append(f"![Frame {index}](file://{path})")
+                md.append("")
             md.append("#### Generated Seedance 2.0 Prompt")
             md.append(f"```text\n{r.get('video_model_prompt')}\n```")
             

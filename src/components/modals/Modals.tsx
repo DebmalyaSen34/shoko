@@ -3,6 +3,36 @@ import { staticUrl } from "../../lib/api";
 import { basename } from "../../lib/format";
 import { Icon } from "../Icon";
 
+function getAssetUrl(path: string) {
+  if (!path) return "";
+  let cleanPath = path.replace(/\\/g, "/");
+  const assetsIdx = cleanPath.indexOf("/assets/");
+  if (assetsIdx !== -1) {
+    cleanPath = cleanPath.substring(assetsIdx);
+  } else {
+    const assetsIdx2 = cleanPath.indexOf("assets/");
+    if (assetsIdx2 !== -1) {
+      cleanPath = "/" + cleanPath.substring(assetsIdx2);
+    }
+  }
+  return staticUrl(cleanPath);
+}
+
+function getDataUrl(path: string) {
+  if (!path) return "";
+  let cleanPath = path.replace(/\\/g, "/");
+  const dataIdx = cleanPath.indexOf("/data/");
+  if (dataIdx !== -1) {
+    cleanPath = cleanPath.substring(dataIdx);
+  } else {
+    const dataIdx2 = cleanPath.indexOf("data/");
+    if (dataIdx2 !== -1) {
+      cleanPath = "/" + cleanPath.substring(dataIdx2);
+    }
+  }
+  return staticUrl(cleanPath);
+}
+
 export function PreviewModal({ preview, onClose }: { preview: NonNullable<PreviewState>; onClose: () => void }) {
   const { file } = preview;
 
@@ -69,12 +99,9 @@ export function ErrorModal({ errorLog, onClose }: { errorLog: string; onClose: (
 }
 
 export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<ResultState>; onClose: () => void; onCopy: () => void }) {
-  const passed = result.quality?.passed !== false;
-  const forbidden = result.quality?.forbidden_terms_found || [];
-
   return (
     <div className="modal active">
-      <div className="modal-content glass-card result-modal-content">
+      <div className="modal-content glass-card result-modal-content" style={{ maxWidth: "1000px", width: "94%" }}>
         <div className="modal-header">
           <h3>
             <Icon name="timeline" /> Workflow Result Verification
@@ -83,15 +110,15 @@ export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<R
             <Icon name="close" />
           </button>
         </div>
-        <div className="modal-body result-modal-body">
+        <div className="modal-body result-modal-body" style={{ maxHeight: "75vh", overflowY: "auto" }}>
           <div className="result-content-layout">
-            <div className="result-col">
-              <div className="result-section">
+            <div className="result-col" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+              <div className="result-section" style={{ flex: 1, display: "flex", flexDirection: "column" }}>
                 <label className="result-label">
                   <Icon name="file" /> Generated Video Model Prompt
                 </label>
-                <div className="prompt-box-wrapper">
-                  <pre className="monospace-box">{result.prompt}</pre>
+                <div className="prompt-box-wrapper" style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+                  <pre className="monospace-box" style={{ flex: 1, maxHeight: "none", height: result.initialPrompt ? "220px" : "400px", fontSize: "15px", lineHeight: "1.7" }}>{result.prompt}</pre>
                   <button className="icon-btn copy-btn" title="Copy Prompt" onClick={onCopy}>
                     <Icon name="copy" />
                   </button>
@@ -102,68 +129,75 @@ export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<R
                   <label className="result-label">
                     <Icon name="image" /> Initial Frame Prompt
                   </label>
-                  <pre className="monospace-box">{result.initialPrompt}</pre>
+                  <pre className="monospace-box" style={{ height: "110px", maxHeight: "110px", fontSize: "14px", lineHeight: "1.6" }}>{result.initialPrompt}</pre>
                 </div>
               )}
-              <div className="result-section">
-                <label className="result-label">
-                  <Icon name="magic" /> Generation Explanation
-                </label>
-                <p className="text-description">{result.explanation}</p>
-              </div>
-            </div>
-
-            <div className="result-col">
               {result.initialImage && (
                 <div className="result-section">
                   <label className="result-label">
                     <Icon name="image" /> Generated Initial Frame Image
                   </label>
-                  <div className="initial-image-preview-wrapper">
-                    <img src={result.initialImage} alt="Initial Frame" />
+                  <div className="initial-image-preview-wrapper" style={{ maxHeight: "200px", overflow: "hidden", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                    <img src={result.initialImage} alt="Initial Frame" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
                   </div>
                 </div>
               )}
+            </div>
+
+            <div className="result-col">
               <div className="result-section">
                 <label className="result-label">
                   <Icon name="box" /> Context Assets Used
                 </label>
-                <div className="mini-assets-list">
+                <div className="mini-assets-list" style={{ border: "0", background: "transparent", padding: "0" }}>
                   {result.assets.length === 0 ? (
                     <div className="muted-small">No reference assets were selected for this prompt.</div>
                   ) : (
-                    result.assets.map((asset) => (
-                      <div className="mini-asset-item" key={asset}>
-                        <Icon name="link" />
-                        <span title={asset}>{basename(asset)}</span>
-                      </div>
-                    ))
+                    <div className="assets-grid-layout" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "16px" }}>
+                      {result.assets.map((asset) => {
+                        const assetUrl = getAssetUrl(asset);
+                        const isImg = /\.(png|jpe?g|webp|gif)$/i.test(asset);
+                        return (
+                          <div className="asset-grid-card" key={asset} style={{ background: "rgba(255, 255, 255, 0.02)", border: "1px solid var(--border-color)", borderRadius: "8px", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+                            <div className="asset-card-thumb" style={{ height: "200px", background: "#050505", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", position: "relative", padding: "8px" }}>
+                              {isImg ? (
+                                <img src={assetUrl} alt={basename(asset)} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: "4px" }} />
+                              ) : (
+                                <Icon name="file" />
+                              )}
+                            </div>
+                            <div className="asset-card-name" style={{ padding: "8px 10px", fontSize: "11px", color: "var(--text-secondary)", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", borderTop: "1px solid var(--border-color)" }} title={basename(asset)}>
+                              {basename(asset)}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
               </div>
-              {result.quality && (
-                <div className="result-section">
+
+              {result.clipFrames && result.clipFrames.length > 0 && (
+                <div className="result-section" style={{ marginTop: "24px" }}>
                   <label className="result-label">
-                    <Icon name="check" /> Quality Check Report
+                    <Icon name="image" /> Extracted Clip Frames
                   </label>
-                  <div className="quality-report-card">
-                    <div className="quality-status">
-                      Status: <span className={`tag ${passed ? "tag-audio" : "tag-both"}`}>{passed ? "PASSED" : "WARNING"}</span>
-                    </div>
-                    <div className="quality-details-table">
-                      <QualityRow label="Feedback Adherence:" value={result.quality.feedback_adherence || "Passed"} />
-                      <QualityRow label="Clothing Consistency:" value={result.quality.clothing_consistency || "Passed"} />
-                      <QualityRow label="Forbidden Terms:" value={forbidden.length ? forbidden.join(", ") : "None"} danger={forbidden.length > 0} />
-                    </div>
-                    {Boolean(result.quality.suggestions?.length) && (
-                      <div className="quality-suggestions-list">
-                        {result.quality.suggestions?.map((suggestion) => (
-                          <div key={suggestion}>
-                            <Icon name="warning" /> {suggestion}
+                  <div className="mini-assets-list" style={{ border: "0", background: "transparent", padding: "0" }}>
+                    <div className="assets-grid-layout" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "16px" }}>
+                      {result.clipFrames.map((framePath, idx) => {
+                        const frameUrl = getDataUrl(framePath);
+                        return (
+                          <div className="asset-grid-card" key={framePath} style={{ background: "rgba(255, 255, 255, 0.02)", border: "1px solid var(--border-color)", borderRadius: "8px", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+                            <div className="asset-card-thumb" style={{ height: "200px", background: "#050505", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", position: "relative", padding: "8px" }}>
+                              <img src={frameUrl} alt={`Frame ${idx + 1}`} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: "4px" }} />
+                            </div>
+                            <div className="asset-card-name" style={{ padding: "8px 10px", fontSize: "11px", color: "var(--text-secondary)", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", borderTop: "1px solid var(--border-color)" }} title={`Frame ${idx + 1}`}>
+                              Frame {idx + 1}
+                            </div>
                           </div>
-                        ))}
-                      </div>
-                    )}
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               )}
@@ -171,23 +205,11 @@ export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<R
           </div>
         </div>
         <div className="modal-footer modal-actions">
-          <button className="premium-btn secondary" onClick={onClose}>
-            Close Verification
-          </button>
           <button className="premium-btn" onClick={onClose}>
             <Icon name="check" /> Approve & Proceed
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-function QualityRow({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
-  return (
-    <div className="q-row">
-      <span>{label}</span>
-      <strong className={danger ? "danger" : ""}>{value}</strong>
     </div>
   );
 }

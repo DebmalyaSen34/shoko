@@ -2,6 +2,7 @@ import type { PreviewState, ResultState } from "../../types";
 import { staticUrl } from "../../lib/api";
 import { basename } from "../../lib/format";
 import { Icon } from "../Icon";
+import { FormattedPrompt } from "../FormattedPrompt";
 
 function getAssetUrl(path: string) {
   if (!path) return "";
@@ -118,7 +119,11 @@ export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<R
                   <Icon name="file" /> Generated Video Model Prompt
                 </label>
                 <div className="prompt-box-wrapper" style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-                  <pre className="monospace-box" style={{ flex: 1, maxHeight: "none", height: result.initialPrompt ? "220px" : "400px", fontSize: "15px", lineHeight: "1.7" }}>{result.prompt}</pre>
+                  <FormattedPrompt
+                    className="monospace-box"
+                    style={{ flex: 1, maxHeight: "none", height: result.initialPrompt ? "220px" : "400px", fontSize: "15px", lineHeight: "1.7" }}
+                    text={result.prompt}
+                  />
                   <button className="icon-btn copy-btn" title="Copy Prompt" onClick={onCopy}>
                     <Icon name="copy" />
                   </button>

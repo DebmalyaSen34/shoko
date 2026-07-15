@@ -1,10 +1,11 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import type { CSSProperties, Dispatch, RefObject, SetStateAction } from "react";
 import type { FeedbackGroup, ProjectData, PromptRecord, PromptVersion, TimelineClip } from "../../types";
 import { basename, getVersions, versionLabel } from "../../lib/format";
 import { staticUrl } from "../../lib/api";
 import { EmptyState } from "../EmptyState";
 import { Icon } from "../Icon";
+import { FormattedPrompt } from "../FormattedPrompt";
 
 type TimelinePanelProps = {
   duration: string;
@@ -428,35 +429,56 @@ function GeneratedPlan({
   onRun: () => void;
   onDetails: () => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+
   return (
     <div className="generated-plan-box">
-      {versions.length > 1 && (
-        <label className="version-selector-wrapper">
-          <span>History:</span>
-          <select value={selectedVersion} onChange={(event) => onSelectVersion(Number(event.target.value))}>
-            {versions.map((item, index) => (
-              <option key={`${item.timestamp || "version"}-${index}`} value={index}>
-                {versionLabel(item, index)}
-              </option>
-            ))}
-          </select>
-        </label>
+      <button
+        type="button"
+        className="prompt-toggle-btn"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <Icon name="magic" />
+          {expanded ? "Hide generated prompt ▴" : "Show generated prompt ▾"}
+        </span>
+      </button>
+
+      {expanded && (
+        <>
+          {versions.length > 1 && (
+            <label className="version-selector-wrapper">
+              <span>History:</span>
+              <select value={selectedVersion} onChange={(event) => onSelectVersion(Number(event.target.value))}>
+                {versions.map((item, index) => (
+                  <option key={`${item.timestamp || "version"}-${index}`} value={index}>
+                    {versionLabel(item, index)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          
+          <FormattedPrompt
+            className="generated-prompt-preview"
+            text={version.video_model_prompt}
+          />
+
+          {Boolean(version.selected_assets?.length) && (
+            <div className="asset-tags" style={{ marginTop: "10px" }}>
+              {version.selected_assets?.map((asset) => (
+                <span className="tag tag-characters" key={asset} title={asset}>
+                  <Icon name="box" /> {basename(asset)}
+                </span>
+              ))}
+            </div>
+          )}
+        </>
       )}
-      <div className="generated-plan-label">
-        <Icon name="magic" /> Generated Prompt Plan
-      </div>
-      <pre className="generated-prompt-preview">{version.video_model_prompt}</pre>
-      {Boolean(version.selected_assets?.length) && (
-        <div className="asset-tags">
-          {version.selected_assets?.map((asset) => (
-            <span className="tag tag-characters" key={asset} title={asset}>
-              <Icon name="box" /> {basename(asset)}
-            </span>
-          ))}
-        </div>
-      )}
+
       {latestError && <ErrorWarning error={latestError} />}
-      <div className="generated-actions">
+      
+      <div className="generated-actions" style={{ marginTop: "8px" }}>
         {running ? (
           <div className="inline-runner-status">
             <Icon name="refresh" /> Running workflow...

@@ -154,7 +154,7 @@ export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<R
                 <label className="result-label">
                   <Icon name="box" /> Context Assets Used
                 </label>
-                <div className="mini-assets-list" style={{ border: "0", background: "transparent", padding: "0" }}>
+                <div style={{ width: "100%" }}>
                   {result.assets.length === 0 ? (
                     <div className="muted-small">No reference assets were selected for this prompt.</div>
                   ) : (
@@ -163,8 +163,11 @@ export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<R
                         const assetUrl = getAssetUrl(asset);
                         const isImg = /\.(png|jpe?g|webp|gif)$/i.test(asset);
                         return (
-                          <div className="asset-grid-card" key={asset} style={{ background: "rgba(255, 255, 255, 0.02)", border: "1px solid var(--border-color)", borderRadius: "8px", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-                            <div className="asset-card-thumb" style={{ height: "200px", background: "#050505", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", position: "relative", padding: "8px" }}>
+                          <div className="asset-grid-card uploaded-asset-card" key={asset} style={{ background: "rgba(255, 255, 255, 0.02)", border: "1px solid var(--border-color)", borderRadius: "8px", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+                            <div className="asset-card-thumb" style={{ height: "120px", background: "#050505", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", position: "relative", padding: "8px" }}>
+                              <div className="asset-card-badge uploaded">
+                                <Icon name="box" /> Uploaded Reference
+                              </div>
                               {isImg ? (
                                 <img src={assetUrl} alt={basename(asset)} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: "4px" }} />
                               ) : (
@@ -187,13 +190,16 @@ export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<R
                   <label className="result-label">
                     <Icon name="image" /> Extracted Clip Frames
                   </label>
-                  <div className="mini-assets-list" style={{ border: "0", background: "transparent", padding: "0" }}>
+                  <div style={{ width: "100%" }}>
                     <div className="assets-grid-layout" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "16px" }}>
                       {result.clipFrames.map((framePath, idx) => {
                         const frameUrl = getDataUrl(framePath);
                         return (
-                          <div className="asset-grid-card" key={framePath} style={{ background: "rgba(255, 255, 255, 0.02)", border: "1px solid var(--border-color)", borderRadius: "8px", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-                            <div className="asset-card-thumb" style={{ height: "200px", background: "#050505", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", position: "relative", padding: "8px" }}>
+                          <div className="asset-grid-card extracted-frame-card" key={framePath} style={{ background: "rgba(255, 255, 255, 0.02)", border: "1px solid var(--border-color)", borderRadius: "8px", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+                            <div className="asset-card-thumb" style={{ height: "120px", background: "#050505", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", position: "relative", padding: "8px" }}>
+                              <div className="asset-card-badge extracted">
+                                <Icon name="video" /> Video Frame
+                              </div>
                               <img src={frameUrl} alt={`Frame ${idx + 1}`} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: "4px" }} />
                             </div>
                             <div className="asset-card-name" style={{ padding: "8px 10px", fontSize: "11px", color: "var(--text-secondary)", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", borderTop: "1px solid var(--border-color)" }} title={`Frame ${idx + 1}`}>

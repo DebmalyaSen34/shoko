@@ -512,15 +512,9 @@ function TimelineConnector() {
   return (
     <div className="timeline-connector" aria-hidden="true">
       <svg className="timeline-string" width="178" height="76" viewBox="0 0 178 76" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path className="string-shadow" d="M 0 38 C 35 14 52 58 80 38 C 109 17 132 59 178 38" />
-        <path className="string-main" d="M 0 38 C 35 14 52 58 80 38 C 109 17 132 59 178 38" />
-        <path className="string-thread string-thread-one" d="M 0 42 C 34 21 53 63 80 42 C 108 22 132 64 178 42" />
-        <path className="string-thread string-thread-two" d="M 0 34 C 36 9 53 53 80 34 C 109 12 132 54 178 34" />
-        <path className="string-glint" d="M 61 52 C 69 51 74 44 80 38 C 89 30 96 25 105 25" />
-        <circle className="string-anchor string-anchor-start" cx="0" cy="38" r="7" />
-        <circle className="string-anchor string-anchor-end" cx="178" cy="38" r="7" />
-        <circle className="string-pin string-pin-start" cx="0" cy="38" r="2.5" />
-        <circle className="string-pin string-pin-end" cx="178" cy="38" r="2.5" />
+        <line x1="8" y1="38" x2="170" y2="38" stroke="var(--border-color)" strokeWidth="2" strokeDasharray="5 5" />
+        <circle cx="4" cy="38" r="4" fill="var(--border-color)" />
+        <circle cx="174" cy="38" r="4" fill="var(--border-color)" />
       </svg>
     </div>
   );

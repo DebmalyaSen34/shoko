@@ -1408,7 +1408,7 @@ button {
 
 .result-content-layout {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 4.2fr 5.8fr;
   gap: 24px;
   height: 100%;
 }
@@ -1857,4 +1857,52 @@ button {
   color: var(--text-primary);
   border-color: rgba(255, 255, 255, 0.15);
 }
+
+/* Card type distinctions */
+.uploaded-asset-card {
+  border: 1px solid rgba(168, 85, 247, 0.3) !important;
+  background: rgba(168, 85, 247, 0.02) !important;
+}
+
+.uploaded-asset-card:hover {
+  border-color: rgba(168, 85, 247, 0.6) !important;
+}
+
+.extracted-frame-card {
+  border: 1px solid rgba(14, 165, 233, 0.3) !important;
+  background: rgba(14, 165, 233, 0.02) !important;
+}
+
+.extracted-frame-card:hover {
+  border-color: rgba(14, 165, 233, 0.6) !important;
+}
+
+/* Badge overlay on thumbnail card */
+.asset-card-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  color: #fff;
+  padding: 3px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  z-index: 2;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.asset-card-badge.uploaded {
+  background: rgba(168, 85, 247, 0.85); /* Purple accent */
+  box-shadow: 0 2px 4px rgba(168, 85, 247, 0.2);
+}
+
+.asset-card-badge.extracted {
+  background: rgba(14, 165, 233, 0.85); /* Sky blue/cyan accent */
+  box-shadow: 0 2px 4px rgba(14, 165, 233, 0.2);
+}
+
 

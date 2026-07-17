@@ -19,11 +19,12 @@ These rules override every conflicting instruction in the skill above:
 - Choose `plain_text`, `json`, or `production_prompt` using the skill's scene routing, but remove timeline structures from every format.
 - Preserve every client feedback instruction and all observable continuity from the original clip.
 - Use the initial frame prompt as the first-frame visual anchor for the final video prompt.
-- Use reference handles consistently. `@video1` is the original clip; selected sheets are `@image1` through `@image9`. You MUST explicitly include these handles (e.g. `@image1`, `@video1`) within the description of the prompt text to ground style, characters, or motion. Refer to the reference legend for their semantic roles.
-- Perform strict visual attribute bridging: when referencing image sheets (like `@image1` for characters or `@image2` for locations), do not rely solely on the handles. Explicitly extract and describe the key visual elements visible in the reference sheets (e.g., specific hair color, clothing style, accessories, colors, textures, lighting, setting details) directly in the generated prompt text to bind the generation model and prevent hallucinations.
-- Reconcile clothing discrepancy: If the character's clothing in the preproduction assets (@image1-9) differs from the clothing in the original video clip (@video1), prioritize the clothing/wardrobe from the video clip to ensure continuity, unless the client feedback explicitly requests changing the wardrobe to match the preproduction asset. Explicitly describe this wardrobe in detail in the prompt body (e.g., color, garment type, fabric, fit) and make sure it matches the initial frame prompt exactly.
-- Reconcile version variants: If multiple version sheets of a character (e.g., @image1 and @image2 representing different versions/variants of a character sheet) are selected, compare all of them with the original video clip frames (@video1). Explicitly determine which version closely matches the character's clothing and appearance in the video clip, and use only that correct version handle for Vir's identity/clothing reference in the prompt.
-- Ensure body continuity: Analyze the character's physical proportions in the original video clip (@video1)—specifically their height, body shape, build, and posture. Explicitly describe these physical attributes in the prompt (e.g., 'a slender boy of average height', 'a broad-shouldered athletic build') and keep this description consistent between the initial frame prompt and the final video prompt to prevent body shape or proportions drift.
+- Use Segmind API reference wording consistently. In the final prompt body, refer to uploaded references as `image 1`, `image 2`, ... exactly like the Segmind documentation examples. Do not use `@image1`, `@video1`, bracketed `[Image 1]`, or custom names in the final prompt body.
+- Use the supplied reference legend only as a mapping aid. Convert selected sheets from `@image1` through `@image9` into `image 1` through `image 9` when writing the final prompt. Convert original clip frames into the image numbers supplied by the runtime payload, or describe them as "the original clip reference images" when exact numbers are unavailable.
+- Perform strict visual attribute bridging: when referencing image sheets (like `image 1` for characters or `image 2` for locations), do not rely solely on the image number. Explicitly extract and describe the key visual elements visible in the reference sheets (e.g., specific hair color, clothing style, accessories, colors, textures, lighting, setting details) directly in the generated prompt text to bind the generation model and prevent hallucinations.
+- Reconcile clothing discrepancy: If the character's clothing in the preproduction assets differs from the clothing in the original video clip reference images, prioritize the clothing/wardrobe from the video clip to ensure continuity, unless the client feedback explicitly requests changing the wardrobe to match the preproduction asset. Explicitly describe this wardrobe in detail in the prompt body (e.g., color, garment type, fabric, fit) and make sure it matches the initial frame prompt exactly.
+- Reconcile version variants: If multiple version sheets of a character are selected, compare all of them with the original video clip frames. Explicitly determine which version closely matches the character's clothing and appearance in the video clip, and use only that correct image number for Vir's identity/clothing reference in the prompt.
+- Ensure body continuity: Analyze the character's physical proportions in the original video clip reference images, specifically their height, body shape, build, and posture. Explicitly describe these physical attributes in the prompt (e.g., 'a slender boy of average height', 'a broad-shouldered athletic build') and keep this description consistent between the initial frame prompt and the final video prompt to prevent body shape or proportions drift.
 - Translate vague feedback: If a feedback remark is vague or abstract (e.g., 'make him playful', 'create proper freeze point', 'looks disconnected'), cross-reference it with the visual state in the original clip frames (@video1) and translate it into concrete, actionable staging instructions (e.g., specifying character poses, expressions, body physics, or camera movements) to resolve the vagueness, and document how this was clarified in the explanation.
 - Select no more than nine image assets and include an English `reference_legend` matching labels used in the prompt.
 - Return exactly one structured result for every supplied cluster_id.
@@ -130,8 +131,8 @@ def _reference_legend_for_assets(selected_assets: List[str]) -> str:
     legend_lines = []
     for index, path in enumerate(selected_assets, start=1):
         basename = os.path.basename(path)
-        legend_lines.append(f"@image{index} — {basename} — selected visual reference.")
-    legend_lines.append("@video1 — original clip frames — motion, framing, and continuity reference.")
+        legend_lines.append(f"image {index} — {basename} — selected visual reference.")
+    legend_lines.append("original clip reference images — motion, framing, and continuity reference.")
     return "\n".join(legend_lines)
 
 
@@ -153,7 +154,7 @@ def _append_selected_reference_assets(
         "mentioned in the prompt or legend."
     )
     for index, path in enumerate(selected_assets, start=1):
-        contents.append(f"@image{index}: REFERENCE_ASSET_PATH: {path}")
+        contents.append(f"image {index}: REFERENCE_ASSET_PATH: {path}")
         ref = reference_handles.get(path)
         if ref:
             _append_media_reference(contents, ref)

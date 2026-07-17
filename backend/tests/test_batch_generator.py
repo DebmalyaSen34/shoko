@@ -496,7 +496,7 @@ class BatchGeneratorTests(unittest.TestCase):
         self.assertIn("initial frame 0", results[0]["initial_frame_prompt"])
         self.assertIn("prompt 12", results[12]["video_model_prompt"])
         self.assertEqual("plain_text", results[0]["prompt_format"])
-        self.assertIn("@video1", results[0]["reference_legend"])
+        self.assertIn("original clip reference images", results[0]["reference_legend"])
         self.assertEqual("success", results[0]["status"])
         self.assertIsNone(results[0]["quality_warning"])
         self.assertEqual(40, upload.call_count)

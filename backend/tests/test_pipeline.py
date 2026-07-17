@@ -70,7 +70,7 @@ class ClusteredPipelineTests(unittest.TestCase):
                             ),
                             "selected_assets": ["character.png"],
                             "prompt_format": "plain_text",
-                            "reference_legend": "@image1 — character.png\n@video1 — original clip",
+                            "reference_legend": "image 1 — character.png\noriginal clip reference images",
                             "video_model_prompt": "video result",
                             "explanation": "video",
                             "status": "success",
@@ -108,7 +108,7 @@ class ClusteredPipelineTests(unittest.TestCase):
             self.assertTrue(results[0]["initial_frame_image_path"].endswith(
                 "cluster_0_initial_frame.png"
             ))
-            self.assertIn("@video1", results[0]["reference_legend"])
+            self.assertIn("original clip reference images", results[0]["reference_legend"])
             self.assertTrue(
                 batch_generator.call_args.kwargs["initial_frames_dir"].endswith(
                     os.path.join("output", "initial_frames")
@@ -244,7 +244,7 @@ class ClusteredPipelineTests(unittest.TestCase):
                 "clip_duration_s": 2.0,
                 "selected_assets": [],
                 "prompt_format": "plain_text",
-                "reference_legend": "@video1 — original clip",
+                "reference_legend": "original clip reference images",
                 "initial_frame_prompt": "initial still frame",
                 "initial_frame_image_path": "/tmp/initial-frame.png",
                 "video_model_prompt": "combined prompt",
@@ -264,7 +264,7 @@ class ClusteredPipelineTests(unittest.TestCase):
         self.assertIn("initial still frame", report)
         self.assertIn("/tmp/initial-frame.png", report)
         self.assertIn("Seedance 2.0", report)
-        self.assertIn("@video1 — original clip", report)
+        self.assertIn("original clip reference images", report)
 
     def test_default_feedback_and_timeline_paths_belong_to_episode_one(self):
         self.assertEqual("data/feedback/feedback.json", main.DEFAULT_FEEDBACK_JSON_PATH)

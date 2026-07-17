@@ -156,7 +156,7 @@ def _refine_prompt(
         f"Rewrite the draft prompt to address all suggestions. For example:\n"
         f"- Convert any negative constraints (like 'no blur', 'no flickering') into positive statements (like 'crisp, stable motion').\n"
         f"- Remove any forbidden terms (like 'epic').\n"
-        f"- Ensure it meets length requirements while preserving all original staging, actions, character garments, and reference handles (like @image1 or @video1).\n"
+        f"- Ensure it meets length requirements while preserving all original staging, actions, character garments, and Segmind reference wording (like image 1 or original clip reference images).\n"
         f"Return the refined prompt in your structured output."
     )
     

@@ -1,4 +1,3 @@
-import base64
 import json
 import os
 import tempfile
@@ -7,6 +6,7 @@ from unittest import mock
 
 from scripts.generate_seedance_video import (
     build_seedance_content,
+    build_segmind_payload,
     clamp_duration,
     load_prompt_item,
 )
@@ -53,10 +53,7 @@ class SeedanceVideoScriptTests(unittest.TestCase):
             content[0],
         )
         self.assertEqual("image_url", content[1]["type"])
-        self.assertEqual(
-            "data:image/png;base64," + base64.b64encode(b"png-bytes").decode("ascii"),
-            content[1]["image_url"]["url"],
-        )
+        self.assertEqual(image_path, content[1]["image_url"]["url"])
         self.assertEqual("first_frame", content[1].get("role"))
 
     def test_build_content_with_first_frame_only(self):
@@ -85,11 +82,13 @@ class SeedanceVideoScriptTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            {"type": "text", "text": "boy the character sheet runs like the original clip"},
+            {"type": "text", "text": "boy image 1 runs like image 2"},
             content[0],
         )
         self.assertEqual("first_frame", content[1].get("role"))
-        self.assertEqual(2, len(content))  # text + 1 image (initial)
+        self.assertEqual("reference_image", content[2].get("role"))
+        self.assertEqual("reference_image", content[3].get("role"))
+        self.assertEqual(4, len(content))  # text + first frame + asset + clip frame
 
     def test_build_content_with_assets_and_clip_frames_mapping_without_first_frame(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -113,7 +112,7 @@ class SeedanceVideoScriptTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            {"type": "text", "text": "boy character sheet [Image 1] runs like [Image 2]"},
+            {"type": "text", "text": "boy image 1 runs like image 2"},
             content[0],
         )
         self.assertEqual("reference_image", content[1].get("role"))
@@ -134,7 +133,7 @@ class SeedanceVideoScriptTests(unittest.TestCase):
 
         self.assertEqual(2, len(content))
         self.assertEqual(
-            {"type": "text", "text": "boy the character sheet runs like [Video 1]"},
+            {"type": "text", "text": "boy the character sheet runs like video 1"},
             content[0],
         )
         self.assertEqual(
@@ -163,7 +162,7 @@ class SeedanceVideoScriptTests(unittest.TestCase):
 
         self.assertEqual(3, len(content))
         self.assertEqual(
-            {"type": "text", "text": "movement from [Image 1], [Image 2]"},
+            {"type": "text", "text": "movement from image 1, image 2"},
             content[0],
         )
         self.assertEqual(
@@ -201,23 +200,40 @@ class SeedanceVideoScriptTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            {"type": "text", "text": "hard cut to [Image 1] for Vir smile"},
+            {"type": "text", "text": "hard cut to image 1 for Vir smile"},
             content[0],
         )
         self.assertEqual("reference_image", content[1].get("role"))
-        self.assertEqual(
-            "data:image/jpeg;base64," + base64.b64encode(b"ref-bytes").decode("ascii"),
-            content[1]["image_url"]["url"],
+        self.assertEqual(ref_path, content[1]["image_url"]["url"])
+
+    def test_duration_is_clamped_to_segmind_range(self):
+        self.assertEqual(8, clamp_duration(8))
+        self.assertEqual(4, clamp_duration(1))
+        self.assertEqual(4, clamp_duration(4))
+        self.assertEqual(15, clamp_duration(20))
+
+    def test_build_segmind_payload_uses_api_reference_fields(self):
+        payload = build_segmind_payload(
+            item={
+                "video_model_prompt": "use @image1 and @video1",
+                "selected_assets": ["https://example.com/character.jpg"],
+                "clip_frame_paths": ["https://example.com/frame.jpg"],
+                "audio_url": "https://example.com/audio.mp3",
+                "duration": 12,
+                "ratio": "9:16",
+                "generate_audio": True,
+            },
+            api_key="test-key",
+            cache=None,
+            upload_assets=False,
         )
 
-    def test_duration_is_capped_at_five_seconds(self):
-        self.assertEqual(5, clamp_duration(8))
-        self.assertEqual(2, clamp_duration(1))
-        self.assertEqual(4, clamp_duration(4))
-        # Seedance 2.0 specific checks
-        self.assertEqual(4, clamp_duration(1, model="dreamina-seedance-2-0-260128"))
-        self.assertEqual(4, clamp_duration(3, model="dreamina-seedance-2-0"))
-        self.assertEqual(3, clamp_duration(3, model="seedance-1-0-pro"))
+        self.assertEqual("use image 1 and image 2", payload["prompt"])
+        self.assertEqual(["https://example.com/character.jpg", "https://example.com/frame.jpg"], payload["reference_images"])
+        self.assertEqual(["https://example.com/audio.mp3"], payload["reference_audios"])
+        self.assertEqual(12, payload["duration"])
+        self.assertEqual("9:16", payload["aspect_ratio"])
+        self.assertTrue(payload["generate_audio"])
 
 
 if __name__ == "__main__":

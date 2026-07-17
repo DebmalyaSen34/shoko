@@ -51,21 +51,27 @@ class TestVideoGenerationWorkflow(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.test_dir)
 
-    @mock.patch("src.workflows.video_generation.build_seedance_content")
+    @mock.patch("src.workflows.video_generation.SupabaseAssetUrlCache")
+    @mock.patch("src.workflows.video_generation.build_segmind_payload")
     @mock.patch("src.workflows.video_generation.create_seedance_task")
-    @mock.patch("src.workflows.video_generation.poll_seedance_task")
-    @mock.patch("src.workflows.video_generation.download_video")
+    @mock.patch("src.workflows.video_generation.save_video_bytes")
     @mock.patch("os.rename")
     @mock.patch("os.makedirs")
     def test_run_video_generation_workflow_successful(
-        self, mock_makedirs, mock_rename, mock_download, mock_poll, mock_create, mock_build
+        self, mock_makedirs, mock_rename, mock_save, mock_create, mock_build_payload, mock_cache_class
     ):
         # Arrange
-        mock_build.return_value = [{"type": "text", "text": "mock prompt"}]
-        mock_create.return_value = {"id": "task_999"}
-        mock_poll.return_value = {
-            "status": "succeeded",
-            "content": {"video_url": "http://example.com/download.mp4"}
+        mock_cache = mock.Mock()
+        mock_cache_class.return_value = mock_cache
+        mock_build_payload.return_value = {
+            "prompt": "mock prompt",
+            "duration": 5,
+            "aspect_ratio": "9:16",
+            "generate_audio": True,
+        }
+        mock_create.return_value = {
+            "id": "segmind_999",
+            "content": {"bytes": b"video-bytes"},
         }
 
         # Act
@@ -73,32 +79,28 @@ class TestVideoGenerationWorkflow(unittest.TestCase):
             generated_clips = run_video_generation_workflow(
                 prompts_json_path=self.prompts_path,
                 project_name="test_video_project",
-                ark_api_key="mock_api_key",
+                segmind_api_key="mock_api_key",
                 output_dir=self.output_dir,
                 poll_interval_seconds=1
             )
 
         # Assert
         # Verify calls
-        mock_build.assert_called_once()
+        mock_build_payload.assert_called_once()
+        self.assertEqual(mock_build_payload.call_args.kwargs["api_key"], "mock_api_key")
+        self.assertEqual(mock_build_payload.call_args.kwargs["cache"], mock_cache)
         mock_create.assert_called_once_with(
             api_key="mock_api_key",
-            model="dreamina-seedance-2-0-260128",
-            content=[{"type": "text", "text": "mock prompt"}],
-            ratio="9:16",
-            duration=5,
-            generate_audio=True,
-            watermark=False
+            payload={
+                "prompt": "mock prompt",
+                "duration": 5,
+                "aspect_ratio": "9:16",
+                "generate_audio": True,
+            },
         )
-        mock_poll.assert_called_once_with(
-            api_key="mock_api_key",
-            task_id="task_999",
-            poll_interval_seconds=1,
-            timeout_seconds=1800
-        )
-        mock_download.assert_called_once_with(
-            "http://example.com/download.mp4",
-            os.path.join(self.output_dir, "task_999.mp4")
+        mock_save.assert_called_once_with(
+            b"video-bytes",
+            os.path.join(self.output_dir, "segmind_999.mp4")
         )
 
         # Verify output list
@@ -115,6 +117,7 @@ class TestVideoGenerationWorkflow(unittest.TestCase):
                 run_video_generation_workflow(
                     prompts_json_path=self.prompts_path,
                     project_name="test_video_project",
+                    segmind_api_key=None,
                     ark_api_key=None
                 )
 
@@ -124,7 +127,7 @@ class TestVideoGenerationWorkflow(unittest.TestCase):
             run_video_generation_workflow(
                 prompts_json_path=os.path.join(self.test_dir, "missing.json"),
                 project_name="test_video_project",
-                ark_api_key="mock_key"
+                segmind_api_key="mock_key"
             )
 
 if __name__ == "__main__":

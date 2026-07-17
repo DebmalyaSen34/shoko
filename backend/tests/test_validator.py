@@ -53,9 +53,9 @@ class ValidatorTests(unittest.TestCase):
             has_clip=True
         )
         self.assertFalse(res["passed"])
-        self.assertTrue(any("@image1" in s for s in res["suggestions"]))
-        self.assertTrue(any("@image2" in s for s in res["suggestions"]))
-        self.assertTrue(any("@video1" in s for s in res["suggestions"]))
+        self.assertTrue(any("image 1" in s for s in res["suggestions"]))
+        self.assertTrue(any("image 2" in s for s in res["suggestions"]))
+        self.assertTrue(any("Original clip reference images" in s for s in res["suggestions"]))
 
     @mock.patch("src.generator.validator.generate_structured")
     def test_semantic_checks(self, mock_generate_structured):
@@ -70,7 +70,7 @@ class ValidatorTests(unittest.TestCase):
         }
         
         valid_prompt = (
-            "A long prompt with @image1 and @image2 that starts with @video1 and describes a character wearing a green shirt. " * 15
+            "A long prompt with image 1 and image 2 that starts with original clip reference images and describes a character wearing a green shirt. " * 15
         )
         
         res = run_quality_check(

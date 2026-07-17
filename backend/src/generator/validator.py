@@ -17,6 +17,21 @@ NEGATIVE_PATTERNS = [
     r"\bno\s+flicker\b",
 ]
 
+
+def _mentions_image_reference(prompt_lower: str, index: int) -> bool:
+    return (
+        f"@image{index}" in prompt_lower
+        or re.search(rf"\bimage\s+{index}\b", prompt_lower) is not None
+    )
+
+
+def _mentions_original_clip_reference(prompt_lower: str) -> bool:
+    return (
+        "@video1" in prompt_lower
+        or "original clip" in prompt_lower
+        or "original clip reference images" in prompt_lower
+    )
+
 def run_quality_check(
     provider: Provider,
     client,
@@ -62,16 +77,18 @@ def run_quality_check(
             
     # Check reference handles
     for idx in range(len(selected_assets)):
-        handle = f"@image{idx + 1}"
-        if handle not in prompt:
-            suggestions.append(f"Reference asset handle '{handle}' was selected but is not explicitly mentioned in the prompt text.")
+        image_number = idx + 1
+        if not _mentions_image_reference(prompt_lower, image_number):
+            suggestions.append(
+                f"Reference asset 'image {image_number}' was selected but is not explicitly mentioned in the prompt text."
+            )
             
-    if has_clip and "@video1" not in prompt:
-        suggestions.append("Original clip handle '@video1' is available but not explicitly mentioned in the prompt text.")
+    if has_clip and not _mentions_original_clip_reference(prompt_lower):
+        suggestions.append("Original clip reference images are available but not explicitly mentioned in the prompt text.")
         
     # 2. Semantic check (LLM-based)
     feedback_text = "\n".join([f"- {item.get('remark', '')}" for item in feedback_items])
-    asset_text = "\n".join([f"- @image{idx+1}: {os.path.basename(path)}" for idx, path in enumerate(selected_assets)])
+    asset_text = "\n".join([f"- image {idx+1}: {os.path.basename(path)}" for idx, path in enumerate(selected_assets)])
     
     eval_prompt = (
         f"Analyze this generated Seedance 2.0 prompt for compliance with feedback, wardrobe continuity, and style rules.\n\n"
@@ -80,7 +97,7 @@ def run_quality_check(
         f"GENERATED AI VIDEO PROMPT:\n{prompt}\n\n"
         f"Instructions:\n"
         f"1. Evaluate if every feedback remark is addressed (especially vague ones like 'looks disconnected' or 'make playful').\n"
-        f"2. Check if clothing/wardrobe is explicitly described, prioritizing the clothing from the video clip frames (@video1) if there's a discrepancy between references.\n"
+        f"2. Check if clothing/wardrobe is explicitly described, prioritizing the clothing from the original clip reference images if there's a discrepancy between references.\n"
         f"3. Evaluate if vague feedback has been translated into concrete actions in the prompt.\n"
         f"4. Provide constructive suggestions to fix any issues."
     )

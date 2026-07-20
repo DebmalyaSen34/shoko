@@ -167,9 +167,11 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
         self.assertEqual(prompts_data[1]["clip_used"], "clip2.mp4")
         self.assertEqual(prompts_data[1]["generation_type"], "complex")
         self.assertEqual(prompts_data[1]["category"], "video")
-        self.assertEqual(
-            prompts_data[1]["video_model_prompt"],
-            "Warm sunlit hall... Vir enters playfully... mouth moving in sync."
+        self.assertIn("REFERENCE IMAGE MAP:", prompts_data[1]["video_model_prompt"])
+        self.assertTrue(
+            prompts_data[1]["video_model_prompt"].endswith(
+                "Warm sunlit hall... Vir enters playfully... mouth moving in sync."
+            )
         )
         # Verify resolved assets
         self.assertIn(self.vir_sheet, prompts_data[1]["selected_assets"])
@@ -253,9 +255,11 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
         self.assertFalse(prompts_data[1]["generate_audio"])
         self.assertTrue(prompts_data[1]["has_reference_audio"])
         self.assertEqual(prompts_data[1]["audio_url"], "data:audio/mp3;base64,dummy_audio")
-        self.assertEqual(
-            prompts_data[1]["video_model_prompt"],
-            "Warm sunlit hall... Mother shouts 'Kya hua?'... mouth moving in sync."
+        self.assertIn("REFERENCE IMAGE MAP:", prompts_data[1]["video_model_prompt"])
+        self.assertTrue(
+            prompts_data[1]["video_model_prompt"].endswith(
+                "Warm sunlit hall... Mother shouts 'Kya hua?'... mouth moving in sync."
+            )
         )
 
     @mock.patch("src.workflows.prompt_generation.generate_structured")
@@ -319,7 +323,8 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
         self.assertEqual([self.mock_plan[1]["referenced_frames"][0]], prompts_data[1]["referenced_frames"])
         self.assertEqual([ref_frame_path], prompts_data[1]["referenced_frame_paths"])
         self.assertEqual(["@ref1"], prompts_data[1]["referenced_frame_labels"])
-        self.assertIn("@ref1", prompts_data[1]["video_model_prompt"])
+        self.assertIn("image 4", prompts_data[1]["video_model_prompt"])
+        self.assertNotIn("@ref1", prompts_data[1]["video_model_prompt"])
         self.assertNotIn("first_frame_url", prompts_data[1])
         self.assertNotIn("initial_frame_image_path", prompts_data[1])
 

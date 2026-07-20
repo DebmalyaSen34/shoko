@@ -20,7 +20,7 @@ from src.workflows.timeline_extraction import extract_timeline_from_project
 from src.workflows.feedback_parsing import parse_and_align_feedback
 from src.workflows.referenced_frames import analyze_and_extract_referenced_frames
 from src.workflows.generation_planner import plan_generation_workflow
-from src.workflows.prompt_generation import generate_video_prompts_from_plan
+from src.workflows.prompt_generation import extract_audio_segment, generate_video_prompts_from_plan
 from src.workflows.project_setup import setup_project_workspace
 from scripts.generate_seedance_video import SupabaseAssetUrlCache, attach_prepared_segmind_payload
 
@@ -44,6 +44,87 @@ def _agentic_artifact_paths(output_base_dir: str, project_name: str) -> dict[str
         "prompts": os.path.join(project_dir, "video_prompts.json"),
         "manifest": os.path.join(project_dir, "agent_run_manifest.json"),
     }
+
+
+def _resolve_audio_path(assets_dir: str, audio_name: Optional[str]) -> Optional[str]:
+    if not audio_name:
+        return None
+    candidates = [
+        os.path.join(assets_dir, "04_audio", audio_name),
+        os.path.join(os.getcwd(), "assets", os.path.basename(assets_dir), "04_audio", audio_name),
+        os.path.abspath(os.path.join("assets", os.path.basename(assets_dir), "04_audio", audio_name)),
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return os.path.abspath(candidate)
+    return None
+
+
+def _matching_audio_segment(timeline_data: dict, clip_start_s: Optional[float]) -> dict:
+    audio_tracks = (timeline_data.get("audio_timeline") or {}).get("dedicated_audio_tracks", [])
+    if clip_start_s is None:
+        return {}
+    for audio in audio_tracks:
+        if audio.get("start_s", 0) <= clip_start_s < audio.get("end_s", 0):
+            return audio
+    return audio_tracks[0] if audio_tracks else {}
+
+
+def _attach_legacy_audio_reference(
+    item: dict,
+    *,
+    timeline_data: dict,
+    assets_dir: str,
+    output_json: str,
+) -> dict:
+    clip_start_s = item.get("clip_start_s")
+    clip_end_s = item.get("clip_end_s")
+    audio_segment = _matching_audio_segment(timeline_data, clip_start_s)
+    audio_name = audio_segment.get("clip")
+    audio_path = _resolve_audio_path(assets_dir, audio_name)
+    item["audio_used"] = audio_name
+    item["audio_path"] = audio_path
+
+    if clip_start_s is None or clip_end_s is None:
+        item["audio_trim_error"] = "Clip timeline bounds are missing; audio reference was not prepared."
+        return item
+    if not audio_path:
+        item["audio_trim_error"] = f"Audio source file not found for {audio_name or 'timeline audio'}."
+        return item
+
+    trim_start_s = float(clip_start_s)
+    trim_end_s = float(clip_end_s)
+    trim_duration_s = max(0.0, trim_end_s - trim_start_s)
+    if trim_duration_s <= 0:
+        item["audio_trim_error"] = "Clip audio trim duration is zero."
+        return item
+
+    clip_slug = os.path.splitext(os.path.basename(str(item.get("clip_used") or "clip")))[0]
+    safe_clip_slug = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in clip_slug).strip("._-")
+    audio_dir = os.path.join(os.path.dirname(output_json), "audio_references", safe_clip_slug or "clip")
+    os.makedirs(audio_dir, exist_ok=True)
+    trimmed_audio_path = os.path.abspath(
+        os.path.join(audio_dir, f"trimmed_{os.path.splitext(os.path.basename(audio_name))[0]}.mp3")
+    )
+
+    if extract_audio_segment(audio_path, trimmed_audio_path, trim_start_s, trim_end_s):
+        item.update(
+            {
+                "audio_reference_path": trimmed_audio_path,
+                "trimmed_audio_path": trimmed_audio_path,
+                "audio_trim_start_s": trim_start_s,
+                "audio_trim_end_s": trim_end_s,
+                "audio_trim_duration_s": trim_duration_s,
+                "audio_trim_source": "sequence_timeline",
+                "audio_trim_error": None,
+                "has_reference_audio": True,
+            }
+        )
+    else:
+        item["audio_trim_error"] = (
+            f"Failed to trim audio from {trim_start_s:.3f}s to {trim_end_s:.3f}s for {item.get('clip_used')}."
+        )
+    return item
 
 
 def _normalize_stage(stage: Optional[str], argument_name: str) -> Optional[str]:
@@ -333,6 +414,12 @@ def run_pipeline(
             "quality_warning": generated.get("quality_warning"),
             "quality_report": generated.get("quality_report"),
         }
+        result_item = _attach_legacy_audio_reference(
+            result_item,
+            timeline_data=timeline_data,
+            assets_dir=assets_dir,
+            output_json=output_json,
+        )
         result_item = attach_prepared_segmind_payload(
             result_item,
             cache=segmind_cache,

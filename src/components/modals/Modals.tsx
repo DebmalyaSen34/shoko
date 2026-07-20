@@ -1,4 +1,5 @@
 import type { PreviewState, ResultState } from "../../types";
+import type { ReactNode } from "react";
 import { staticUrl } from "../../lib/api";
 import { basename } from "../../lib/format";
 import { Icon } from "../Icon";
@@ -32,6 +33,14 @@ function getDataUrl(path: string) {
     }
   }
   return staticUrl(cleanPath);
+}
+
+function getReferenceUrl(path: string) {
+  if (!path) return "";
+  if (/^https?:\/\//.test(path)) return path;
+  const normalized = path.replace(/\\/g, "/");
+  if (normalized.includes("/assets/")) return getAssetUrl(normalized);
+  return getDataUrl(normalized);
 }
 
 export function PreviewModal({ preview, onClose }: { preview: NonNullable<PreviewState>; onClose: () => void }) {
@@ -100,6 +109,8 @@ export function ErrorModal({ errorLog, onClose }: { errorLog: string; onClose: (
 }
 
 export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<ResultState>; onClose: () => void; onCopy: () => void }) {
+  const hasAudioReference = Boolean(result.audioTrim?.path || result.audioTrim?.error);
+
   return (
     <div className="modal active">
       <div className="modal-content glass-card result-modal-content" style={{ maxWidth: "1000px", width: "94%" }}>
@@ -150,89 +161,77 @@ export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<R
             </div>
 
             <div className="result-col">
-              <div className="result-section">
+              <div className="result-section reference-panel">
                 <label className="result-label">
-                  <Icon name="box" /> Context Assets Used
+                  <Icon name="box" /> References
                 </label>
-                <div style={{ width: "100%" }}>
-                  {result.assets.length === 0 ? (
-                    <div className="muted-small">No reference assets were selected for this prompt.</div>
-                  ) : (
-                    <div className="assets-grid-layout" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "16px" }}>
-                      {result.assets.map((asset) => {
-                        const assetUrl = getAssetUrl(asset);
-                        const isImg = /\.(png|jpe?g|webp|gif)$/i.test(asset);
-                        return (
-                          <div className="asset-grid-card uploaded-asset-card" key={asset} style={{ background: "rgba(255, 255, 255, 0.02)", border: "1px solid var(--border-color)", borderRadius: "8px", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-                            <div className="asset-card-thumb" style={{ height: "120px", background: "#050505", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", position: "relative", padding: "8px" }}>
-                              <div className="asset-card-badge uploaded">
-                                <Icon name="box" /> Uploaded Reference
-                              </div>
-                              {isImg ? (
-                                <img src={assetUrl} alt={basename(asset)} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: "4px" }} />
-                              ) : (
-                                <Icon name="file" />
-                              )}
-                            </div>
-                            <div className="asset-card-name" style={{ padding: "8px 10px", fontSize: "11px", color: "var(--text-secondary)", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", borderTop: "1px solid var(--border-color)" }} title={basename(asset)}>
-                              {basename(asset)}
-                            </div>
+                {result.assets.length === 0 && !result.clipFrames?.length && !hasAudioReference ? (
+                  <div className="muted-small">No references were attached to this prompt.</div>
+                ) : (
+                  <>
+                    {result.assets.length > 0 && (
+                      <ReferenceGroup title="Context Assets" icon="box">
+                        <div className="reference-grid">
+                          {result.assets.map((asset) => (
+                            <ReferenceImageCard
+                              key={asset}
+                              title={basename(asset)}
+                              badge="Asset"
+                              badgeClass="uploaded"
+                              url={getAssetUrl(asset)}
+                              fallbackIcon="file"
+                            />
+                          ))}
+                        </div>
+                      </ReferenceGroup>
+                    )}
+
+                    {result.clipFrames && result.clipFrames.length > 0 && (
+                      <ReferenceGroup title="Clip Frames" icon="image">
+                        <div className="reference-grid">
+                          {result.clipFrames.map((framePath, idx) => (
+                            <ReferenceImageCard
+                              key={framePath}
+                              title={`Frame ${idx + 1}`}
+                              badge="Frame"
+                              badgeClass="extracted"
+                              url={getDataUrl(framePath)}
+                              fallbackIcon="video"
+                            />
+                          ))}
+                        </div>
+                      </ReferenceGroup>
+                    )}
+
+                    {hasAudioReference && (
+                      <ReferenceGroup title="Audio Reference" icon="audio">
+                        <div className="audio-reference-card">
+                          <div className="audio-reference-icon">
+                            <Icon name="audio" />
                           </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                          <div className="audio-reference-content">
+                            <div className="audio-reference-title">
+                              {result.audioTrim?.path ? basename(result.audioTrim.path) : "Audio trim unavailable"}
+                            </div>
+                            {result.audioTrim?.path && (
+                              <div className="audio-reference-meta">
+                                {formatSeconds(result.audioTrim.start)} → {formatSeconds(result.audioTrim.end)}
+                                {typeof result.audioTrim.duration === "number" ? ` · ${result.audioTrim.duration.toFixed(3)}s` : ""}
+                              </div>
+                            )}
+                            {result.audioTrim?.path && (
+                              <audio controls src={getReferenceUrl(result.audioTrim.path)} />
+                            )}
+                            {result.audioTrim?.error && (
+                              <div className="audio-reference-error">{result.audioTrim.error}</div>
+                            )}
+                          </div>
+                        </div>
+                      </ReferenceGroup>
+                    )}
+                  </>
+                )}
               </div>
-
-              {result.clipFrames && result.clipFrames.length > 0 && (
-                <div className="result-section" style={{ marginTop: "24px" }}>
-                  <label className="result-label">
-                    <Icon name="image" /> Extracted Clip Frames
-                  </label>
-                  <div style={{ width: "100%" }}>
-                    <div className="assets-grid-layout" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "16px" }}>
-                      {result.clipFrames.map((framePath, idx) => {
-                        const frameUrl = getDataUrl(framePath);
-                        return (
-                          <div className="asset-grid-card extracted-frame-card" key={framePath} style={{ background: "rgba(255, 255, 255, 0.02)", border: "1px solid var(--border-color)", borderRadius: "8px", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-                            <div className="asset-card-thumb" style={{ height: "120px", background: "#050505", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", position: "relative", padding: "8px" }}>
-                              <div className="asset-card-badge extracted">
-                                <Icon name="video" /> Video Frame
-                              </div>
-                              <img src={frameUrl} alt={`Frame ${idx + 1}`} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: "4px" }} />
-                            </div>
-                            <div className="asset-card-name" style={{ padding: "8px 10px", fontSize: "11px", color: "var(--text-secondary)", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", borderTop: "1px solid var(--border-color)" }} title={`Frame ${idx + 1}`}>
-                              Frame {idx + 1}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {(result.audioTrim?.path || result.audioTrim?.error) && (
-                <div className="result-section" style={{ marginTop: "24px" }}>
-                  <label className="result-label">
-                    <Icon name="audio" /> Reference Audio
-                  </label>
-                  <div className="muted-small">
-                    {result.audioTrim?.path && (
-                      <>
-                        Timeline trim: {formatSeconds(result.audioTrim.start)} → {formatSeconds(result.audioTrim.end)}
-                        {typeof result.audioTrim.duration === "number" ? ` (${result.audioTrim.duration.toFixed(3)}s)` : ""}
-                      </>
-                    )}
-                    {result.audioTrim?.error && (
-                      <div style={{ marginTop: "6px", color: "var(--danger)" }}>
-                        {result.audioTrim.error}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </div>
@@ -242,6 +241,50 @@ export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<R
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ReferenceGroup({ title, icon, children }: { title: string; icon: "audio" | "box" | "image"; children: ReactNode }) {
+  return (
+    <section className="reference-group">
+      <div className="reference-group-title">
+        <Icon name={icon} /> {title}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function ReferenceImageCard({
+  title,
+  badge,
+  badgeClass,
+  url,
+  fallbackIcon,
+}: {
+  title: string;
+  badge: string;
+  badgeClass: "uploaded" | "extracted";
+  url: string;
+  fallbackIcon: "file" | "video";
+}) {
+  const isImg = /\.(png|jpe?g|webp|gif)(?:[?#].*)?$/i.test(url);
+  return (
+    <div className={`reference-card ${badgeClass === "uploaded" ? "uploaded-asset-card" : "extracted-frame-card"}`}>
+      <div className="reference-thumb">
+        <div className={`asset-card-badge ${badgeClass}`}>
+          <Icon name={badgeClass === "uploaded" ? "box" : "video"} /> {badge}
+        </div>
+        {isImg ? (
+          <img src={url} alt={title} />
+        ) : (
+          <div className="reference-fallback">
+            <Icon name={fallbackIcon} />
+          </div>
+        )}
+      </div>
+      <div className="reference-name" title={title}>{title}</div>
     </div>
   );
 }

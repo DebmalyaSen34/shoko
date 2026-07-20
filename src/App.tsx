@@ -164,7 +164,11 @@ function App() {
         end: version.audio_trim_end_s,
         duration: version.audio_trim_duration_s,
         source: version.audio_trim_source,
-        path: version.audio_reference_path || version.trimmed_audio_path,
+        path:
+          version.audio_reference_path ||
+          version.trimmed_audio_path ||
+          version.segmind_reference_audios?.[0] ||
+          version.audio_url,
         error: version.audio_trim_error,
       },
     });

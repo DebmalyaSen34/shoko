@@ -153,14 +153,23 @@ export type ClipChatMessage = {
 export type ClipMemoryItem = {
   id: string;
   scope: "clip" | "project";
+  clip_key?: string | null;
   text: string;
   created_at: string;
+  updated_at?: string;
+  last_accessed_at?: string | null;
+  access_count?: number;
+  confidence?: number;
+  tags?: string[];
+  relevance_score?: number;
+  relevance_reasons?: string[];
   source: string;
 };
 
 export type ClipChatMemory = {
   project: ClipMemoryItem[];
   clip: ClipMemoryItem[];
+  relevant: ClipMemoryItem[];
 };
 
 export type ClipChatSnapshot = {

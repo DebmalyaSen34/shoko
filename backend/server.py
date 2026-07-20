@@ -23,6 +23,7 @@ from src.workflows.project_setup import setup_project_workspace
 from src.workflows.timeline_extraction import extract_timeline_from_project
 from src.workflows.feedback_parsing import parse_and_align_feedback
 from src.logging_utils import log_event
+from src.chat_memory import ChatMemoryStore
 
 app = FastAPI(title="Video Project Timeline & Feedback UI")
 
@@ -402,19 +403,6 @@ def save_chat_history(project_name: str, history: dict) -> None:
     write_json_file(chat_history_path(project_name), history)
 
 
-def load_chat_memory(project_name: str) -> dict:
-    data = read_json_file(chat_memory_path(project_name), {"project": [], "clips": {}})
-    if not isinstance(data, dict):
-        return {"project": [], "clips": {}}
-    data.setdefault("project", [])
-    data.setdefault("clips", {})
-    return data
-
-
-def save_chat_memory(project_name: str, memory: dict) -> None:
-    write_json_file(chat_memory_path(project_name), memory)
-
-
 def make_chat_message(role: str, content: str, metadata: Optional[dict] = None) -> dict:
     return {
         "id": str(uuid.uuid4()),
@@ -425,14 +413,8 @@ def make_chat_message(role: str, content: str, metadata: Optional[dict] = None) 
     }
 
 
-def make_memory_item(text: str, *, scope: str, source: str = "chat") -> dict:
-    return {
-        "id": str(uuid.uuid4()),
-        "scope": scope,
-        "text": text.strip(),
-        "created_at": now_iso(),
-        "source": source,
-    }
+def memory_store(project_name: str) -> ChatMemoryStore:
+    return ChatMemoryStore(chat_memory_path(project_name))
 
 
 def matching_prompt(project_data: dict, clip: dict, clip_index: int) -> Optional[dict]:
@@ -467,7 +449,7 @@ def latest_prompt_version(prompt: Optional[dict]) -> Optional[dict]:
     return None
 
 
-def build_clip_chat_context(project_name: str, clip_index: int) -> dict:
+def build_clip_chat_context(project_name: str, clip_index: int, query: str = "") -> dict:
     project_data = get_project_data(project_name)
     timeline = project_data.get("timeline", [])
     if clip_index < 0 or clip_index >= len(timeline):
@@ -477,7 +459,7 @@ def build_clip_chat_context(project_name: str, clip_index: int) -> dict:
     feedback = matching_feedback(project_data, clip, clip_index)
     prompt = matching_prompt(project_data, clip, clip_index)
     latest_version = latest_prompt_version(prompt)
-    memory = load_chat_memory(project_name)
+    store = memory_store(project_name)
     key = clip_chat_key(clip.get("clip", ""), clip_index)
 
     return {
@@ -499,10 +481,7 @@ def build_clip_chat_context(project_name: str, clip_index: int) -> dict:
         "prompt": prompt,
         "latest_version": latest_version,
         "assets": project_data.get("assets", {}),
-        "memory": {
-            "project": memory.get("project", []),
-            "clip": memory.get("clips", {}).get(key, []),
-        },
+        "memory": store.for_clip(key, query=query),
     }
 
 
@@ -512,6 +491,15 @@ def compact_chat_context(context: dict) -> str:
     selected_assets = latest_version.get("selected_assets") or []
     project_memory = [item.get("text", "") for item in context.get("memory", {}).get("project", [])][-8:]
     clip_memory = [item.get("text", "") for item in context.get("memory", {}).get("clip", [])][-12:]
+    relevant_memory = [
+        {
+            "text": item.get("text", ""),
+            "scope": item.get("scope"),
+            "relevance_score": item.get("relevance_score"),
+            "relevance_reasons": item.get("relevance_reasons", []),
+        }
+        for item in context.get("memory", {}).get("relevant", [])
+    ]
     assets_by_category = {
         category: [asset.get("path") for asset in assets[:12]]
         for category, assets in (context.get("assets") or {}).items()
@@ -531,24 +519,25 @@ def compact_chat_context(context: dict) -> str:
             "asset_library_sample": assets_by_category,
             "project_memory": project_memory,
             "clip_memory": clip_memory,
+            "relevant_memory": relevant_memory,
         },
         ensure_ascii=False,
         indent=2,
     )
 
 
-def extract_memory_notes(message: str, assistant_text: str) -> list[dict]:
+def extract_memory_notes(message: str, assistant_text: str) -> list[str]:
     notes = []
     for match in re.finditer(r"(?:remember|save to memory)(?: that)?\s*:?\s+(.+)", message, flags=re.IGNORECASE):
         note = match.group(1).strip()
         if note:
-            notes.append(make_memory_item(note, scope="clip", source="user"))
+            notes.append(note)
 
     for line in assistant_text.splitlines():
         if line.lower().startswith("memory:"):
             note = line.split(":", 1)[1].strip()
             if note:
-                notes.append(make_memory_item(note, scope="clip", source="assistant"))
+                notes.append(note)
 
     return notes
 
@@ -1028,7 +1017,7 @@ async def post_clip_chat(project_name: str, request: ClipChatRequest):
     if not message_text:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
-    context = build_clip_chat_context(project_name, request.clip_index)
+    context = build_clip_chat_context(project_name, request.clip_index, query=message_text)
     history = load_chat_history(project_name)
     clip_messages = history.setdefault("clips", {}).setdefault(context["clip_key"], [])
 
@@ -1036,18 +1025,23 @@ async def post_clip_chat(project_name: str, request: ClipChatRequest):
     clip_messages.append(user_message)
 
     assistant_text = await generate_chat_reply(request.provider, message_text, context, clip_messages)
-    saved_memories = extract_memory_notes(message_text, assistant_text)
+    memory_notes = extract_memory_notes(message_text, assistant_text)
+    saved_memories = []
 
-    if saved_memories:
-        memory = load_chat_memory(project_name)
-        clip_memory = memory.setdefault("clips", {}).setdefault(context["clip_key"], [])
-        existing = {item.get("text", "").strip().lower() for item in clip_memory}
-        for item in saved_memories:
-            if item["text"].strip().lower() not in existing:
-                clip_memory.append(item)
-                existing.add(item["text"].strip().lower())
-        save_chat_memory(project_name, memory)
-        context = build_clip_chat_context(project_name, request.clip_index)
+    if memory_notes:
+        store = memory_store(project_name)
+        for note in memory_notes:
+            saved_memories.append(
+                store.add(
+                    note,
+                    scope="clip",
+                    clip_key=context["clip_key"],
+                    source="chat",
+                    tags=["chat"],
+                    confidence=0.86,
+                )
+            )
+        context = build_clip_chat_context(project_name, request.clip_index, query=message_text)
 
     actions = infer_action_suggestions(message_text, context)
     assistant_message = make_chat_message(
@@ -1081,13 +1075,14 @@ def add_clip_memory(project_name: str, request: ClipMemoryRequest):
     if not text:
         raise HTTPException(status_code=400, detail="Memory text cannot be empty")
 
-    memory = load_chat_memory(project_name)
-    item = make_memory_item(text, scope=request.scope, source="manual")
-    if request.scope == "project":
-        memory.setdefault("project", []).append(item)
-    else:
-        memory.setdefault("clips", {}).setdefault(context["clip_key"], []).append(item)
-    save_chat_memory(project_name, memory)
+    item = memory_store(project_name).add(
+        text,
+        scope=request.scope,
+        clip_key=context["clip_key"] if request.scope == "clip" else None,
+        source="manual",
+        tags=["manual"],
+        confidence=0.9,
+    )
     updated_context = build_clip_chat_context(project_name, request.clip_index)
     return {"memory": updated_context["memory"], "item": item}
 

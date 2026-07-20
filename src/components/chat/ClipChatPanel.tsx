@@ -64,7 +64,7 @@ export function ClipChatPanel({
   const [input, setInput] = useState("");
   const [activeTab, setActiveTab] = useState<ContextTab>("clip");
   const [messages, setMessages] = useState<ClipChatMessage[]>([]);
-  const [memory, setMemory] = useState<ClipChatMemory>({ project: [], clip: [] });
+  const [memory, setMemory] = useState<ClipChatMemory>({ project: [], clip: [], relevant: [] });
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
@@ -356,14 +356,32 @@ function ContextPanel({
             {MEMORY_OPTIONS.map((option) => <span className="badge mini" key={option}>{option}</span>)}
           </div>
           <ContextItem label="Durable Memory" value={`${memory.project.length} project, ${memory.clip.length} clip`} />
-          {[...memory.project, ...memory.clip].length ? [...memory.project, ...memory.clip].map((item) => (
-            <div className="context-row" key={item.id}>
-              <Icon name="memory" />
-              <p>{item.text}</p>
-            </div>
-          )) : <p className="muted-small">Say “remember: ...” to save a durable note for this clip.</p>}
+          {memory.relevant.length > 0 && (
+            <>
+              <div className="context-section-label">Relevant Now</div>
+              {memory.relevant.map((item) => <MemoryRow item={item} key={`relevant-${item.id}`} />)}
+            </>
+          )}
+          {[...memory.project, ...memory.clip].length ? (
+            <>
+              <div className="context-section-label">Recent Notes</div>
+              {[...memory.project, ...memory.clip].map((item) => <MemoryRow item={item} key={item.id} />)}
+            </>
+          ) : <p className="muted-small">Say “remember: ...” to save a durable note for this clip.</p>}
         </div>
       )}
+    </div>
+  );
+}
+
+function MemoryRow({ item }: { item: ClipChatMemory["clip"][number] }) {
+  return (
+    <div className="context-row">
+      <Icon name="memory" />
+      <p>
+        {item.text}
+        {typeof item.relevance_score === "number" && <span className="memory-score"> {(item.relevance_score * 100).toFixed(0)}%</span>}
+      </p>
     </div>
   );
 }

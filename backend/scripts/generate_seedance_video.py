@@ -437,6 +437,10 @@ def build_segmind_payload(
     reference_video_url: str | None = None,
     session: requests.Session | None = None,
 ) -> dict[str, Any]:
+    prepared_payload = item.get("segmind_payload")
+    if isinstance(prepared_payload, dict) and item.get("segmind_payload_status") == "ready":
+        return dict(prepared_payload)
+
     prompt_text = item["video_model_prompt"].strip()
 
     reference_images: list[str] = []
@@ -529,7 +533,12 @@ def build_segmind_payload(
             referenced_frame_labels=referenced_frame_labels,
         )
 
-    audio_ref = item.get("audio_path") or item.get("audio_url")
+    audio_ref = (
+        item.get("audio_reference_path")
+        or item.get("trimmed_audio_path")
+        or item.get("audio_url")
+        or item.get("audio_path")
+    )
     audio_url = _cached_supabase_audio_url(audio_ref, cache=cache) if audio_ref else None
     if audio_url:
         reference_audios.append(audio_url)
@@ -560,6 +569,75 @@ def build_segmind_payload(
         payload["return_last_frame"] = bool(item["return_last_frame"])
 
     return payload
+
+
+def attach_prepared_segmind_payload(
+    item: dict[str, Any],
+    *,
+    api_key: str | None = None,
+    cache: SupabaseAssetUrlCache | None = None,
+    upload_assets: bool = True,
+    strict: bool = False,
+    session: requests.Session | None = None,
+) -> dict[str, Any]:
+    """Return a copy of a prompt item with provider-ready Segmind fields.
+
+    If credentials are unavailable, the item is returned with an explicit
+    skipped status. The final generation stage can still prepare the payload
+    later when credentials are available.
+    """
+    enriched = dict(item)
+    resolved_api_key = api_key or os.environ.get("SEGMIND_API_KEY")
+    if not resolved_api_key:
+        enriched.update(
+            {
+                "video_provider": "segmind",
+                "segmind_model": DEFAULT_MODEL,
+                "segmind_payload_status": "skipped",
+                "segmind_payload_error": "SEGMIND_API_KEY is not set; payload will be prepared during generation.",
+            }
+        )
+        return enriched
+
+    resolved_cache = cache if cache is not None else SupabaseAssetUrlCache()
+    try:
+        payload = build_segmind_payload(
+            item=enriched,
+            api_key=resolved_api_key,
+            cache=resolved_cache,
+            upload_assets=upload_assets,
+            use_local_initial_frame=True,
+            initial_image_url=None,
+            session=session,
+        )
+    except Exception as exc:
+        if strict:
+            raise
+        enriched.update(
+            {
+                "video_provider": "segmind",
+                "segmind_model": DEFAULT_MODEL,
+                "segmind_payload_status": "failed",
+                "segmind_payload_error": str(exc),
+            }
+        )
+        return enriched
+
+    enriched.update(
+        {
+            "video_provider": "segmind",
+            "segmind_model": DEFAULT_MODEL,
+            "segmind_payload_status": "ready",
+            "segmind_payload": payload,
+            "segmind_prompt": payload.get("prompt", ""),
+            "segmind_first_frame_url": payload.get("first_frame_url"),
+            "segmind_reference_images": payload.get("reference_images", []),
+            "segmind_reference_videos": payload.get("reference_videos", []),
+            "segmind_reference_audios": payload.get("reference_audios", []),
+            "segmind_payload_error": None,
+        }
+    )
+    return enriched
 
 
 def create_seedance_task(

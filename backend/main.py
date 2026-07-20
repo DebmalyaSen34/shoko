@@ -22,6 +22,7 @@ from src.workflows.referenced_frames import analyze_and_extract_referenced_frame
 from src.workflows.generation_planner import plan_generation_workflow
 from src.workflows.prompt_generation import generate_video_prompts_from_plan
 from src.workflows.project_setup import setup_project_workspace
+from scripts.generate_seedance_video import SupabaseAssetUrlCache, attach_prepared_segmind_payload, clamp_duration
 
 load_dotenv()
 
@@ -298,19 +299,23 @@ def run_pipeline(
         )
 
     results = []
+    segmind_cache = SupabaseAssetUrlCache()
     for cluster, generated in zip(video_clusters, batch_results):
         feedback_items = cluster["feedback_items"]
         clip = cluster["matched_clip"]
         clip_name = clip.get("clip") if clip else None
+        clip_duration_s = clip.get("duration_s") if clip else None
 
-        results.append({
+        result_item = {
             "category": "video",
+            "clip_used": clip_name,
+            "generation_type": generated.get("prompt_format") or "complex",
             "feedback_items": feedback_items,
             "matched_clip": clip_name,
             "clip_occurrence": cluster["clip_occurrence"],
             "clip_start_tc": clip.get("start_tc") if clip else None,
             "clip_end_tc": clip.get("end_tc") if clip else None,
-            "clip_duration_s": clip.get("duration_s") if clip else None,
+            "clip_duration_s": clip_duration_s,
             "selected_assets": generated.get("selected_assets", []),
             "prompt_format": generated.get("prompt_format"),
             "reference_legend": generated.get("reference_legend", ""),
@@ -319,10 +324,18 @@ def run_pipeline(
             "clip_frame_paths": generated.get("clip_frame_paths", []),
             "video_model_prompt": generated.get("video_model_prompt"),
             "explanation": generated.get("explanation"),
+            "ratio": "9:16",
+            "duration": clamp_duration(clip_duration_s),
+            "generate_audio": False,
             "status": generated.get("status"),
             "quality_warning": generated.get("quality_warning"),
             "quality_report": generated.get("quality_report"),
-        })
+        }
+        result_item = attach_prepared_segmind_payload(
+            result_item,
+            cache=segmind_cache,
+        )
+        results.append(result_item)
     # 4. Save results
     print("\n[Step 6/6] Writing output reports... ", end="", flush=True)
     os.makedirs(os.path.dirname(output_json), exist_ok=True)

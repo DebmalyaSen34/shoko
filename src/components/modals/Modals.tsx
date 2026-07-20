@@ -212,6 +212,27 @@ export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<R
                   </div>
                 </div>
               )}
+
+              {(result.audioTrim?.path || result.audioTrim?.error) && (
+                <div className="result-section" style={{ marginTop: "24px" }}>
+                  <label className="result-label">
+                    <Icon name="audio" /> Reference Audio
+                  </label>
+                  <div className="muted-small">
+                    {result.audioTrim?.path && (
+                      <>
+                        Timeline trim: {formatSeconds(result.audioTrim.start)} → {formatSeconds(result.audioTrim.end)}
+                        {typeof result.audioTrim.duration === "number" ? ` (${result.audioTrim.duration.toFixed(3)}s)` : ""}
+                      </>
+                    )}
+                    {result.audioTrim?.error && (
+                      <div style={{ marginTop: "6px", color: "var(--danger)" }}>
+                        {result.audioTrim.error}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -223,4 +244,8 @@ export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<R
       </div>
     </div>
   );
+}
+
+function formatSeconds(value?: number | null) {
+  return typeof value === "number" ? `${value.toFixed(3)}s` : "--";
 }

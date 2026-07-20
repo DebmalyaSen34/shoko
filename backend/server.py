@@ -376,6 +376,52 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
     project_dir = project_data_dir(project)
     output_json = project_dir / "output.json"
     prompts_json = project_dir / "video_prompts.json"
+    handoff_fields = [
+        "video_provider",
+        "segmind_model",
+        "segmind_payload_status",
+        "segmind_payload",
+        "segmind_prompt",
+        "segmind_first_frame_url",
+        "segmind_reference_images",
+        "segmind_reference_videos",
+        "segmind_reference_audios",
+        "segmind_payload_error",
+        "audio_reference_path",
+        "trimmed_audio_path",
+        "audio_trim_start_s",
+        "audio_trim_end_s",
+        "audio_trim_duration_s",
+        "audio_trim_source",
+        "audio_trim_error",
+        "audio_used",
+        "audio_path",
+        "audio_url",
+        "is_dialogue_active",
+        "generate_audio",
+        "ratio",
+        "duration",
+    ]
+
+    def copy_handoff_fields(target: dict, source: dict) -> None:
+        for field in handoff_fields:
+            if field in source:
+                target[field] = source.get(field)
+
+    def prompt_history_entry(item: dict, entry_provider: str) -> dict:
+        entry = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "provider": entry_provider,
+            "video_model_prompt": item.get("video_model_prompt"),
+            "selected_assets": item.get("selected_assets", []),
+            "explanation": item.get("explanation"),
+            "quality_report": item.get("quality_report"),
+            "initial_frame_image_path": item.get("initial_frame_image_path"),
+            "initial_frame_prompt": item.get("initial_frame_prompt"),
+            "clip_frame_paths": item.get("clip_frame_paths", []),
+        }
+        copy_handoff_fields(entry, item)
+        return entry
     
     if not output_json.exists():
         return
@@ -426,29 +472,11 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
                         history = []
                         
                     if len(history) == 0 and p_item.get("video_model_prompt"):
-                        history.append({
-                            "timestamp": p_item.get("created_at", datetime.datetime.now().isoformat()),
-                            "provider": p_item.get("provider", "unknown"),
-                            "video_model_prompt": p_item.get("video_model_prompt"),
-                            "selected_assets": p_item.get("selected_assets", []),
-                            "explanation": p_item.get("explanation"),
-                            "quality_report": p_item.get("quality_report"),
-                            "initial_frame_image_path": p_item.get("initial_frame_image_path"),
-                            "initial_frame_prompt": p_item.get("initial_frame_prompt"),
-                            "clip_frame_paths": p_item.get("clip_frame_paths", [])
-                        })
+                        first_entry = prompt_history_entry(p_item, p_item.get("provider", "unknown"))
+                        first_entry["timestamp"] = p_item.get("created_at", first_entry["timestamp"])
+                        history.append(first_entry)
                         
-                    new_entry = {
-                        "timestamp": datetime.datetime.now().isoformat(),
-                        "provider": provider,
-                        "video_model_prompt": gen_item.get("video_model_prompt"),
-                        "selected_assets": gen_item.get("selected_assets", []),
-                        "explanation": gen_item.get("explanation"),
-                        "quality_report": gen_item.get("quality_report"),
-                        "initial_frame_image_path": gen_item.get("initial_frame_image_path"),
-                        "initial_frame_prompt": gen_item.get("initial_frame_prompt"),
-                        "clip_frame_paths": gen_item.get("clip_frame_paths", [])
-                    }
+                    new_entry = prompt_history_entry(gen_item, provider)
                     history.append(new_entry)
                     p_item["history"] = history
                     
@@ -460,6 +488,7 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
                     p_item["initial_frame_image_path"] = gen_item.get("initial_frame_image_path")
                     p_item["initial_frame_prompt"] = gen_item.get("initial_frame_prompt")
                     p_item["clip_frame_paths"] = gen_item.get("clip_frame_paths", [])
+                    copy_handoff_fields(p_item, gen_item)
                     updated = True
                 break
         
@@ -476,18 +505,8 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
                     "history": []
                 })
             else:
-                new_entry = {
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "provider": provider,
-                    "video_model_prompt": gen_item.get("video_model_prompt"),
-                    "selected_assets": gen_item.get("selected_assets", []),
-                    "explanation": gen_item.get("explanation"),
-                    "quality_report": gen_item.get("quality_report"),
-                    "initial_frame_image_path": gen_item.get("initial_frame_image_path"),
-                    "initial_frame_prompt": gen_item.get("initial_frame_prompt"),
-                    "clip_frame_paths": gen_item.get("clip_frame_paths", [])
-                }
-                prompts_data.append({
+                new_entry = prompt_history_entry(gen_item, provider)
+                prompt_record = {
                     "clip_used": matched_clip,
                     "category": gen_item.get("category", "video"),
                     "generation_type": gen_item.get("prompt_format", "complex"),
@@ -500,7 +519,9 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
                     "initial_frame_prompt": gen_item.get("initial_frame_prompt"),
                     "clip_frame_paths": gen_item.get("clip_frame_paths", []),
                     "history": [new_entry]
-                })
+                }
+                copy_handoff_fields(prompt_record, gen_item)
+                prompts_data.append(prompt_record)
             updated = True
             
     if updated:

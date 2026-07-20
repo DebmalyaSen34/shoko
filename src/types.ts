@@ -41,6 +41,16 @@ export type QualityReport = {
 export type PromptVersion = {
   timestamp?: string;
   provider?: string;
+  video_provider?: string;
+  segmind_model?: string;
+  segmind_payload_status?: "ready" | "skipped" | "failed" | string;
+  segmind_payload?: Record<string, unknown>;
+  segmind_prompt?: string;
+  segmind_first_frame_url?: string | null;
+  segmind_reference_images?: string[];
+  segmind_reference_videos?: string[];
+  segmind_reference_audios?: string[];
+  segmind_payload_error?: string | null;
   video_model_prompt?: string;
   selected_assets?: string[];
   explanation?: string;
@@ -48,6 +58,20 @@ export type PromptVersion = {
   initial_frame_image_path?: string;
   initial_frame_prompt?: string;
   clip_frame_paths?: string[];
+  audio_used?: string | null;
+  audio_path?: string | null;
+  audio_url?: string | null;
+  audio_reference_path?: string | null;
+  trimmed_audio_path?: string | null;
+  audio_trim_start_s?: number | null;
+  audio_trim_end_s?: number | null;
+  audio_trim_duration_s?: number | null;
+  audio_trim_source?: string | null;
+  audio_trim_error?: string | null;
+  is_dialogue_active?: boolean;
+  generate_audio?: boolean;
+  ratio?: string;
+  duration?: number;
 };
 
 export type PromptRecord = PromptVersion & {
@@ -84,6 +108,14 @@ export type ResultState = {
   assets: string[];
   quality?: QualityReport;
   clipFrames?: string[];
+  audioTrim?: {
+    start?: number | null;
+    end?: number | null;
+    duration?: number | null;
+    source?: string | null;
+    path?: string | null;
+    error?: string | null;
+  };
 } | null;
 
 export type Toast = {

@@ -5,6 +5,7 @@ import unittest
 from unittest import mock
 
 from scripts.generate_seedance_video import (
+    attach_prepared_segmind_payload,
     build_seedance_content,
     build_segmind_payload,
     clamp_duration,
@@ -234,6 +235,45 @@ class SeedanceVideoScriptTests(unittest.TestCase):
         self.assertEqual(12, payload["duration"])
         self.assertEqual("9:16", payload["aspect_ratio"])
         self.assertTrue(payload["generate_audio"])
+
+    def test_attach_prepared_segmind_payload_adds_ready_provider_fields(self):
+        item = {
+            "video_model_prompt": "use @image1 and @video1",
+            "selected_assets": ["https://example.com/character.jpg"],
+            "clip_frame_paths": ["https://example.com/frame.jpg"],
+            "audio_url": "https://example.com/audio.mp3",
+            "duration": 5,
+            "ratio": "9:16",
+            "generate_audio": True,
+        }
+
+        enriched = attach_prepared_segmind_payload(
+            item,
+            api_key="test-key",
+            cache=None,
+        )
+
+        self.assertEqual("segmind", enriched["video_provider"])
+        self.assertEqual("ready", enriched["segmind_payload_status"])
+        self.assertEqual("use image 1 and image 2", enriched["segmind_prompt"])
+        self.assertEqual(
+            ["https://example.com/character.jpg", "https://example.com/frame.jpg"],
+            enriched["segmind_reference_images"],
+        )
+        self.assertEqual(["https://example.com/audio.mp3"], enriched["segmind_reference_audios"])
+        self.assertEqual(enriched["segmind_payload"], build_segmind_payload(item=enriched, api_key="test-key", cache=None))
+
+    def test_attach_prepared_segmind_payload_marks_missing_key_as_skipped(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            enriched = attach_prepared_segmind_payload(
+                {"video_model_prompt": "prompt", "duration": 5},
+                api_key=None,
+                cache=None,
+            )
+
+        self.assertEqual("segmind", enriched["video_provider"])
+        self.assertEqual("skipped", enriched["segmind_payload_status"])
+        self.assertIn("SEGMIND_API_KEY", enriched["segmind_payload_error"])
 
 
 if __name__ == "__main__":

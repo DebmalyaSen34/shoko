@@ -16,6 +16,11 @@ load_dotenv()
 from src.generator.client import generate_structured
 from src.schemas import PromptResult
 from config.settings import OPENAI_REASONING_MODEL
+from scripts.generate_seedance_video import (
+    SupabaseAssetUrlCache,
+    attach_prepared_segmind_payload,
+    clamp_duration,
+)
 
 class DialogueAssessmentResult(BaseModel):
     is_dialogue_active: bool = Field(..., description="True if there is active spoken dialogue/speech occurring in this clip segment.")
@@ -275,6 +280,7 @@ def generate_video_prompts_from_plan(
 
     # Keep track of generated prompts by clip name to supply as continuity context
     previous_clip_prompts = {}
+    segmind_cache = SupabaseAssetUrlCache()
 
     for item in plan_items:
         clip_name = item.get("clip_used")
@@ -287,6 +293,9 @@ def generate_video_prompts_from_plan(
                 "clip_used": clip_name,
                 "generation_type": "none",
                 "video_model_prompt": "",
+                "video_provider": "segmind",
+                "segmind_payload_status": "skipped",
+                "segmind_payload_error": "No visual generation requested for this segment.",
                 "status": "none"
             })
             continue
@@ -392,49 +401,37 @@ def generate_video_prompts_from_plan(
         audio_name = item.get("audio_used")
         audio_path = item.get("audio_path")
         audio_url = None
-        audio_transcript = ""
+        trimmed_audio_path = None
+        audio_trim_error = None
+        audio_trim_start_s = clip_start_s
+        audio_trim_end_s = clip_end_s
+        audio_trim_duration_s = max(0.0, clip_end_s - clip_start_s)
 
-        # Only process audio if the segment duration is at least 1.8 seconds
-        if clip_duration >= 1.8 and audio_path and os.path.exists(audio_path):
-            # Slice audio to match the clip duration exactly
+        # Trim from the full sequence mix using timeline cut times. Do not
+        # transcribe or fall back to the full mix; the trimmed file is the
+        # source of truth for dialogue timing and cadence.
+        if audio_trim_duration_s > 0 and audio_path and os.path.exists(audio_path):
             trimmed_audio_name = f"trimmed_{os.path.splitext(audio_name)[0]}.mp3"
             trimmed_audio_path = os.path.join(clip_frames_dir, trimmed_audio_name)
             success = extract_audio_segment(
                 input_audio_path=audio_path,
                 output_audio_path=trimmed_audio_path,
-                start_s=clip_start_s,
-                end_s=clip_end_s
+                start_s=audio_trim_start_s,
+                end_s=audio_trim_end_s
             )
-            if success:
+            if success and os.path.exists(trimmed_audio_path):
                 audio_url = _file_data_url(trimmed_audio_path)
-                # Transcribe the trimmed audio segment using gpt-4o-transcribe
-                transcription_model = os.environ.get("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-transcribe")
-                try:
-                    if os.path.exists(trimmed_audio_path):
-                        print(f"Transcribing trimmed audio segment: {trimmed_audio_path} using model {transcription_model}")
-                        with open(trimmed_audio_path, "rb") as audio_file:
-                            transcript_response = openai_client.audio.transcriptions.create(
-                                model=transcription_model,
-                                file=audio_file
-                            )
-                        if transcript_response and hasattr(transcript_response, "text") and isinstance(transcript_response.text, str):
-                            audio_transcript = transcript_response.text.strip()
-                            print(f"Transcript for {clip_name}: '{audio_transcript}'")
-                    else:
-                        print(f"Skipping transcription because trimmed audio file does not exist: {trimmed_audio_path}")
-                except Exception as e:
-                    print(f"Warning: Transcription failed: {e}")
             else:
-                # Fallback to full file if slice fails
-                print(f"Warning: Failed to trim audio segment for {clip_name}. Using full audio file.")
-                audio_url = _file_data_url(audio_path)
+                audio_trim_error = (
+                    f"Failed to trim audio from {audio_trim_start_s:.3f}s "
+                    f"to {audio_trim_end_s:.3f}s for {clip_name}."
+                )
+                print(f"Warning: {audio_trim_error}")
 
-        # Enforce that we only use audio when transcription is non-empty
-        if audio_url and audio_transcript:
+        if audio_url:
             is_dialogue = True
         else:
             is_dialogue = False
-            audio_url = None
 
         # 5. Build prompt instruction text
         prompt_instruction = (
@@ -475,15 +472,11 @@ def generate_video_prompts_from_plan(
 
         if audio_url and is_dialogue:
             prompt_instruction += (
-                "4. Dialogue is active in this shot. You must explicitly include instructions in the final prompt "
-                "directing the character's mouth and lips to move naturally and fluidly in sync with speech delivery "
-                "(e.g. 'lips move in sync with spoken dialogue').\n"
+                "4. Dialogue/audio is active in this shot. The video model will receive a trimmed reference audio "
+                f"segment from timeline {audio_trim_start_s:.3f}s to {audio_trim_end_s:.3f}s. "
+                "In the final prompt, include one concise instruction that facial performance, lip movement, pauses, "
+                "and delivery synchronize to the supplied reference audio. Do not quote or invent transcript text.\n"
             )
-            if audio_transcript:
-                prompt_instruction += (
-                    f"The transcribed dialogue/audio content in this segment is: \"{audio_transcript}\". "
-                    "Make sure the character's facial expression, mouth movements, and actions match this spoken dialogue or vocal cues (e.g. shouting, gasping, speaking specific words).\n"
-                )
 
         prompt_instruction += (
             "\nGenerate a highly detailed cinematic text prompt for a video generation model (like Runway Gen-3, Sora, or Seedance 2.0) "
@@ -532,10 +525,17 @@ def generate_video_prompts_from_plan(
             "audio_used": audio_name,
             "audio_path": audio_path,
             "audio_url": audio_url,
+            "audio_reference_path": trimmed_audio_path if audio_url else None,
+            "trimmed_audio_path": trimmed_audio_path if audio_url else None,
+            "audio_trim_start_s": audio_trim_start_s if audio_url else None,
+            "audio_trim_end_s": audio_trim_end_s if audio_url else None,
+            "audio_trim_duration_s": audio_trim_duration_s if audio_url else None,
+            "audio_trim_source": "sequence_timeline" if audio_url else None,
+            "audio_trim_error": audio_trim_error,
             "is_dialogue_active": is_dialogue,
             "generate_audio": True if audio_url else False,
             "ratio": "9:16",
-            "duration": max(2, min(5, int(round(clip_duration)))),
+            "duration": clamp_duration(clip_duration),
             "status": "success",
             "explanation": explanation
         }
@@ -543,6 +543,10 @@ def generate_video_prompts_from_plan(
             result_payload["first_frame_url"] = first_frame_url
             result_payload["initial_frame_image_path"] = last_frame_path
 
+        result_payload = attach_prepared_segmind_payload(
+            result_payload,
+            cache=segmind_cache,
+        )
         results.append(result_payload)
 
     # Save output prompts

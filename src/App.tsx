@@ -140,6 +140,14 @@ function App() {
       assets: version.selected_assets || [],
       quality: version.quality_report,
       clipFrames: version.clip_frame_paths || [],
+      audioTrim: {
+        start: version.audio_trim_start_s,
+        end: version.audio_trim_end_s,
+        duration: version.audio_trim_duration_s,
+        source: version.audio_trim_source,
+        path: version.audio_reference_path || version.trimmed_audio_path,
+        error: version.audio_trim_error,
+      },
     });
   }, []);
 

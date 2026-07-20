@@ -25,6 +25,7 @@ type TimelinePanelProps = {
   setZoom: Dispatch<SetStateAction<number>>;
   onUploadFeedback: () => void;
   onAddManualFeedback: (clipName: string) => void;
+  onOpenClipChat: (clipIndex: number) => void;
 };
 
 export function TimelinePanel({
@@ -45,6 +46,7 @@ export function TimelinePanel({
   setZoom,
   onUploadFeedback,
   onAddManualFeedback,
+  onOpenClipChat,
 }: TimelinePanelProps) {
   return (
     <section className="center-panel">
@@ -111,6 +113,7 @@ export function TimelinePanel({
         executeWorkflow={executeWorkflow}
         openResultFromVersion={openResultFromVersion}
         onAddManualFeedback={onAddManualFeedback}
+        onOpenClipChat={onOpenClipChat}
       />
     </section>
   );
@@ -130,6 +133,7 @@ function Timeline({
   executeWorkflow,
   openResultFromVersion,
   onAddManualFeedback,
+  onOpenClipChat,
 }: {
   refEl: RefObject<HTMLDivElement | null>;
   className: string;
@@ -144,6 +148,7 @@ function Timeline({
   executeWorkflow: (feedbackIndex: number) => void;
   openResultFromVersion: (version: PromptVersion) => void;
   onAddManualFeedback: (clipName: string) => void;
+  onOpenClipChat: (clipIndex: number) => void;
 }) {
   const drag = useRef({ down: false, startX: 0, scrollLeft: 0 });
 
@@ -242,6 +247,7 @@ function Timeline({
               executeWorkflow={executeWorkflow}
               openResultFromVersion={openResultFromVersion}
               onAddManualFeedback={onAddManualFeedback}
+              onOpenClipChat={onOpenClipChat}
             />
             {index < projectData.timeline.length - 1 && <TimelineConnector />}
           </div>
@@ -264,6 +270,7 @@ function TimelineCard({
   executeWorkflow,
   openResultFromVersion,
   onAddManualFeedback,
+  onOpenClipChat,
 }: {
   clip: TimelineClip;
   index: number;
@@ -277,6 +284,7 @@ function TimelineCard({
   executeWorkflow: (feedbackIndex: number) => void;
   openResultFromVersion: (version: PromptVersion) => void;
   onAddManualFeedback: (clipName: string) => void;
+  onOpenClipChat: (clipIndex: number) => void;
 }) {
   const hasFeedback = Boolean(feedback?.feedback_items?.length);
   const latestError = prompt?.latest_error;
@@ -312,6 +320,12 @@ function TimelineCard({
               <div className="clip-meta-subtitle">Sequence Position: #{index + 1}</div>
             </div>
             <div className="duration-badge">{clip.duration_s.toFixed(2)}s</div>
+          </div>
+
+          <div className="clip-card-actions">
+            <button className="premium-btn secondary" type="button" onClick={() => onOpenClipChat(index)}>
+              <Icon name="chat" /> Chat
+            </button>
           </div>
 
           <div className="card-details">

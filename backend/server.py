@@ -1,13 +1,16 @@
 import os
 import json
 import asyncio
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Literal, Optional
 from urllib.parse import quote
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +18,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from config.settings import LOKA_STORAGE_DIR
+from config.settings import LITE_MODEL, LOKA_STORAGE_DIR, OPENAI_LITE_MODEL
 from src.workflows.project_setup import setup_project_workspace
 from src.workflows.timeline_extraction import extract_timeline_from_project
 from src.workflows.feedback_parsing import parse_and_align_feedback
@@ -342,6 +345,327 @@ class ManualFeedbackRequest(BaseModel):
     remark: str
     timestamp: Optional[str] = None
 
+
+class ClipChatRequest(BaseModel):
+    clip_index: int
+    message: str
+    provider: Literal["openai", "gemini"] = "openai"
+
+
+class ClipMemoryRequest(BaseModel):
+    clip_index: int
+    text: str
+    scope: Literal["clip", "project"] = "clip"
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def clip_chat_key(clip_name: str, clip_index: int) -> str:
+    return f"{clip_name}::{clip_index}"
+
+
+def read_json_file(path: Path, default: Any) -> Any:
+    if not path.exists():
+        return default
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def write_json_file(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def chat_history_path(project_name: str) -> Path:
+    return project_data_dir(project_name) / "clip_chats.json"
+
+
+def chat_memory_path(project_name: str) -> Path:
+    return project_data_dir(project_name) / "chat_memory.json"
+
+
+def load_chat_history(project_name: str) -> dict:
+    data = read_json_file(chat_history_path(project_name), {"clips": {}})
+    if not isinstance(data, dict):
+        return {"clips": {}}
+    data.setdefault("clips", {})
+    return data
+
+
+def save_chat_history(project_name: str, history: dict) -> None:
+    write_json_file(chat_history_path(project_name), history)
+
+
+def load_chat_memory(project_name: str) -> dict:
+    data = read_json_file(chat_memory_path(project_name), {"project": [], "clips": {}})
+    if not isinstance(data, dict):
+        return {"project": [], "clips": {}}
+    data.setdefault("project", [])
+    data.setdefault("clips", {})
+    return data
+
+
+def save_chat_memory(project_name: str, memory: dict) -> None:
+    write_json_file(chat_memory_path(project_name), memory)
+
+
+def make_chat_message(role: str, content: str, metadata: Optional[dict] = None) -> dict:
+    return {
+        "id": str(uuid.uuid4()),
+        "role": role,
+        "content": content,
+        "created_at": now_iso(),
+        "metadata": metadata or {},
+    }
+
+
+def make_memory_item(text: str, *, scope: str, source: str = "chat") -> dict:
+    return {
+        "id": str(uuid.uuid4()),
+        "scope": scope,
+        "text": text.strip(),
+        "created_at": now_iso(),
+        "source": source,
+    }
+
+
+def matching_prompt(project_data: dict, clip: dict, clip_index: int) -> Optional[dict]:
+    clip_name = clip.get("clip", "")
+    basename = os.path.basename(clip_name)
+    for prompt in project_data.get("prompts", []):
+        prompt_clip = prompt.get("clip_used") or ""
+        same_clip = prompt_clip == clip_name or os.path.basename(prompt_clip) == basename
+        occurrence = prompt.get("clip_occurrence")
+        if same_clip and (occurrence is None or occurrence == clip_index):
+            return prompt
+    return None
+
+
+def matching_feedback(project_data: dict, clip: dict, clip_index: int) -> Optional[dict]:
+    clip_name = clip.get("clip", "")
+    for group in project_data.get("feedback", []):
+        occurrence = group.get("clip_occurrence")
+        if group.get("clip_used") == clip_name and (occurrence is None or occurrence == clip_index):
+            return group
+    return None
+
+
+def latest_prompt_version(prompt: Optional[dict]) -> Optional[dict]:
+    if not prompt:
+        return None
+    history = prompt.get("history")
+    if isinstance(history, list) and history:
+        return history[-1]
+    if prompt.get("video_model_prompt"):
+        return prompt
+    return None
+
+
+def build_clip_chat_context(project_name: str, clip_index: int) -> dict:
+    project_data = get_project_data(project_name)
+    timeline = project_data.get("timeline", [])
+    if clip_index < 0 or clip_index >= len(timeline):
+        raise HTTPException(status_code=404, detail="Clip index not found")
+
+    clip = timeline[clip_index]
+    feedback = matching_feedback(project_data, clip, clip_index)
+    prompt = matching_prompt(project_data, clip, clip_index)
+    latest_version = latest_prompt_version(prompt)
+    memory = load_chat_memory(project_name)
+    key = clip_chat_key(clip.get("clip", ""), clip_index)
+
+    return {
+        "project": {
+            "name": project_data.get("project_name", project_name),
+            "sequence_name": project_data.get("sequence_name", ""),
+            "total_duration_tc": project_data.get("total_duration_tc", ""),
+            "total_duration_s": project_data.get("total_duration_s", 0),
+            "clip_count": len(timeline),
+        },
+        "clip": clip,
+        "clip_index": clip_index,
+        "clip_key": key,
+        "adjacent_clips": {
+            "previous": timeline[clip_index - 1] if clip_index > 0 else None,
+            "next": timeline[clip_index + 1] if clip_index < len(timeline) - 1 else None,
+        },
+        "feedback": feedback,
+        "prompt": prompt,
+        "latest_version": latest_version,
+        "assets": project_data.get("assets", {}),
+        "memory": {
+            "project": memory.get("project", []),
+            "clip": memory.get("clips", {}).get(key, []),
+        },
+    }
+
+
+def compact_chat_context(context: dict) -> str:
+    feedback_items = (context.get("feedback") or {}).get("feedback_items", [])
+    latest_version = context.get("latest_version") or {}
+    selected_assets = latest_version.get("selected_assets") or []
+    project_memory = [item.get("text", "") for item in context.get("memory", {}).get("project", [])][-8:]
+    clip_memory = [item.get("text", "") for item in context.get("memory", {}).get("clip", [])][-12:]
+    assets_by_category = {
+        category: [asset.get("path") for asset in assets[:12]]
+        for category, assets in (context.get("assets") or {}).items()
+    }
+
+    return json.dumps(
+        {
+            "project": context.get("project"),
+            "clip": context.get("clip"),
+            "clip_index": context.get("clip_index"),
+            "adjacent_clips": context.get("adjacent_clips"),
+            "feedback_items": feedback_items,
+            "selected_assets": selected_assets,
+            "latest_video_prompt": latest_version.get("video_model_prompt"),
+            "latest_prompt_explanation": latest_version.get("explanation"),
+            "quality_report": latest_version.get("quality_report"),
+            "asset_library_sample": assets_by_category,
+            "project_memory": project_memory,
+            "clip_memory": clip_memory,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def extract_memory_notes(message: str, assistant_text: str) -> list[dict]:
+    notes = []
+    for match in re.finditer(r"(?:remember|save to memory)(?: that)?\s*:?\s+(.+)", message, flags=re.IGNORECASE):
+        note = match.group(1).strip()
+        if note:
+            notes.append(make_memory_item(note, scope="clip", source="user"))
+
+    for line in assistant_text.splitlines():
+        if line.lower().startswith("memory:"):
+            note = line.split(":", 1)[1].strip()
+            if note:
+                notes.append(make_memory_item(note, scope="clip", source="assistant"))
+
+    return notes
+
+
+def infer_action_suggestions(text: str, context: dict) -> list[dict]:
+    lower = text.lower()
+    suggestions = []
+    feedback_items = (context.get("feedback") or {}).get("feedback_items", [])
+    latest_version = context.get("latest_version") or {}
+    if any(word in lower for word in ["workflow", "run", "execute"]) and feedback_items:
+        suggestions.append({
+            "type": "execute_workflow",
+            "label": "Run Workflow",
+            "feedback_index": feedback_items[0].get("raw_index"),
+        })
+    if any(word in lower for word in ["video", "generate", "seedance", "render"]) and latest_version.get("video_model_prompt"):
+        suggestions.append({"type": "prepare_video", "label": "Prepare Video"})
+    return suggestions
+
+
+def fallback_chat_reply(message: str, context: dict) -> str:
+    feedback_items = (context.get("feedback") or {}).get("feedback_items", [])
+    latest_version = context.get("latest_version") or {}
+    selected_assets = latest_version.get("selected_assets") or []
+    clip = context.get("clip") or {}
+    project = context.get("project") or {}
+    memory = context.get("memory") or {}
+    lower = message.lower()
+
+    if "memory" in lower:
+        memory_count = len(memory.get("clip", [])) + len(memory.get("project", []))
+        return (
+            f"I found {memory_count} saved memory note(s) for this context. "
+            "This build stores durable JSON memory now, and can later swap in Mem0, Letta, Graphiti/Zep, Cognee, or LangGraph/LangMem for semantic retrieval."
+        )
+    if "feedback" in lower:
+        if not feedback_items:
+            return "No feedback is attached to this clip yet."
+        return "\n".join(f"#{item.get('raw_index')} {item.get('category')}: {item.get('remark')}" for item in feedback_items)
+    if "asset" in lower:
+        if selected_assets:
+            return "Latest selected assets:\n" + "\n".join(f"- {os.path.basename(asset)}" for asset in selected_assets)
+        return "No selected assets are attached to the latest plan yet. The project asset library is available in context."
+    if "workflow" in lower or "run" in lower:
+        if feedback_items:
+            return f"The workflow can run against feedback index {feedback_items[0].get('raw_index')}. Use the suggested Run Workflow action."
+        return "The existing workflow needs at least one feedback item for this clip."
+    if "video" in lower or "generate" in lower:
+        if latest_version.get("video_model_prompt"):
+            return "A generated prompt is ready. Use Prepare Video to open the prompt, references, audio trim, and quality report."
+        return "No generated prompt exists yet. Run the feedback workflow first, then prepare video generation."
+
+    return (
+        f"Clip #{context.get('clip_index', 0) + 1}/{project.get('clip_count')}: {clip.get('clip')}.\n"
+        f"Timecode: {clip.get('start_tc')} to {clip.get('end_tc')} ({clip.get('duration_s', 0):.2f}s).\n"
+        f"Feedback items: {len(feedback_items)}. Selected assets: {len(selected_assets)}. "
+        f"Prompt ready: {'yes' if latest_version.get('video_model_prompt') else 'no'}."
+    )
+
+
+async def generate_chat_reply(provider: str, message: str, context: dict, messages: list[dict]) -> str:
+    system_prompt = (
+        "You are Loka15 Studio's clip assistant inside a video feedback and generation tool. "
+        "Answer as a practical editor-facing collaborator. Use only the supplied context. "
+        "You can discuss timeline, clip details, feedback, assets, prior prompt generations, quality reports, memory, workflow execution, and video-generation handoff. "
+        "If the user asks to save a durable preference, include a final line starting with 'Memory:' followed by the exact note. "
+        "Do not claim that you executed actions; the app will show action buttons separately."
+    )
+    context_text = compact_chat_context(context)
+    history = [
+        {"role": item.get("role"), "content": item.get("content")}
+        for item in messages[-10:]
+        if item.get("role") in {"user", "assistant"}
+    ]
+
+    try:
+        if provider == "openai" and os.environ.get("OPENAI_API_KEY"):
+            from openai import OpenAI
+
+            client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+            input_messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Context JSON:\n{context_text}"},
+                *history,
+                {"role": "user", "content": message},
+            ]
+            response = client.responses.create(
+                model=os.environ.get("OPENAI_CHAT_MODEL", OPENAI_LITE_MODEL),
+                input=input_messages,
+            )
+            return response.output_text.strip()
+
+        if provider == "gemini" and os.environ.get("GEMINI_API_KEY"):
+            from google import genai
+
+            client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+            prompt = (
+                f"{system_prompt}\n\nContext JSON:\n{context_text}\n\n"
+                f"Recent messages:\n{json.dumps(history, ensure_ascii=False)}\n\nUser: {message}"
+            )
+            response = client.models.generate_content(
+                model=os.environ.get("GEMINI_CHAT_MODEL", LITE_MODEL),
+                contents=prompt,
+            )
+            return (response.text or "").strip()
+    except Exception as exc:
+        log_event(
+            "clip_chat.llm_error",
+            provider=provider,
+            project=context.get("project", {}).get("name"),
+            clip_index=context.get("clip_index"),
+            error_type=type(exc).__name__,
+            error=str(exc)[:500],
+        )
+
+    return fallback_chat_reply(message, context)
+
 @app.post("/api/projects/{project_name}/feedback/item")
 def add_manual_feedback(project_name: str, item: ManualFeedbackRequest):
     project_name = safe_project_name(project_name)
@@ -657,6 +981,115 @@ def get_project_data(project_name: str):
         "total_duration_tc": timeline_data.get("total_duration_tc", ""),
         "total_duration_s": timeline_data.get("total_duration_s", 0)
     }
+
+
+@app.get("/api/projects/{project_name}/chat/clip/{clip_index}")
+def get_clip_chat(project_name: str, clip_index: int):
+    project_name = safe_project_name(project_name)
+    context = build_clip_chat_context(project_name, clip_index)
+    history = load_chat_history(project_name)
+    messages = history.get("clips", {}).get(context["clip_key"], [])
+
+    if not messages:
+        messages = [
+            make_chat_message(
+                "assistant",
+                (
+                    f"I am attached to clip #{clip_index + 1}. I can use timeline, feedback, assets, "
+                    "saved memory, generated prompts, workflow execution, and video-generation handoff context."
+                ),
+                {"kind": "welcome"},
+            )
+        ]
+        history.setdefault("clips", {})[context["clip_key"]] = messages
+        save_chat_history(project_name, history)
+
+    return {
+        "project_name": project_name,
+        "clip_index": clip_index,
+        "clip_key": context["clip_key"],
+        "messages": messages,
+        "memory": context["memory"],
+        "context": {
+            "project": context["project"],
+            "clip": context["clip"],
+            "adjacent_clips": context["adjacent_clips"],
+            "feedback_count": len((context.get("feedback") or {}).get("feedback_items", [])),
+            "selected_asset_count": len((context.get("latest_version") or {}).get("selected_assets", []) or []),
+            "prompt_ready": bool((context.get("latest_version") or {}).get("video_model_prompt")),
+        },
+    }
+
+
+@app.post("/api/projects/{project_name}/chat/clip")
+async def post_clip_chat(project_name: str, request: ClipChatRequest):
+    project_name = safe_project_name(project_name)
+    message_text = request.message.strip()
+    if not message_text:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    context = build_clip_chat_context(project_name, request.clip_index)
+    history = load_chat_history(project_name)
+    clip_messages = history.setdefault("clips", {}).setdefault(context["clip_key"], [])
+
+    user_message = make_chat_message("user", message_text)
+    clip_messages.append(user_message)
+
+    assistant_text = await generate_chat_reply(request.provider, message_text, context, clip_messages)
+    saved_memories = extract_memory_notes(message_text, assistant_text)
+
+    if saved_memories:
+        memory = load_chat_memory(project_name)
+        clip_memory = memory.setdefault("clips", {}).setdefault(context["clip_key"], [])
+        existing = {item.get("text", "").strip().lower() for item in clip_memory}
+        for item in saved_memories:
+            if item["text"].strip().lower() not in existing:
+                clip_memory.append(item)
+                existing.add(item["text"].strip().lower())
+        save_chat_memory(project_name, memory)
+        context = build_clip_chat_context(project_name, request.clip_index)
+
+    actions = infer_action_suggestions(message_text, context)
+    assistant_message = make_chat_message(
+        "assistant",
+        assistant_text,
+        {
+            "provider": request.provider,
+            "actions": actions,
+            "saved_memory_ids": [item["id"] for item in saved_memories],
+        },
+    )
+    clip_messages.append(assistant_message)
+    save_chat_history(project_name, history)
+
+    return {
+        "project_name": project_name,
+        "clip_index": request.clip_index,
+        "clip_key": context["clip_key"],
+        "messages": clip_messages,
+        "assistant_message": assistant_message,
+        "memory": context["memory"],
+        "suggested_actions": actions,
+    }
+
+
+@app.post("/api/projects/{project_name}/chat/memory")
+def add_clip_memory(project_name: str, request: ClipMemoryRequest):
+    project_name = safe_project_name(project_name)
+    context = build_clip_chat_context(project_name, request.clip_index)
+    text = request.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Memory text cannot be empty")
+
+    memory = load_chat_memory(project_name)
+    item = make_memory_item(text, scope=request.scope, source="manual")
+    if request.scope == "project":
+        memory.setdefault("project", []).append(item)
+    else:
+        memory.setdefault("clips", {}).setdefault(context["clip_key"], []).append(item)
+    save_chat_memory(project_name, memory)
+    updated_context = build_clip_chat_context(project_name, request.clip_index)
+    return {"memory": updated_context["memory"], "item": item}
 
 @app.get("/api/run-workflow")
 async def run_workflow(project: str, index: int, provider: str = "openai"):

@@ -126,3 +126,74 @@ export type Toast = {
   message: string;
   type: "info" | "success" | "error";
 };
+
+export type ActiveClipChat = {
+  clipIndex: number;
+} | null;
+
+export type ClipChatAction = {
+  type: "execute_workflow" | "prepare_video";
+  label: string;
+  feedback_index?: number;
+};
+
+export type ClipChatMessage = {
+  id: string;
+  role: "assistant" | "user" | "tool";
+  content: string;
+  created_at: string;
+  metadata?: {
+    provider?: Provider;
+    actions?: ClipChatAction[];
+    saved_memory_ids?: string[];
+    kind?: string;
+  };
+};
+
+export type ClipMemoryItem = {
+  id: string;
+  scope: "clip" | "project";
+  text: string;
+  created_at: string;
+  source: string;
+};
+
+export type ClipChatMemory = {
+  project: ClipMemoryItem[];
+  clip: ClipMemoryItem[];
+};
+
+export type ClipChatSnapshot = {
+  project_name: string;
+  clip_index: number;
+  clip_key: string;
+  messages: ClipChatMessage[];
+  memory: ClipChatMemory;
+  context: {
+    project: {
+      name: string;
+      sequence_name?: string;
+      clip_count: number;
+      total_duration_tc?: string;
+      total_duration_s?: number;
+    };
+    clip: TimelineClip;
+    adjacent_clips: {
+      previous?: TimelineClip | null;
+      next?: TimelineClip | null;
+    };
+    feedback_count: number;
+    selected_asset_count: number;
+    prompt_ready: boolean;
+  };
+};
+
+export type ClipChatResponse = {
+  project_name: string;
+  clip_index: number;
+  clip_key: string;
+  messages: ClipChatMessage[];
+  assistant_message: ClipChatMessage;
+  memory: ClipChatMemory;
+  suggested_actions: ClipChatAction[];
+};

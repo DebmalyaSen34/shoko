@@ -9,10 +9,11 @@ import { UploadAssetsModal } from "./components/modals/UploadAssetsModal";
 import { UploadFeedbackModal } from "./components/modals/UploadFeedbackModal";
 import { AddManualFeedbackModal } from "./components/modals/AddManualFeedbackModal";
 import { TimelinePanel } from "./components/timeline/TimelinePanel";
+import { ClipChatPanel } from "./components/chat/ClipChatPanel";
 import { ToastStack } from "./components/ToastStack";
 import { apiUrl, API_BASE, staticUrl } from "./lib/api";
 import { clipBasename } from "./lib/format";
-import type { PreviewState, ProjectData, PromptRecord, PromptVersion, Provider, ResultState, Toast } from "./types";
+import type { ActiveClipChat, PreviewState, ProjectData, PromptRecord, PromptVersion, Provider, ResultState, Toast } from "./types";
 
 function App() {
   const [projects, setProjects] = useState<string[]>([]);
@@ -36,6 +37,7 @@ function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [runningIndexes, setRunningIndexes] = useState<Set<number>>(new Set());
   const [selectedVersions, setSelectedVersions] = useState<Record<string, number>>({});
+  const [activeClipChat, setActiveClipChat] = useState<ActiveClipChat>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const eventSourcesRef = useRef<Record<number, EventSource>>({});
 
@@ -260,6 +262,16 @@ function App() {
   } as CSSProperties;
 
   const zoomClass = zoom < 0.75 ? "font-small" : zoom > 1.25 ? "font-large" : "";
+  const chatClip = activeClipChat && projectData ? projectData.timeline[activeClipChat.clipIndex] : null;
+  const chatFeedback =
+    activeClipChat && chatClip && projectData
+      ? projectData.feedback.find(
+          (item) =>
+            item.clip_used === chatClip.clip &&
+            (typeof item.clip_occurrence !== "number" || item.clip_occurrence === activeClipChat.clipIndex),
+        )
+      : undefined;
+  const chatPrompt = activeClipChat && chatClip ? findPrompt(chatClip.clip, activeClipChat.clipIndex) : null;
 
   return (
     <div className="app-container">
@@ -309,7 +321,23 @@ function App() {
             setActiveClipForManualFeedback(clipName);
             setShowAddManualFeedback(true);
           }}
+          onOpenClipChat={(clipIndex) => setActiveClipChat({ clipIndex })}
         />
+
+        {projectData && chatClip && activeClipChat && (
+          <ClipChatPanel
+            clip={chatClip}
+            clipIndex={activeClipChat.clipIndex}
+            feedback={chatFeedback}
+            prompt={chatPrompt}
+            projectData={projectData}
+            provider={provider}
+            runningIndexes={runningIndexes}
+            onClose={() => setActiveClipChat(null)}
+            onExecuteWorkflow={executeWorkflow}
+            onOpenPromptDetails={openResultFromVersion}
+          />
+        )}
       </main>
 
       <footer className="app-footer">

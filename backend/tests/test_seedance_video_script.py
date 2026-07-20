@@ -9,6 +9,7 @@ from scripts.generate_seedance_video import (
     build_seedance_content,
     build_segmind_payload,
     clamp_duration,
+    create_seedance_task,
     load_prompt_item,
 )
 
@@ -49,10 +50,8 @@ class SeedanceVideoScriptTests(unittest.TestCase):
                 initial_image_url=None,
             )
 
-        self.assertEqual(
-            {"type": "text", "text": "playful hall entrance"},
-            content[0],
-        )
+        self.assertIn("first_frame_url is the first-frame continuity anchor", content[0]["text"])
+        self.assertTrue(content[0]["text"].endswith("playful hall entrance"))
         self.assertEqual("image_url", content[1]["type"])
         self.assertEqual(image_path, content[1]["image_url"]["url"])
         self.assertEqual("first_frame", content[1].get("role"))
@@ -82,10 +81,10 @@ class SeedanceVideoScriptTests(unittest.TestCase):
                 initial_image_url=None,
             )
 
-        self.assertEqual(
-            {"type": "text", "text": "boy image 1 runs like image 2"},
-            content[0],
-        )
+        self.assertIn("REFERENCE IMAGE MAP:", content[0]["text"])
+        self.assertIn("image 1: character sheet", content[0]["text"])
+        self.assertIn("image 2: original clip frame", content[0]["text"])
+        self.assertTrue(content[0]["text"].endswith("boy image 1 runs like image 2"))
         self.assertEqual("first_frame", content[1].get("role"))
         self.assertEqual("reference_image", content[2].get("role"))
         self.assertEqual("reference_image", content[3].get("role"))
@@ -112,10 +111,10 @@ class SeedanceVideoScriptTests(unittest.TestCase):
                 initial_image_url=None,
             )
 
-        self.assertEqual(
-            {"type": "text", "text": "boy image 1 runs like image 2"},
-            content[0],
-        )
+        self.assertIn("REFERENCE IMAGE MAP:", content[0]["text"])
+        self.assertIn("image 1: character sheet", content[0]["text"])
+        self.assertIn("image 2: original clip frame", content[0]["text"])
+        self.assertTrue(content[0]["text"].endswith("boy image 1 runs like image 2"))
         self.assertEqual("reference_image", content[1].get("role"))
         self.assertEqual("reference_image", content[2].get("role"))
         self.assertEqual(3, len(content))  # text + 2 reference images (asset1, frame1)
@@ -162,10 +161,10 @@ class SeedanceVideoScriptTests(unittest.TestCase):
         )
 
         self.assertEqual(3, len(content))
-        self.assertEqual(
-            {"type": "text", "text": "movement from image 1, image 2"},
-            content[0],
-        )
+        self.assertIn("REFERENCE IMAGE MAP:", content[0]["text"])
+        self.assertIn("image 1: original clip frame", content[0]["text"])
+        self.assertIn("image 2: original clip frame", content[0]["text"])
+        self.assertTrue(content[0]["text"].endswith("movement from image 1, image 2"))
         self.assertEqual(
             {
                 "type": "image_url",
@@ -200,10 +199,9 @@ class SeedanceVideoScriptTests(unittest.TestCase):
                 initial_image_url=None,
             )
 
-        self.assertEqual(
-            {"type": "text", "text": "hard cut to image 1 for Vir smile"},
-            content[0],
-        )
+        self.assertIn("REFERENCE IMAGE MAP:", content[0]["text"])
+        self.assertIn("image 1: referenced cutaway/reaction frame", content[0]["text"])
+        self.assertTrue(content[0]["text"].endswith("hard cut to image 1 for Vir smile"))
         self.assertEqual("reference_image", content[1].get("role"))
         self.assertEqual(ref_path, content[1]["image_url"]["url"])
 
@@ -229,12 +227,13 @@ class SeedanceVideoScriptTests(unittest.TestCase):
             upload_assets=False,
         )
 
-        self.assertEqual("use image 1 and image 2", payload["prompt"])
+        self.assertIn("REFERENCE IMAGE MAP:", payload["prompt"])
+        self.assertTrue(payload["prompt"].endswith("use image 1 and image 2"))
         self.assertEqual(["https://example.com/character.jpg", "https://example.com/frame.jpg"], payload["reference_images"])
         self.assertEqual(["https://example.com/audio.mp3"], payload["reference_audios"])
-        self.assertEqual(12, payload["duration"])
+        self.assertEqual(5, payload["duration"])
         self.assertEqual("9:16", payload["aspect_ratio"])
-        self.assertTrue(payload["generate_audio"])
+        self.assertFalse(payload["generate_audio"])
 
     def test_attach_prepared_segmind_payload_adds_ready_provider_fields(self):
         item = {
@@ -255,7 +254,12 @@ class SeedanceVideoScriptTests(unittest.TestCase):
 
         self.assertEqual("segmind", enriched["video_provider"])
         self.assertEqual("ready", enriched["segmind_payload_status"])
-        self.assertEqual("use image 1 and image 2", enriched["segmind_prompt"])
+        self.assertIn("REFERENCE IMAGE MAP:", enriched["segmind_prompt"])
+        self.assertTrue(enriched["segmind_prompt"].endswith("use image 1 and image 2"))
+        self.assertEqual(enriched["segmind_prompt"], enriched["video_model_prompt"])
+        self.assertEqual(5, enriched["duration"])
+        self.assertFalse(enriched["generate_audio"])
+        self.assertTrue(enriched["has_reference_audio"])
         self.assertEqual(
             ["https://example.com/character.jpg", "https://example.com/frame.jpg"],
             enriched["segmind_reference_images"],
@@ -274,6 +278,84 @@ class SeedanceVideoScriptTests(unittest.TestCase):
         self.assertEqual("segmind", enriched["video_provider"])
         self.assertEqual("skipped", enriched["segmind_payload_status"])
         self.assertIn("SEGMIND_API_KEY", enriched["segmind_payload_error"])
+
+    def test_build_segmind_payload_normalizes_stale_prepared_payload(self):
+        payload = build_segmind_payload(
+            item={
+                "video_model_prompt": "cut to image 2",
+                "segmind_payload_status": "ready",
+                "segmind_payload": {
+                    "prompt": "cut to image 2",
+                    "duration": 4,
+                    "generate_audio": True,
+                    "reference_images": ["https://example.com/asset.jpg", "https://example.com/ref.jpg"],
+                },
+                "selected_assets": ["/tmp/character.png"],
+                "referenced_frame_paths": ["/tmp/ref.jpg"],
+                "referenced_frame_labels": ["@ref1"],
+            },
+            api_key="test-key",
+            cache=None,
+        )
+
+        self.assertEqual(5, payload["duration"])
+        self.assertFalse(payload["generate_audio"])
+        self.assertIn("REFERENCE IMAGE MAP:", payload["prompt"])
+        self.assertIn("image 1: character sheet from character.png", payload["prompt"])
+        self.assertIn("image 2: referenced cutaway/reaction frame from ref.jpg", payload["prompt"])
+        self.assertNotIn("@ref1", payload["prompt"])
+
+    @mock.patch("scripts.generate_seedance_video.SegmindClient")
+    def test_create_seedance_task_uses_segmind_sdk_and_downloads_output(self, mock_client_class):
+        class FakeResponse:
+            headers = {"content-type": "video/mp4"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size):
+                yield b"video-"
+                yield b"bytes"
+
+        fake_job = mock.Mock()
+        fake_job.request_id = "segmind-request-123"
+        fake_job.wait.return_value = {
+            "status": "COMPLETED",
+            "output": "https://example.com/generated.mp4",
+        }
+        fake_client = mock.Mock()
+        fake_client.submit_async.return_value = fake_job
+        mock_client_class.return_value = fake_client
+        fake_session = mock.Mock()
+        fake_session.get.return_value = FakeResponse()
+
+        result = create_seedance_task(
+            api_key="test-key",
+            payload={"prompt": "make video", "duration": 5},
+            session=fake_session,
+        )
+
+        mock_client_class.assert_called_once_with(api_key="test-key", timeout=60.0)
+        fake_client.submit_async.assert_called_once_with(
+            "seedance-2.0",
+            prompt="make video",
+            duration=5,
+        )
+        fake_job.wait.assert_called_once_with(timeout=1800, interval=2.0)
+        fake_session.get.assert_called_once_with(
+            "https://example.com/generated.mp4",
+            stream=True,
+            timeout=300,
+        )
+        self.assertEqual("segmind-request-123", result["id"])
+        self.assertEqual(b"video-bytes", result["content"]["bytes"])
+        self.assertEqual("https://example.com/generated.mp4", result["content"]["video_url"])
 
 
 if __name__ == "__main__":

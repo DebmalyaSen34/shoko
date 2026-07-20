@@ -6,6 +6,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -15,6 +16,8 @@ from urllib.parse import quote
 
 import requests
 from dotenv import load_dotenv
+from segmind import InferenceFailed, InferenceTimeout, SegmindClient
+from src.logging_utils import log_event, summarize_value
 
 
 load_dotenv()
@@ -25,7 +28,7 @@ DEFAULT_MODEL = "seedance-2.0"
 DEFAULT_RATIO = "9:16"
 DEFAULT_RESOLUTION = "720p"
 DEFAULT_BITRATE_MODE = "standard"
-SEGMIND_GENERATION_URL = "https://api.segmind.com/v1/seedance-2.0"
+SEGMIND_DURATION_SECONDS = 5
 SEGMIND_UPLOAD_URL = "https://workflows-api.segmind.com/upload-asset"
 MAX_DURATION_SECONDS = 15
 MIN_DURATION_SECONDS = 4
@@ -267,6 +270,8 @@ def upload_data_url_to_segmind(
     session: requests.Session | None = None,
 ) -> str:
     http = session or requests.Session()
+    started = time.perf_counter()
+    log_event("segmind.asset_upload.request", data_url=summarize_value(data_url))
     response = http.post(
         SEGMIND_UPLOAD_URL,
         json={"data_urls": [data_url]},
@@ -277,11 +282,28 @@ def upload_data_url_to_segmind(
         },
         timeout=120,
     )
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except Exception as exc:
+        log_event(
+            "segmind.asset_upload.error",
+            status_code=response.status_code,
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            error_type=type(exc).__name__,
+            error=str(exc)[:500],
+        )
+        raise
     result = response.json()
     file_urls = result.get("file_urls") or []
     if not file_urls:
         raise RuntimeError(f"Segmind upload response did not include file_urls: {result}")
+    log_event(
+        "segmind.asset_upload.response",
+        status_code=response.status_code,
+        duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        file_count=len(file_urls),
+        first_url=file_urls[0],
+    )
     return file_urls[0]
 
 
@@ -390,6 +412,58 @@ def _replace_handles_for_segmind(
     return prompt_text
 
 
+def _reference_map_block(reference_descriptions: list[str], first_frame_url: str | None) -> str:
+    lines = []
+    if first_frame_url:
+        lines.append(
+            "first_frame_url is the first-frame continuity anchor; start the video from this image."
+        )
+    if reference_descriptions:
+        lines.append("REFERENCE IMAGE MAP:")
+        lines.extend(reference_descriptions)
+    if not lines:
+        return ""
+    return "\n".join(lines) + "\n\n"
+
+
+def _reference_descriptions_from_item(item: dict[str, Any]) -> list[str]:
+    descriptions = []
+    image_number = 0
+    for path in item.get("selected_assets", []):
+        image_number += 1
+        descriptions.append(
+            f"image {image_number}: {_get_asset_type(str(path))} from {os.path.basename(str(path))}."
+        )
+    for path in item.get("clip_frame_paths", []):
+        image_number += 1
+        descriptions.append(
+            f"image {image_number}: original clip frame from {os.path.basename(str(path))}; use for motion, composition, wardrobe, lighting, and continuity."
+        )
+    for path, label in zip(item.get("referenced_frame_paths", []), item.get("referenced_frame_labels", [])):
+        image_number += 1
+        descriptions.append(
+            f"image {image_number}: referenced cutaway/reaction frame from {os.path.basename(str(path))}."
+        )
+    return descriptions
+
+
+def _normalize_prepared_payload(item: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    normalized["duration"] = SEGMIND_DURATION_SECONDS
+    normalized["generate_audio"] = False
+    prompt = str(normalized.get("prompt") or item.get("video_model_prompt") or "").strip()
+    prompt = re.sub(
+        r"(referenced cutaway/reaction frame) for @[\w-]+ from",
+        r"\1 from",
+        prompt,
+    )
+    if prompt and "REFERENCE IMAGE MAP:" not in prompt:
+        first_frame_url = normalized.get("first_frame_url") or item.get("first_frame_url")
+        prompt = _reference_map_block(_reference_descriptions_from_item(item), first_frame_url) + prompt
+    normalized["prompt"] = prompt
+    return normalized
+
+
 def build_seedance_content(
     item: dict[str, Any],
     *,
@@ -439,11 +513,12 @@ def build_segmind_payload(
 ) -> dict[str, Any]:
     prepared_payload = item.get("segmind_payload")
     if isinstance(prepared_payload, dict) and item.get("segmind_payload_status") == "ready":
-        return dict(prepared_payload)
+        return _normalize_prepared_payload(item, prepared_payload)
 
     prompt_text = item["video_model_prompt"].strip()
 
     reference_images: list[str] = []
+    reference_descriptions: list[str] = []
     reference_videos: list[str] = []
     reference_audios: list[str] = []
     first_frame_url = initial_image_url or item.get("first_frame_url")
@@ -493,7 +568,11 @@ def build_segmind_payload(
             )
             if image_url:
                 reference_images.append(image_url)
-                image_labels[handle] = f"image {len(reference_images)}"
+                image_number = len(reference_images)
+                image_labels[handle] = f"image {image_number}"
+                reference_descriptions.append(
+                    f"image {image_number}: {_get_asset_type(str(path))} from {os.path.basename(str(path))}."
+                )
             else:
                 image_labels[handle] = f"the {_get_asset_type(path)}"
 
@@ -506,7 +585,11 @@ def build_segmind_payload(
             )
             if image_url:
                 reference_images.append(image_url)
-                clip_image_indices.append(len(reference_images))
+                image_number = len(reference_images)
+                clip_image_indices.append(image_number)
+                reference_descriptions.append(
+                    f"image {image_number}: original clip frame from {os.path.basename(str(path))}; use for motion, composition, wardrobe, lighting, and continuity."
+                )
         video_label = (
             ", ".join(f"image {index}" for index in clip_image_indices)
             if clip_image_indices
@@ -522,9 +605,13 @@ def build_segmind_payload(
             )
             if image_url:
                 reference_images.append(image_url)
-                referenced_frame_labels[label] = f"image {len(reference_images)}"
+                image_number = len(reference_images)
+                referenced_frame_labels[label] = f"image {image_number}"
+                reference_descriptions.append(
+                    f"image {image_number}: referenced cutaway/reaction frame from {os.path.basename(str(path))}."
+                )
             else:
-                referenced_frame_labels[label] = label
+                referenced_frame_labels[label] = "the referenced cutaway frame"
 
         prompt_text = _replace_handles_for_segmind(
             prompt_text,
@@ -532,6 +619,7 @@ def build_segmind_payload(
             video_label=video_label,
             referenced_frame_labels=referenced_frame_labels,
         )
+        prompt_text = _reference_map_block(reference_descriptions, first_frame_url) + prompt_text
 
     audio_ref = (
         item.get("audio_reference_path")
@@ -545,10 +633,10 @@ def build_segmind_payload(
 
     payload = {
         "prompt": prompt_text,
-        "duration": clamp_duration(item.get("duration", 5), DEFAULT_MODEL),
+        "duration": SEGMIND_DURATION_SECONDS,
         "resolution": item.get("resolution", DEFAULT_RESOLUTION),
         "aspect_ratio": item.get("ratio") or item.get("aspect_ratio") or DEFAULT_RATIO,
-        "generate_audio": bool(item.get("generate_audio", False)),
+        "generate_audio": False,
         "skip_moderation": bool(item.get("skip_moderation", True)),
         "bitrate_mode": item.get("bitrate_mode", DEFAULT_BITRATE_MODE),
     }
@@ -589,12 +677,29 @@ def attach_prepared_segmind_payload(
     enriched = dict(item)
     resolved_api_key = api_key or os.environ.get("SEGMIND_API_KEY")
     if not resolved_api_key:
+        payload = build_segmind_payload(
+            item=enriched,
+            api_key="dry-run",
+            cache=None,
+            upload_assets=False,
+            use_local_initial_frame=True,
+            initial_image_url=None,
+            session=session,
+        )
         enriched.update(
             {
                 "video_provider": "segmind",
                 "segmind_model": DEFAULT_MODEL,
                 "segmind_payload_status": "skipped",
                 "segmind_payload_error": "SEGMIND_API_KEY is not set; payload will be prepared during generation.",
+                "video_model_prompt": payload.get("prompt", enriched.get("video_model_prompt")),
+                "duration": payload.get("duration", SEGMIND_DURATION_SECONDS),
+                "generate_audio": payload.get("generate_audio", False),
+                "has_reference_audio": bool(payload.get("reference_audios")),
+                "segmind_prompt": payload.get("prompt", ""),
+                "segmind_reference_images": payload.get("reference_images", []),
+                "segmind_reference_videos": payload.get("reference_videos", []),
+                "segmind_reference_audios": payload.get("reference_audios", []),
             }
         )
         return enriched
@@ -619,6 +724,15 @@ def attach_prepared_segmind_payload(
                 "segmind_model": DEFAULT_MODEL,
                 "segmind_payload_status": "failed",
                 "segmind_payload_error": str(exc),
+                "video_model_prompt": build_segmind_payload(
+                    item=enriched,
+                    api_key="dry-run",
+                    cache=None,
+                    upload_assets=False,
+                    use_local_initial_frame=True,
+                    initial_image_url=None,
+                    session=session,
+                ).get("prompt", enriched.get("video_model_prompt")),
             }
         )
         return enriched
@@ -629,6 +743,10 @@ def attach_prepared_segmind_payload(
             "segmind_model": DEFAULT_MODEL,
             "segmind_payload_status": "ready",
             "segmind_payload": payload,
+            "video_model_prompt": payload.get("prompt", enriched.get("video_model_prompt")),
+            "duration": payload.get("duration", SEGMIND_DURATION_SECONDS),
+            "generate_audio": payload.get("generate_audio", False),
+            "has_reference_audio": bool(payload.get("reference_audios")),
             "segmind_prompt": payload.get("prompt", ""),
             "segmind_first_frame_url": payload.get("first_frame_url"),
             "segmind_reference_images": payload.get("reference_images", []),
@@ -638,6 +756,42 @@ def attach_prepared_segmind_payload(
         }
     )
     return enriched
+
+
+def _video_url_from_segmind_result(result: Any) -> str | None:
+    if not isinstance(result, dict):
+        return None
+
+    candidates: list[Any] = [
+        result.get("output"),
+        result.get("video_url"),
+        result.get("url"),
+    ]
+    for candidate in candidates:
+        url = _find_first_url(candidate)
+        if url:
+            return url
+    return None
+
+
+def _find_first_url(value: Any) -> str | None:
+    if isinstance(value, str) and value.startswith(("http://", "https://")):
+        return value
+    if isinstance(value, list):
+        for item in value:
+            url = _find_first_url(item)
+            if url:
+                return url
+    if isinstance(value, dict):
+        for key in ("video_url", "url", "output", "file_url"):
+            url = _find_first_url(value.get(key))
+            if url:
+                return url
+        for item in value.values():
+            url = _find_first_url(item)
+            if url:
+                return url
+    return None
 
 
 def create_seedance_task(
@@ -653,7 +807,7 @@ def create_seedance_task(
     output_path: str | os.PathLike[str] | None = None,
     session: requests.Session | None = None,
 ) -> Any:
-    """Submit a synchronous Segmind request.
+    """Submit a Segmind SDK request and return video bytes.
 
     The legacy keyword arguments are accepted to keep older tests and call sites
     from failing loudly, but new code should pass a complete Segmind payload.
@@ -688,31 +842,81 @@ def create_seedance_task(
         if reference_audios:
             payload["reference_audios"] = [url for url in reference_audios if url]
 
-    http = session or requests.Session()
-    response = http.post(
-        SEGMIND_GENERATION_URL,
-        json=payload,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        timeout=1800,
+    model_slug = model or DEFAULT_MODEL
+    client = SegmindClient(api_key=api_key, timeout=60.0)
+    generation_started = time.perf_counter()
+    log_event(
+        "segmind.generation.request",
+        model=model_slug,
+        duration=payload.get("duration"),
+        aspect_ratio=payload.get("aspect_ratio"),
+        resolution=payload.get("resolution"),
+        generate_audio=payload.get("generate_audio"),
+        reference_images=len(payload.get("reference_images") or []),
+        reference_videos=len(payload.get("reference_videos") or []),
+        reference_audios=len(payload.get("reference_audios") or []),
+        prompt_chars=len(str(payload.get("prompt") or "")),
     )
-    response.raise_for_status()
+    try:
+        job = client.submit_async(model_slug, **payload)
+        log_event("segmind.generation.submitted", model=model_slug, request_id=job.request_id)
+        result = job.wait(timeout=1800, interval=2.0)
+    except InferenceTimeout as exc:
+        log_event(
+            "segmind.generation.timeout",
+            model=model_slug,
+            request_id=exc.request_id,
+            duration_ms=round((time.perf_counter() - generation_started) * 1000, 2),
+        )
+        raise TimeoutError(f"Segmind generation timed out for request {exc.request_id}") from exc
+    except InferenceFailed as exc:
+        log_event(
+            "segmind.generation.failed",
+            model=model_slug,
+            duration_ms=round((time.perf_counter() - generation_started) * 1000, 2),
+            error=str(exc.detail)[:500],
+        )
+        raise RuntimeError(f"Segmind generation failed: {exc.detail}") from exc
+
+    output_url = _video_url_from_segmind_result(result)
+    if not output_url:
+        log_event(
+            "segmind.generation.bad_response",
+            model=model_slug,
+            request_id=getattr(job, "request_id", None),
+            result=summarize_value(result),
+        )
+        raise RuntimeError(f"Segmind response did not include an output video URL: {result}")
+
+    http = session or requests.Session()
+    with http.get(output_url, stream=True, timeout=300) as response:
+        response.raise_for_status()
+        video_bytes = b"".join(chunk for chunk in response.iter_content(chunk_size=1024 * 1024) if chunk)
+    log_event(
+        "segmind.generation.response",
+        model=model_slug,
+        request_id=getattr(job, "request_id", None),
+        duration_ms=round((time.perf_counter() - generation_started) * 1000, 2),
+        output_url=output_url,
+        bytes=len(video_bytes),
+        content_type=response.headers.get("content-type", "video/mp4"),
+    )
 
     if output_path:
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(response.content)
+        path.write_bytes(video_bytes)
 
     return {
-        "id": response.headers.get("x-request-id") or f"segmind-{int(time.time())}",
+        "id": getattr(job, "request_id", None) or f"segmind-{int(time.time())}",
         "status": "succeeded",
         "content": {
-            "bytes": response.content,
+            "bytes": video_bytes,
             "content_type": response.headers.get("content-type", "video/mp4"),
+            "video_url": output_url,
         },
         "payload": payload,
+        "raw_result": result,
     }
 
 

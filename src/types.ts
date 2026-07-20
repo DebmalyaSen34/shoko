@@ -17,6 +17,7 @@ export type FeedbackItem = {
 
 export type FeedbackGroup = {
   clip_used: string;
+  clip_occurrence?: number | null;
   feedback_items: FeedbackItem[];
 };
 
@@ -76,6 +77,8 @@ export type PromptVersion = {
 
 export type PromptRecord = PromptVersion & {
   clip_used?: string;
+  clip_occurrence?: number | null;
+  matched_clip?: string | null;
   latest_error?: string | null;
   history?: PromptVersion[];
 };

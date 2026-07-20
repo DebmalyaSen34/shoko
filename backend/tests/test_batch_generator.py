@@ -277,9 +277,9 @@ class BatchGeneratorTests(unittest.TestCase):
             [
                 selected_character,
                 selected_location,
-                "data/output/video_frames/cluster_0/frame_001.jpg",
-                "data/output/video_frames/cluster_0/frame_002.jpg",
-                "data/output/video_frames/cluster_0/frame_003.jpg",
+                "data/output/video_frames/clip_0_clip-0/frame_001.jpg",
+                "data/output/video_frames/clip_0_clip-0/frame_002.jpg",
+                "data/output/video_frames/clip_0_clip-0/frame_003.jpg",
             ],
             uploaded_paths,
         )
@@ -384,7 +384,7 @@ class BatchGeneratorTests(unittest.TestCase):
                 os.path.join(
                     self.temp_dir.name,
                     "video_frames",
-                    "cluster_0",
+                    "clip_0_clip-0",
                     f"frame_{index:03d}.jpg",
                 )
                 for index in range(1, 4)

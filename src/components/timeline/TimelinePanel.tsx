@@ -20,7 +20,7 @@ type TimelinePanelProps = {
   zoom: number;
   zoomClass: string;
   executeWorkflow: (feedbackIndex: number) => void;
-  findPrompt: (clipName: string) => PromptRecord | null;
+  findPrompt: (clipName: string, clipOccurrence?: number) => PromptRecord | null;
   openResultFromVersion: (version: PromptVersion) => void;
   setZoom: Dispatch<SetStateAction<number>>;
   onUploadFeedback: () => void;
@@ -137,7 +137,7 @@ function Timeline({
   loading: boolean;
   error: string;
   projectData: ProjectData | null;
-  findPrompt: (clipName: string) => PromptRecord | null;
+  findPrompt: (clipName: string, clipOccurrence?: number) => PromptRecord | null;
   selectedVersions: Record<string, number>;
   setSelectedVersions: Dispatch<SetStateAction<Record<string, number>>>;
   runningIndexes: Set<number>;
@@ -211,10 +211,15 @@ function Timeline({
       }}
     >
       {projectData.timeline.map((clip, index) => {
-        const feedback = projectData.feedback.find((item) => item.clip_used === clip.clip);
-        const prompt = findPrompt(clip.clip);
+        const feedback = projectData.feedback.find(
+          (item) =>
+            item.clip_used === clip.clip &&
+            (typeof item.clip_occurrence !== "number" || item.clip_occurrence === index),
+        );
+        const prompt = findPrompt(clip.clip, index);
         const versions = getVersions(prompt);
-        const selectedVersion = selectedVersions[clip.clip] ?? Math.max(versions.length - 1, 0);
+        const clipKey = `${clip.clip}::${index}`;
+        const selectedVersion = selectedVersions[clipKey] ?? Math.max(versions.length - 1, 0);
         const version = versions[selectedVersion] || prompt || undefined;
 
         return (
@@ -229,7 +234,7 @@ function Timeline({
               setSelectedVersion={(versionIndex) =>
                 setSelectedVersions((current) => ({
                   ...current,
-                  [clip.clip]: versionIndex,
+                  [clipKey]: versionIndex,
                 }))
               }
               version={version}

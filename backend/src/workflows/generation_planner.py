@@ -112,6 +112,7 @@ def plan_generation_workflow(
     # 4. Resolve local audio paths and referenced frames if present
     # Load feedback.json to map referenced_frames to plan items
     ref_frames_map = {}
+    occurrence_map = {}
     if os.path.exists(abs_feedback_path):
         try:
             with open(abs_feedback_path, 'r', encoding='utf-8') as f:
@@ -119,6 +120,7 @@ def plan_generation_workflow(
             for seg in feedback_json_data:
                 clip_used = seg.get("clip_used")
                 start_s = seg.get("clip_start_s")
+                occurrence_map[(clip_used, start_s)] = seg.get("clip_occurrence")
                 ref_frames = seg.get("referenced_frames")
                 if ref_frames:
                     unique_refs = []
@@ -134,6 +136,8 @@ def plan_generation_workflow(
         # Resolve referenced frames
         clip_used = item.get("clip_used")
         start_s = item.get("clip_start_s")
+        if item.get("clip_occurrence") is None:
+            item["clip_occurrence"] = occurrence_map.get((clip_used, start_s))
         item["referenced_frames"] = ref_frames_map.get((clip_used, start_s), [])
 
         audio_name = item.get("audio_used")

@@ -64,6 +64,7 @@ retry
 rich
 shellingham
 six
+segmind>=1.1.0
 sniffio
 soupsieve
 starlette

@@ -22,7 +22,7 @@ from src.workflows.referenced_frames import analyze_and_extract_referenced_frame
 from src.workflows.generation_planner import plan_generation_workflow
 from src.workflows.prompt_generation import generate_video_prompts_from_plan
 from src.workflows.project_setup import setup_project_workspace
-from scripts.generate_seedance_video import SupabaseAssetUrlCache, attach_prepared_segmind_payload, clamp_duration
+from scripts.generate_seedance_video import SupabaseAssetUrlCache, attach_prepared_segmind_payload
 
 load_dotenv()
 
@@ -208,7 +208,7 @@ def run_pipeline(
     output_report: str,
     index: Optional[int] = None,
     batch_size: int = 5,
-    provider: Provider = "gemini",
+    provider: Provider = "openai",
     initial_frames_dir: Optional[str] = None,
     video_frames_dir: Optional[str] = None
 ):
@@ -315,6 +315,8 @@ def run_pipeline(
             "clip_occurrence": cluster["clip_occurrence"],
             "clip_start_tc": clip.get("start_tc") if clip else None,
             "clip_end_tc": clip.get("end_tc") if clip else None,
+            "clip_start_s": clip.get("start_s") if clip else None,
+            "clip_end_s": clip.get("end_s") if clip else None,
             "clip_duration_s": clip_duration_s,
             "selected_assets": generated.get("selected_assets", []),
             "prompt_format": generated.get("prompt_format"),
@@ -325,7 +327,7 @@ def run_pipeline(
             "video_model_prompt": generated.get("video_model_prompt"),
             "explanation": generated.get("explanation"),
             "ratio": "9:16",
-            "duration": clamp_duration(clip_duration_s),
+            "duration": 5,
             "generate_audio": False,
             "status": generated.get("status"),
             "quality_warning": generated.get("quality_warning"),
@@ -354,7 +356,7 @@ def run_agentic_loop(
     project_name: str,
     assets_dir: str,
     output_base_dir: str = "data",
-    provider: str = "gemini",
+    provider: str = "openai",
     model: str = "gpt-5.4-mini",
     project_package_path: Optional[str] = None,
     stage: Optional[str] = None,
@@ -603,7 +605,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--provider",
         choices=("gemini", "openai"),
-        default=os.environ.get("MODEL_PROVIDER", "gemini"),
+        default=os.environ.get("MODEL_PROVIDER", "openai"),
         help="Model provider to use for prompt generation.",
     )
     parser.add_argument(

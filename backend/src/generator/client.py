@@ -1,10 +1,12 @@
 import os
 import json
+import time
 from typing import Literal, List, Dict, Any
 from openai import OpenAI
 from google.genai import types
 
 from config.settings import LITE_MODEL, OPENAI_LITE_MODEL
+from src.logging_utils import log_event, summarize_contents, summarize_value
 
 Provider = Literal["gemini", "openai"]
 
@@ -31,46 +33,49 @@ def _openai_input_from_contents(contents: List[Any]) -> List[Dict[str, Any]]:
     return [{"role": "user", "content": content_blocks}]
 
 
-def _log_api_response(
+def _schema_name(schema: Any) -> str:
+    return getattr(schema, "__name__", type(schema).__name__)
+
+
+def _log_structured_request(
+    *,
     provider: str,
     model: str,
     contents: List[Any],
     system_instruction: str,
-    response_dict: Dict[str, Any]
-) -> None:
-    # Ensure data/output directory exists
-    log_dir = "data/output"
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, "api_responses.jsonl")
-    
-    # Serialize contents safely, truncating huge media blocks
-    serialized_contents = []
-    for item in contents:
-        if isinstance(item, str):
-            serialized_contents.append(item)
-        elif isinstance(item, dict):
-            cleaned_item = item.copy()
-            # Truncate potentially large base64 image strings in logs
-            for key in ["image_bytes", "data"]:
-                if key in cleaned_item and isinstance(cleaned_item[key], str) and len(cleaned_item[key]) > 100:
-                    cleaned_item[key] = cleaned_item[key][:50] + "... [TRUNCATED]"
-            serialized_contents.append(cleaned_item)
-        else:
-            serialized_contents.append(str(item))
+    schema: Any,
+    temperature: float,
+) -> float:
+    started = time.perf_counter()
+    log_event(
+        "llm.request",
+        provider=provider,
+        model=model,
+        schema=_schema_name(schema),
+        temperature=temperature,
+        system_instruction_chars=len(system_instruction or ""),
+        contents=summarize_contents(contents),
+    )
+    return started
 
-    log_entry = {
-        "provider": provider,
-        "model": model,
-        "system_instruction": system_instruction,
-        "contents": serialized_contents,
-        "response": response_dict
-    }
-    
-    try:
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-    except Exception as exc:
-        print(f"Warning: Failed to write to API log file: {exc}")
+
+def _log_structured_response(
+    *,
+    provider: str,
+    model: str,
+    schema: Any,
+    response_dict: Dict[str, Any],
+    started: float,
+) -> None:
+    log_event(
+        "llm.response",
+        provider=provider,
+        model=model,
+        schema=_schema_name(schema),
+        duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        response_keys=sorted(response_dict.keys()) if isinstance(response_dict, dict) else [],
+        response=summarize_value(response_dict),
+    )
 
 
 def generate_structured(
@@ -83,31 +88,75 @@ def generate_structured(
     system_instruction: str,
     temperature: float = 0.2
 ):
+    started = _log_structured_request(
+        provider=provider,
+        model=model,
+        contents=contents,
+        system_instruction=system_instruction,
+        schema=schema,
+        temperature=temperature,
+    )
     if provider == "gemini":
-        response = client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=schema,
-                temperature=temperature,
-                system_instruction=system_instruction,
-            ),
-        )
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=schema,
+                    temperature=temperature,
+                    system_instruction=system_instruction,
+                ),
+            )
 
-        response_dict = json.loads(response.text)
-        _log_api_response(provider, model, contents, system_instruction, response_dict)
-        return response_dict
+            response_dict = json.loads(response.text)
+            _log_structured_response(
+                provider=provider,
+                model=model,
+                schema=schema,
+                response_dict=response_dict,
+                started=started,
+            )
+            return response_dict
+        except Exception as exc:
+            log_event(
+                "llm.error",
+                provider=provider,
+                model=model,
+                schema=_schema_name(schema),
+                duration_ms=round((time.perf_counter() - started) * 1000, 2),
+                error_type=type(exc).__name__,
+                error=str(exc)[:500],
+            )
+            raise
     elif provider == "openai":
-        response = client.responses.parse(
-            model=model,
-            reasoning={"effort": "high"},
-            input=_openai_input_from_contents(contents),
-            text_format=schema,
-            # temperature=temperature,
-            instructions=system_instruction
-        )
+        try:
+            response = client.responses.parse(
+                model=model,
+                reasoning={"effort": "high"},
+                input=_openai_input_from_contents(contents),
+                text_format=schema,
+                # temperature=temperature,
+                instructions=system_instruction
+            )
 
-        response_dict = response.output_parsed.model_dump()
-        _log_api_response(provider, model, contents, system_instruction, response_dict)
-        return response_dict
+            response_dict = response.output_parsed.model_dump()
+            _log_structured_response(
+                provider=provider,
+                model=model,
+                schema=schema,
+                response_dict=response_dict,
+                started=started,
+            )
+            return response_dict
+        except Exception as exc:
+            log_event(
+                "llm.error",
+                provider=provider,
+                model=model,
+                schema=_schema_name(schema),
+                duration_ms=round((time.perf_counter() - started) * 1000, 2),
+                error_type=type(exc).__name__,
+                error=str(exc)[:500],
+            )
+            raise

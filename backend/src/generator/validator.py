@@ -17,18 +17,16 @@ NEGATIVE_PATTERNS = [
     r"\bno\s+flicker\b",
 ]
 
+SEGMIND_HANDLE_PATTERN = r"@(?:image|video|ref)\d+"
+
 
 def _mentions_image_reference(prompt_lower: str, index: int) -> bool:
-    return (
-        f"@image{index}" in prompt_lower
-        or re.search(rf"\bimage\s+{index}\b", prompt_lower) is not None
-    )
+    return re.search(rf"\bimage\s+{index}\b", prompt_lower) is not None
 
 
 def _mentions_original_clip_reference(prompt_lower: str) -> bool:
     return (
-        "@video1" in prompt_lower
-        or "original clip" in prompt_lower
+        "original clip" in prompt_lower
         or "original clip reference images" in prompt_lower
     )
 
@@ -75,7 +73,15 @@ def run_quality_check(
             forbidden_found.append(word)
             suggestions.append(f"Remove negative constraint '{word}'. Rephrase as positive (e.g. 'face clear and undistorted, features correct').")
             
-    # Check reference handles
+    # Check for stale provider handles that are not valid Segmind prompt wording.
+    stale_handles = sorted(set(re.findall(SEGMIND_HANDLE_PATTERN, prompt_lower)))
+    if stale_handles:
+        forbidden_found.extend(stale_handles)
+        suggestions.append(
+            "Replace all @image/@video/@ref handles with Segmind wording such as image 1, image 2, or original clip reference images."
+        )
+
+    # Check reference mentions
     for idx in range(len(selected_assets)):
         image_number = idx + 1
         if not _mentions_image_reference(prompt_lower, image_number):

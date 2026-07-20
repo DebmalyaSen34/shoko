@@ -2,6 +2,7 @@ import os
 import time
 import json
 import base64
+import re
 from typing import List, Dict, Any, Optional
 from google import genai
 from openai import OpenAI
@@ -133,6 +134,16 @@ def _generate_openai_initial_frame_image(
     return image_path
 
 
+def _cluster_media_dir_name(cluster_id: int, cluster: Dict[str, Any]) -> str:
+    clip = cluster.get("matched_clip") or {}
+    clip_name = os.path.splitext(os.path.basename(str(clip.get("clip") or "")))[0]
+    occurrence = cluster.get("clip_occurrence")
+    if occurrence is None:
+        occurrence = cluster_id
+    safe_clip = re.sub(r"[^A-Za-z0-9._-]+", "_", clip_name).strip("._-")
+    return f"clip_{occurrence}_{safe_clip or f'cluster_{cluster_id}'}"
+
+
 def _refine_prompt(
     *,
     provider: Provider,
@@ -231,7 +242,7 @@ def generate_video_prompts_batch(
                 continue
             frame_paths = media._extract_video_frames(
                 path,
-                os.path.join(video_frames_dir, f"cluster_{cluster_id}"),
+                os.path.join(video_frames_dir, _cluster_media_dir_name(cluster_id, cluster)),
                 clip.get("duration_s", 0.0) if clip else 0.0,
             )
             if provider == "openai":

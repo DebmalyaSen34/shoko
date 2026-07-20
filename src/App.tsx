@@ -17,7 +17,7 @@ import type { PreviewState, ProjectData, PromptRecord, PromptVersion, Provider, 
 function App() {
   const [projects, setProjects] = useState<string[]>([]);
   const [activeProject, setActiveProject] = useState("");
-  const [provider, setProvider] = useState<Provider>("gemini");
+  const [provider, setProvider] = useState<Provider>("openai");
   const [projectData, setProjectData] = useState<ProjectData | null>(null);
   const [loadingProject, setLoadingProject] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -48,7 +48,8 @@ function App() {
   }, []);
 
   const loadProject = useCallback(
-    async (projectName: string) => {
+    async (projectName: string, options?: { preserveTimelineScroll?: boolean }) => {
+      const previousTimelineScroll = options?.preserveTimelineScroll ? timelineRef.current?.scrollLeft ?? 0 : null;
       setActiveProject(projectName);
       setLoadingProject(true);
       setLoadError("");
@@ -59,6 +60,15 @@ function App() {
         if (!response.ok) throw new Error("Failed to load project details");
         const data = (await response.json()) as ProjectData;
         setProjectData(data);
+        if (previousTimelineScroll !== null) {
+          window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
+              if (timelineRef.current) {
+                timelineRef.current.scrollLeft = previousTimelineScroll;
+              }
+            });
+          });
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown project loading error";
         setLoadError(`${message}. Check that the backend server is running on ${API_BASE}.`);
@@ -126,8 +136,17 @@ function App() {
   const timelineCount = projectData?.timeline.length || 0;
 
   const findPrompt = useCallback(
-    (clipName: string): PromptRecord | null =>
-      projectData?.prompts?.find((prompt) => clipBasename(prompt.clip_used) === clipBasename(clipName)) || null,
+    (clipName: string, clipOccurrence?: number): PromptRecord | null => {
+      const prompts = projectData?.prompts || [];
+      const basenameMatch = (prompt: PromptRecord) => clipBasename(prompt.clip_used) === clipBasename(clipName);
+      if (typeof clipOccurrence === "number") {
+        const exactOccurrence = prompts.find(
+          (prompt) => basenameMatch(prompt) && prompt.clip_occurrence === clipOccurrence,
+        );
+        if (exactOccurrence) return exactOccurrence;
+      }
+      return prompts.find(basenameMatch) || null;
+    },
     [projectData],
   );
 
@@ -183,7 +202,17 @@ function App() {
             return next;
           });
           notify("Prompt plan generated successfully.", "success");
-          void loadProject(activeProject);
+          void loadProject(activeProject, { preserveTimelineScroll: true });
+        } else if (line.includes("[ERROR]") || line.startsWith("[ERROR]")) {
+          source.close();
+          delete eventSourcesRef.current[feedbackIndex];
+          setRunningIndexes((current) => {
+            const next = new Set(current);
+            next.delete(feedbackIndex);
+            return next;
+          });
+          setErrorLog(logs.join("\n"));
+          notify(`Workflow execution failed for feedback index ${feedbackIndex}`, "error");
         }
       };
 

@@ -176,8 +176,12 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
         self.assertIn(self.hall_sheet, prompts_data[1]["selected_assets"])
         # Verify audio reference setup
         self.assertTrue(prompts_data[1]["is_dialogue_active"])
-        self.assertTrue(prompts_data[1]["generate_audio"])
+        self.assertFalse(prompts_data[1]["generate_audio"])
+        self.assertTrue(prompts_data[1]["has_reference_audio"])
         self.assertEqual(prompts_data[1]["audio_url"], "data:image/png;base64,dummy_data")
+        self.assertEqual(prompts_data[1]["audio_trim_start_s"], 10.0)
+        self.assertEqual(prompts_data[1]["audio_trim_end_s"], 15.0)
+        self.assertEqual(prompts_data[1]["audio_trim_source"], "sequence_timeline")
         # Verify first_frame continuity setup
         self.assertEqual(prompts_data[1]["first_frame_url"], "data:image/png;base64,dummy_data")
         self.assertIsNotNone(prompts_data[1].get("initial_frame_image_path"))
@@ -224,7 +228,8 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
             else:
                 contents = kwargs.get("contents", [])
                 instruction_text = contents[-1] if contents else ""
-                self.assertIn('The transcribed dialogue/audio content in this segment is: "Kya hua?"', instruction_text)
+                self.assertIn("trimmed reference audio segment from timeline 10.000s to 15.000s", instruction_text)
+                self.assertIn("Do not quote or invent transcript text", instruction_text)
                 return {
                     "video_model_prompt": "Warm sunlit hall... Mother shouts 'Kya hua?'... mouth moving in sync.",
                     "explanation": "Addressed mother shouting."
@@ -245,7 +250,8 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
             prompts_data = json.load(f)
 
         self.assertTrue(prompts_data[1]["is_dialogue_active"])
-        self.assertTrue(prompts_data[1]["generate_audio"])
+        self.assertFalse(prompts_data[1]["generate_audio"])
+        self.assertTrue(prompts_data[1]["has_reference_audio"])
         self.assertEqual(prompts_data[1]["audio_url"], "data:audio/mp3;base64,dummy_audio")
         self.assertEqual(
             prompts_data[1]["video_model_prompt"],
@@ -407,16 +413,22 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
         with open(result_path, "r", encoding="utf-8") as f:
             prompts_data = json.load(f)
 
-        # Both clips must have is_dialogue_active = False and audio_url = None
+        # Both clips keep trimmed reference audio even when short or untranscribed.
         # clip2 (duration < 1.8s)
-        self.assertFalse(prompts_data[0]["is_dialogue_active"])
+        self.assertTrue(prompts_data[0]["is_dialogue_active"])
         self.assertFalse(prompts_data[0]["generate_audio"])
-        self.assertIsNone(prompts_data[0]["audio_url"])
+        self.assertTrue(prompts_data[0]["has_reference_audio"])
+        self.assertEqual(prompts_data[0]["audio_url"], "data:audio/mp3;base64,dummy_audio")
+        self.assertEqual(prompts_data[0]["audio_trim_start_s"], 10.0)
+        self.assertEqual(prompts_data[0]["audio_trim_end_s"], 11.5)
 
-        # clip3 (duration >= 1.8s but empty transcript)
-        self.assertFalse(prompts_data[1]["is_dialogue_active"])
+        # clip3 (duration >= 1.8s and no transcript requirement)
+        self.assertTrue(prompts_data[1]["is_dialogue_active"])
         self.assertFalse(prompts_data[1]["generate_audio"])
-        self.assertIsNone(prompts_data[1]["audio_url"])
+        self.assertTrue(prompts_data[1]["has_reference_audio"])
+        self.assertEqual(prompts_data[1]["audio_url"], "data:audio/mp3;base64,dummy_audio")
+        self.assertEqual(prompts_data[1]["audio_trim_start_s"], 11.5)
+        self.assertEqual(prompts_data[1]["audio_trim_end_s"], 16.5)
 
     def test_missing_plan_file(self):
         # Arrange

@@ -5,10 +5,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -18,6 +19,7 @@ from config.settings import LOKA_STORAGE_DIR
 from src.workflows.project_setup import setup_project_workspace
 from src.workflows.timeline_extraction import extract_timeline_from_project
 from src.workflows.feedback_parsing import parse_and_align_feedback
+from src.logging_utils import log_event
 
 app = FastAPI(title="Video Project Timeline & Feedback UI")
 
@@ -29,6 +31,35 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def log_http_request(request: Request, call_next):
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        log_event(
+            "http.error",
+            method=request.method,
+            path=request.url.path,
+            query=str(request.url.query),
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            error_type=type(exc).__name__,
+            error=str(exc)[:500],
+        )
+        raise
+
+    log_event(
+        "http.request",
+        method=request.method,
+        path=request.url.path,
+        query=str(request.url.query),
+        status_code=response.status_code,
+        duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        user_agent=request.headers.get("user-agent", "")[:160],
+    )
+    return response
 
 # Set up application storage directories
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -401,6 +432,13 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
         "generate_audio",
         "ratio",
         "duration",
+        "matched_clip",
+        "clip_occurrence",
+        "clip_start_tc",
+        "clip_end_tc",
+        "clip_start_s",
+        "clip_end_s",
+        "clip_duration_s",
     ]
 
     def copy_handoff_fields(target: dict, source: dict) -> None:
@@ -460,7 +498,18 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
         found = False
         for p_item in prompts_data:
             clip_used = p_item.get("clip_used")
-            if clip_used == matched_clip or (clip_used and matched_clip and os.path.basename(clip_used) == os.path.basename(matched_clip)):
+            same_clip = (
+                clip_used == matched_clip
+                or (clip_used and matched_clip and os.path.basename(clip_used) == os.path.basename(matched_clip))
+            )
+            existing_occurrence = p_item.get("clip_occurrence")
+            generated_occurrence = gen_item.get("clip_occurrence")
+            same_occurrence = (
+                generated_occurrence is None
+                or existing_occurrence is None
+                or existing_occurrence == generated_occurrence
+            )
+            if same_clip and same_occurrence:
                 found = True
                 if is_error:
                     p_item["latest_error"] = prompt_text
@@ -496,6 +545,8 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
             if is_error:
                 prompts_data.append({
                     "clip_used": matched_clip,
+                    "matched_clip": gen_item.get("matched_clip"),
+                    "clip_occurrence": gen_item.get("clip_occurrence"),
                     "category": gen_item.get("category", "video"),
                     "generation_type": gen_item.get("prompt_format", "complex"),
                     "video_model_prompt": "",
@@ -508,6 +559,8 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
                 new_entry = prompt_history_entry(gen_item, provider)
                 prompt_record = {
                     "clip_used": matched_clip,
+                    "matched_clip": gen_item.get("matched_clip"),
+                    "clip_occurrence": gen_item.get("clip_occurrence"),
                     "category": gen_item.get("category", "video"),
                     "generation_type": gen_item.get("prompt_format", "complex"),
                     "video_model_prompt": gen_item.get("video_model_prompt"),
@@ -606,8 +659,9 @@ def get_project_data(project_name: str):
     }
 
 @app.get("/api/run-workflow")
-async def run_workflow(project: str, index: int, provider: str = "gemini"):
+async def run_workflow(project: str, index: int, provider: str = "openai"):
     safe_project_name(project)
+    log_event("workflow.request", project=project, index=index, provider=provider)
     # Prepare inputs
     try:
         raw_feedback_path = ensure_raw_feedback(project)
@@ -638,6 +692,8 @@ async def run_workflow(project: str, index: int, provider: str = "gemini"):
     async def log_generator():
         yield f"data: [START] Launching workflow subprocess for feedback index {index}...\n\n"
         yield f"data: Executing command: {' '.join(cmd)}\n\n\n"
+        workflow_started = time.perf_counter()
+        log_event("workflow.subprocess.start", project=project, index=index, provider=provider, command=cmd)
         
         try:
             process = await asyncio.create_subprocess_exec(
@@ -666,9 +722,38 @@ async def run_workflow(project: str, index: int, provider: str = "gemini"):
             rc = await process.wait()
             if rc == 0:
                 save_output_to_prompts(project, provider)
-            yield f"\ndata: [SUCCESS] Workflow execution finished with exit code {rc}\n\n"
+                log_event(
+                    "workflow.subprocess.finish",
+                    project=project,
+                    index=index,
+                    provider=provider,
+                    status="success",
+                    exit_code=rc,
+                    duration_ms=round((time.perf_counter() - workflow_started) * 1000, 2),
+                )
+                yield f"\ndata: [SUCCESS] Workflow execution finished with exit code {rc}\n\n"
+            else:
+                log_event(
+                    "workflow.subprocess.finish",
+                    project=project,
+                    index=index,
+                    provider=provider,
+                    status="failed",
+                    exit_code=rc,
+                    duration_ms=round((time.perf_counter() - workflow_started) * 1000, 2),
+                )
+                yield f"\ndata: [ERROR] Workflow execution failed with exit code {rc}\n\n"
             
         except Exception as e:
+            log_event(
+                "workflow.subprocess.error",
+                project=project,
+                index=index,
+                provider=provider,
+                duration_ms=round((time.perf_counter() - workflow_started) * 1000, 2),
+                error_type=type(e).__name__,
+                error=str(e)[:500],
+            )
             yield f"data: [ERROR] Failed to run subprocess: {str(e)}\n\n"
 
     return StreamingResponse(log_generator(), media_type="text/event-stream")

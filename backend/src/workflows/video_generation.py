@@ -9,7 +9,6 @@ from typing import List, Optional
 from scripts.generate_seedance_video import (
     SupabaseAssetUrlCache,
     build_segmind_payload,
-    clamp_duration,
     create_seedance_task,
     save_video_bytes,
 )
@@ -76,8 +75,6 @@ def run_video_generation_workflow(
         )
 
         model = os.environ.get("SEEDANCE_MODEL", "seedance-2.0")
-        duration = clamp_duration(item.get("duration", 5), model)
-        payload["duration"] = duration
 
         print(f"Creating video with Segmind (model: {model}, generate_audio: {payload.get('generate_audio')})...")
 

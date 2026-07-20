@@ -31,8 +31,8 @@ export function AppHeader({ activeProject, projects, provider, onNewProject, onP
         <label className="project-selector-wrapper">
           <span>AI Provider</span>
           <select className="premium-select provider-select" value={provider} onChange={(event) => onProviderChange(event.target.value as Provider)}>
-            <option value="gemini">Gemini</option>
             <option value="openai">OpenAI</option>
+            <option value="gemini">Gemini</option>
           </select>
         </label>
         <label className="project-selector-wrapper">

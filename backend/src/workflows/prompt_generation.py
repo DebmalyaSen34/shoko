@@ -19,7 +19,6 @@ from config.settings import OPENAI_REASONING_MODEL
 from scripts.generate_seedance_video import (
     SupabaseAssetUrlCache,
     attach_prepared_segmind_payload,
-    clamp_duration,
 )
 
 class DialogueAssessmentResult(BaseModel):
@@ -291,6 +290,7 @@ def generate_video_prompts_from_plan(
         if generation_type == "none" or not clip_name:
             results.append({
                 "clip_used": clip_name,
+                "clip_occurrence": item.get("clip_occurrence"),
                 "generation_type": "none",
                 "video_model_prompt": "",
                 "video_provider": "segmind",
@@ -514,6 +514,7 @@ def generate_video_prompts_from_plan(
         # Append result payload
         result_payload = {
             "clip_used": clip_name,
+            "clip_occurrence": item.get("clip_occurrence"),
             "category": "video",
             "generation_type": generation_type,
             "video_model_prompt": video_prompt,
@@ -533,9 +534,10 @@ def generate_video_prompts_from_plan(
             "audio_trim_source": "sequence_timeline" if audio_url else None,
             "audio_trim_error": audio_trim_error,
             "is_dialogue_active": is_dialogue,
-            "generate_audio": True if audio_url else False,
+            "generate_audio": False,
+            "has_reference_audio": bool(audio_url),
             "ratio": "9:16",
-            "duration": clamp_duration(clip_duration),
+            "duration": 5,
             "status": "success",
             "explanation": explanation
         }

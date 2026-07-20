@@ -232,6 +232,7 @@ def parse_and_align_feedback(
             if key not in segments:
                 segments[key] = {
                     "clip_used": clip_name,
+                    "clip_occurrence": v_idx,
                     "previous_clip": prev_clip,
                     "clip_start_tc": v_clip["start_tc"],
                     "clip_end_tc": v_clip["end_tc"],

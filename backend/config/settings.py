@@ -1,7 +1,7 @@
 LITE_MODEL = "gemini-2.5-flash"
 REASONING_MODEL = "gemini-2.5-flash"
 OPENAI_LITE_MODEL = "gpt-5.4-mini"
-OPENAI_REASONING_MODEL = "gpt-5.6-sol"
+OPENAI_REASONING_MODEL = "gpt-5.4-mini"
 OPENAI_IMAGE_MODEL = "gpt-image-1-mini"
 
 DEFAULT_FEEDBACK_JSON_PATH = "data/feedback/feedback.json"

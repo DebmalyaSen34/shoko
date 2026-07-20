@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type {
   ClipChatAction,
-  ClipChatMemory,
   ClipChatMessage,
   ClipChatResponse,
   ClipChatSnapshot,
@@ -12,7 +13,7 @@ import type {
   Provider,
   TimelineClip,
 } from "../../types";
-import { basename, getVersions } from "../../lib/format";
+import { getVersions } from "../../lib/format";
 import { apiUrl } from "../../lib/api";
 import { Icon } from "../Icon";
 
@@ -28,10 +29,6 @@ type ClipChatPanelProps = {
   onExecuteWorkflow: (feedbackIndex: number) => void;
   onOpenPromptDetails: (version: PromptVersion) => void;
 };
-
-type ContextTab = "clip" | "feedback" | "assets" | "memory";
-
-const MEMORY_OPTIONS = ["Mem0", "Letta", "Graphiti/Zep", "Cognee", "LangGraph/LangMem"];
 
 function localToolMessage(content: string): ClipChatMessage {
   return {
@@ -62,28 +59,21 @@ export function ClipChatPanel({
   onOpenPromptDetails,
 }: ClipChatPanelProps) {
   const [input, setInput] = useState("");
-  const [activeTab, setActiveTab] = useState<ContextTab>("clip");
   const [messages, setMessages] = useState<ClipChatMessage[]>([]);
-  const [memory, setMemory] = useState<ClipChatMemory>({ project: [], clip: [], relevant: [] });
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [panelWidth, setPanelWidth] = useState(() => {
+    const saved = window.localStorage.getItem("loka15.clip-chat.width");
+    return saved ? Number(saved) || 420 : 420;
+  });
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const feedbackItems = feedback?.feedback_items || [];
   const versions = getVersions(prompt);
   const latestVersion = versions[versions.length - 1] || prompt || null;
-  const selectedAssets = latestVersion?.selected_assets || [];
   const runnableFeedback = feedbackItems[0];
   const running = feedbackItems.some((item) => runningIndexes.has(item.raw_index));
-
-  const adjacentClips = useMemo(
-    () => ({
-      previous: clipIndex > 0 ? projectData.timeline[clipIndex - 1] : null,
-      next: clipIndex < projectData.timeline.length - 1 ? projectData.timeline[clipIndex + 1] : null,
-    }),
-    [clipIndex, projectData.timeline],
-  );
 
   useEffect(() => {
     let cancelled = false;
@@ -99,7 +89,6 @@ export function ClipChatPanel({
         const data = (await response.json()) as ClipChatSnapshot;
         if (cancelled) return;
         setMessages(data.messages);
-        setMemory(data.memory);
       } catch (loadError) {
         if (cancelled) return;
         const message = loadError instanceof Error ? loadError.message : "Failed to load clip chat.";
@@ -146,7 +135,6 @@ export function ClipChatPanel({
       if (!response.ok) throw new Error(await response.text());
       const data = (await response.json()) as ClipChatResponse;
       setMessages(data.messages);
-      setMemory(data.memory);
     } catch (sendError) {
       const message = sendError instanceof Error ? sendError.message : "Failed to send message.";
       setError(message);
@@ -191,13 +179,41 @@ export function ClipChatPanel({
     }
   }
 
+  function resizePanel(clientX: number) {
+    const nextWidth = Math.min(760, Math.max(320, window.innerWidth - clientX));
+    setPanelWidth(nextWidth);
+    window.localStorage.setItem("loka15.clip-chat.width", String(nextWidth));
+  }
+
+  const panelStyle = window.innerWidth > 900 ? { width: panelWidth, minWidth: panelWidth } : undefined;
+
   return (
-    <aside className="clip-chat-panel" aria-label="Clip chat">
+    <aside className="clip-chat-panel" style={panelStyle} aria-label="Clip chat">
+      <div
+        className="clip-chat-resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize chat"
+        tabIndex={0}
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          resizePanel(event.clientX);
+        }}
+        onPointerMove={(event) => {
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            resizePanel(event.clientX);
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft") setPanelWidth((width) => Math.min(760, width + 24));
+          if (event.key === "ArrowRight") setPanelWidth((width) => Math.max(320, width - 24));
+        }}
+      />
       <div className="clip-chat-header">
         <div>
           <div className="clip-chat-kicker">Clip Chat</div>
           <h3>{clip.clip}</h3>
-          <span>#{clipIndex + 1} in {projectData.sequence_name || projectData.project_name}</span>
+          <span>{projectData.sequence_name || projectData.project_name}</span>
         </div>
         <button className="icon-btn" type="button" title="Close Chat" onClick={onClose}>
           <Icon name="close" />
@@ -213,33 +229,14 @@ export function ClipChatPanel({
         </button>
       </div>
 
-      <div className="clip-chat-tabs" role="tablist" aria-label="Clip context">
-        {(["clip", "feedback", "assets", "memory"] as ContextTab[]).map((tab) => (
-          <button key={tab} type="button" className={activeTab === tab ? "active" : ""} onClick={() => setActiveTab(tab)}>
-            {tab}
-          </button>
-        ))}
-      </div>
-
-      <ContextPanel
-        activeTab={activeTab}
-        clip={clip}
-        clipIndex={clipIndex}
-        totalClips={projectData.timeline.length}
-        feedbackItems={feedbackItems}
-        projectAssets={projectData.assets}
-        selectedAssets={selectedAssets}
-        memory={memory}
-        latestVersion={latestVersion}
-        adjacentClips={adjacentClips}
-      />
-
       <div className="clip-chat-log" ref={listRef}>
         {loading && <div className="inline-runner-status"><Icon name="refresh" /> Loading chat...</div>}
         {messages.map((message) => (
           <div className={`chat-message ${message.role}`} key={message.id}>
             <div className="chat-message-meta">{message.role} · {formatMessageTime(message.created_at)}</div>
-            <div className="chat-message-text">{message.content}</div>
+            <div className="chat-message-text">
+              <MarkdownMessage text={message.content} />
+            </div>
             {Boolean(message.metadata?.actions?.length) && (
               <div className="chat-action-row">
                 {message.metadata?.actions?.map((action) => (
@@ -284,113 +281,19 @@ export function ClipChatPanel({
   );
 }
 
-function ContextPanel({
-  activeTab,
-  clip,
-  clipIndex,
-  totalClips,
-  feedbackItems,
-  projectAssets,
-  selectedAssets,
-  memory,
-  latestVersion,
-  adjacentClips,
-}: {
-  activeTab: ContextTab;
-  clip: TimelineClip;
-  clipIndex: number;
-  totalClips: number;
-  feedbackItems: FeedbackGroup["feedback_items"];
-  projectAssets: ProjectData["assets"];
-  selectedAssets: string[];
-  memory: ClipChatMemory;
-  latestVersion: PromptVersion | PromptRecord | null;
-  adjacentClips: { previous: TimelineClip | null; next: TimelineClip | null };
-}) {
-  const assetTotal = Object.values(projectAssets).reduce((sum, assets) => sum + assets.length, 0);
-
+function MarkdownMessage({ text }: { text: string }) {
   return (
-    <div className="clip-chat-context">
-      {activeTab === "clip" && (
-        <div className="context-grid">
-          <ContextItem label="Position" value={`${clipIndex + 1} / ${totalClips}`} />
-          <ContextItem label="Timecode" value={`${clip.start_tc} - ${clip.end_tc}`} />
-          <ContextItem label="Previous" value={adjacentClips.previous?.clip || "None"} />
-          <ContextItem label="Next" value={adjacentClips.next?.clip || "None"} />
-          <ContextItem label="Bounds" value={`${clip.start_s.toFixed(2)}s - ${clip.end_s.toFixed(2)}s`} />
-          <ContextItem label="Duration" value={`${clip.duration_s.toFixed(2)}s`} />
-        </div>
-      )}
-
-      {activeTab === "feedback" && (
-        <div className="context-list">
-          {feedbackItems.length ? feedbackItems.map((item) => (
-            <div className="context-row" key={item.raw_index}>
-              <span className={`tag tag-${item.category}`}>{item.category}</span>
-              <p>{item.remark}</p>
-            </div>
-          )) : <p className="muted-small">No feedback attached to this clip.</p>}
-        </div>
-      )}
-
-      {activeTab === "assets" && (
-        <div className="context-list">
-          <ContextItem label="Project Asset Library" value={`${assetTotal} files`} />
-          <ContextItem label="Selected For Latest Plan" value={`${selectedAssets.length} files`} />
-          {selectedAssets.slice(0, 5).map((asset) => (
-            <div className="mini-asset-item" key={asset}>
-              <Icon name="box" /> {basename(asset)}
-            </div>
-          ))}
-          {latestVersion?.audio_reference_path && (
-            <div className="mini-asset-item">
-              <Icon name="audio" /> {basename(latestVersion.audio_reference_path)}
-            </div>
-          )}
-        </div>
-      )}
-
-      {activeTab === "memory" && (
-        <div className="context-list">
-          <div className="memory-options">
-            {MEMORY_OPTIONS.map((option) => <span className="badge mini" key={option}>{option}</span>)}
-          </div>
-          <ContextItem label="Durable Memory" value={`${memory.project.length} project, ${memory.clip.length} clip`} />
-          {memory.relevant.length > 0 && (
-            <>
-              <div className="context-section-label">Relevant Now</div>
-              {memory.relevant.map((item) => <MemoryRow item={item} key={`relevant-${item.id}`} />)}
-            </>
-          )}
-          {[...memory.project, ...memory.clip].length ? (
-            <>
-              <div className="context-section-label">Recent Notes</div>
-              {[...memory.project, ...memory.clip].map((item) => <MemoryRow item={item} key={item.id} />)}
-            </>
-          ) : <p className="muted-small">Say “remember: ...” to save a durable note for this clip.</p>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function MemoryRow({ item }: { item: ClipChatMemory["clip"][number] }) {
-  return (
-    <div className="context-row">
-      <Icon name="memory" />
-      <p>
-        {item.text}
-        {typeof item.relevance_score === "number" && <span className="memory-score"> {(item.relevance_score * 100).toFixed(0)}%</span>}
-      </p>
-    </div>
-  );
-}
-
-function ContextItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="context-item">
-      <span>{label}</span>
-      <strong title={value}>{value}</strong>
-    </div>
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        a: ({ href, children }) => (
+          <a href={href} target="_blank" rel="noreferrer">
+            {children}
+          </a>
+        ),
+      }}
+    >
+      {text}
+    </ReactMarkdown>
   );
 }

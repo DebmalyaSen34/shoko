@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from src.workflows.prompt_generation import generate_video_prompts_from_plan
+from src.workflows.prompt_generation import extract_frames_per_second, generate_video_prompts_from_plan
 
 class TestPromptGenerationWorkflow(unittest.TestCase):
     def setUp(self):
@@ -94,6 +94,27 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.test_dir)
+
+    @mock.patch("src.workflows.prompt_generation.os.path.exists")
+    @mock.patch("src.workflows.prompt_generation.subprocess.run")
+    def test_extract_frames_per_second_uses_adaptive_full_clip_offsets(
+        self, mock_run, mock_exists
+    ):
+        mock_run.return_value = mock.Mock(returncode=0, stderr="")
+        mock_exists.return_value = True
+
+        frame_paths = extract_frames_per_second(
+            video_path=self.clip2_path,
+            output_dir=os.path.join(self.test_dir, "adaptive_frames"),
+            duration_s=6.0,
+        )
+
+        self.assertEqual(7, len(frame_paths))
+        self.assertTrue(frame_paths[0].endswith("frame_001.jpg"))
+        self.assertTrue(frame_paths[-1].endswith("frame_007.jpg"))
+        offsets = [call.args[0][3] for call in mock_run.call_args_list]
+        self.assertEqual("0.050", offsets[0])
+        self.assertEqual("5.900", offsets[-1])
 
     @mock.patch("src.workflows.prompt_generation.generate_structured")
     @mock.patch("src.workflows.prompt_generation._file_data_url")

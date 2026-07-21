@@ -132,9 +132,23 @@ export type ActiveClipChat = {
 } | null;
 
 export type ClipChatAction = {
-  type: "execute_workflow" | "prepare_video";
+  type: "execute_workflow" | "prepare_video" | "send_message";
   label: string;
   feedback_index?: number;
+  autonomous?: boolean;
+  continuity_reference?: "previous_clip_last_frame" | string;
+  prompt?: string;
+};
+
+export type ClipChatMedia = {
+  type: "image" | "video" | "audio" | "other";
+  label: string;
+  source: string;
+  name: string;
+  path?: string | null;
+  url: string;
+  size?: string;
+  thumbnail_url?: string | null;
 };
 
 export type ClipChatMessage = {
@@ -145,6 +159,7 @@ export type ClipChatMessage = {
   metadata?: {
     provider?: Provider;
     actions?: ClipChatAction[];
+    media?: ClipChatMedia[];
     saved_memory_ids?: string[];
     kind?: string;
   };

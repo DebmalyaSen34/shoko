@@ -182,7 +182,7 @@ def _append_clip_reference(
     if isinstance(ref, list):
         contents.append(
             "ORIGINAL_CLIP_FRAMES: The following still frames were extracted "
-            "from the original clip in early, middle, late order."
+            "from the original clip in chronological order across the full clip."
         )
         for frame_ref in ref:
             _append_media_reference(contents, frame_ref)

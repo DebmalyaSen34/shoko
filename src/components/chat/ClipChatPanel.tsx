@@ -3,18 +3,20 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
   ClipChatAction,
+  ClipChatMedia,
   ClipChatMessage,
   ClipChatResponse,
   ClipChatSnapshot,
   FeedbackGroup,
   PromptRecord,
   PromptVersion,
+  PreviewState,
   ProjectData,
   Provider,
   TimelineClip,
 } from "../../types";
 import { getVersions } from "../../lib/format";
-import { apiUrl } from "../../lib/api";
+import { apiUrl, staticUrl } from "../../lib/api";
 import { Icon } from "../Icon";
 
 type ClipChatPanelProps = {
@@ -28,6 +30,7 @@ type ClipChatPanelProps = {
   onClose: () => void;
   onExecuteWorkflow: (feedbackIndex: number) => void;
   onOpenPromptDetails: (version: PromptVersion) => void;
+  onPreview: (preview: PreviewState) => void;
 };
 
 function localToolMessage(content: string): ClipChatMessage {
@@ -57,6 +60,7 @@ export function ClipChatPanel({
   onClose,
   onExecuteWorkflow,
   onOpenPromptDetails,
+  onPreview,
 }: ClipChatPanelProps) {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ClipChatMessage[]>([]);
@@ -135,6 +139,12 @@ export function ClipChatPanel({
       if (!response.ok) throw new Error(await response.text());
       const data = (await response.json()) as ClipChatResponse;
       setMessages(data.messages);
+      const autonomousWorkflow = data.suggested_actions.find(
+        (action) => action.type === "execute_workflow" && action.autonomous,
+      );
+      if (autonomousWorkflow) {
+        runWorkflowFromChat(autonomousWorkflow.feedback_index);
+      }
     } catch (sendError) {
       const message = sendError instanceof Error ? sendError.message : "Failed to send message.";
       setError(message);
@@ -176,7 +186,15 @@ export function ClipChatPanel({
       runWorkflowFromChat(action.feedback_index);
     } else if (action.type === "prepare_video") {
       prepareVideoGeneration();
+    } else if (action.type === "send_message" && action.prompt) {
+      void sendMessage(action.prompt);
     }
+  }
+
+  function actionIcon(action: ClipChatAction) {
+    if (action.type === "execute_workflow") return "refresh";
+    if (action.type === "prepare_video") return "video";
+    return "chat";
   }
 
   function resizePanel(clientX: number) {
@@ -237,11 +255,14 @@ export function ClipChatPanel({
             <div className="chat-message-text">
               <MarkdownMessage text={message.content} />
             </div>
+            {Boolean(message.metadata?.media?.length) && (
+              <ChatMediaGallery media={message.metadata?.media || []} onPreview={onPreview} />
+            )}
             {Boolean(message.metadata?.actions?.length) && (
               <div className="chat-action-row">
                 {message.metadata?.actions?.map((action) => (
-                  <button className="premium-btn secondary" type="button" key={`${message.id}-${action.type}`} onClick={() => handleAction(action)}>
-                    <Icon name={action.type === "execute_workflow" ? "refresh" : "video"} /> {action.label}
+                  <button className="premium-btn secondary" type="button" key={`${message.id}-${action.type}-${action.label}`} onClick={() => handleAction(action)}>
+                    <Icon name={actionIcon(action)} /> {action.label}
                   </button>
                 ))}
               </div>
@@ -278,6 +299,77 @@ export function ClipChatPanel({
         </button>
       </form>
     </aside>
+  );
+}
+
+function ChatMediaGallery({ media, onPreview }: { media: ClipChatMedia[]; onPreview: (preview: PreviewState) => void }) {
+  const fallbackVideoPoster = media.find((item) => item.type === "image" && item.source === "clip_frames")?.url;
+
+  return (
+    <div className="chat-media-grid">
+      {media.map((item) => {
+        const posterUrl = item.thumbnail_url || (item.type === "video" ? fallbackVideoPoster : undefined);
+        return (
+          <button
+            type="button"
+            className={`chat-media-card ${item.type}`}
+            key={`${item.source}-${item.url}`}
+            title={item.path || item.name}
+            onClick={() =>
+              onPreview({
+                file: {
+                  name: decodeMediaName(item.name),
+                  path: item.path || item.url,
+                  url: item.url,
+                  type: item.type,
+                  size: item.size || "",
+                },
+              })
+            }
+          >
+            <div className="chat-media-preview">
+              {item.type === "image" && <img src={staticUrl(item.url)} alt={item.label} loading="lazy" />}
+              {item.type === "video" && <ChatVideoPreview item={item} posterUrl={posterUrl} />}
+              {item.type === "audio" && <Icon name="audio" />}
+              {item.type === "other" && <Icon name="file" />}
+            </div>
+            <div className="chat-media-info">
+              <strong>{item.label}</strong>
+              <span>{item.name}</span>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function decodeMediaName(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function ChatVideoPreview({ item, posterUrl }: { item: ClipChatMedia; posterUrl?: string | null }) {
+  if (posterUrl) {
+    return (
+      <div className="chat-video-thumb">
+        <img src={staticUrl(posterUrl)} alt={item.label} loading="lazy" />
+        <span>
+          <Icon name="video" />
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="chat-video-thumb empty">
+      <span>
+        <Icon name="video" />
+      </span>
+    </div>
   );
 }
 

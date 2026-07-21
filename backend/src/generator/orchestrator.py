@@ -225,6 +225,7 @@ def generate_video_prompts_batch(
     uploaded_refs = []
     reference_handles = {}
     clip_handles = {}
+    continuity_handles = {}
     cluster_frame_paths = {}
     initial_frame_image_paths = {}
     initial_frame_image_refs = {}
@@ -261,6 +262,18 @@ def generate_video_prompts_batch(
             if frame_refs:
                 clip_handles[cluster_id] = frame_refs
                 cluster_frame_paths[cluster_id] = frame_paths
+
+            continuity_frame_path = cluster.get("continuity_reference_frame_path")
+            if continuity_frame_path and os.path.exists(continuity_frame_path):
+                if provider == "openai":
+                    continuity_ref = _openai_file_reference(client, continuity_frame_path)
+                else:
+                    continuity_ref = upload._prepare_media_reference(client, continuity_frame_path, provider)
+                    if continuity_ref is not None:
+                        uploaded_refs.append(continuity_ref)
+                if continuity_ref is not None:
+                    continuity_handles[cluster_id] = continuity_ref
+                    initial_frame_image_paths[cluster_id] = continuity_frame_path
 
         for batch_start in range(0, len(indexed_clusters), batch_size):
             batch = indexed_clusters[batch_start:batch_start + batch_size]
@@ -429,6 +442,7 @@ def generate_video_prompts_batch(
             prompt_batch_ids = set()
             for cluster_id, cluster in prompt_batch:
                 prompt_batch_ids.add(cluster_id)
+                continuity_note = cluster.get("continuity_reference_note")
                 if generate_initial_frame:
                     contents.append(
                         f"{_cluster_prompt_context(cluster_id, cluster)}\n"
@@ -452,6 +466,16 @@ def generate_video_prompts_batch(
                         "the concrete first-frame visual anchor for the final video prompt."
                     )
                     _append_media_reference(contents, initial_frame_image_refs[cluster_id])
+                if cluster_id in continuity_handles:
+                    contents.append(
+                        "CONTINUITY_REFERENCE_FRAME: The following image is the last frame "
+                        "from the previous timeline clip. Use it as the first-frame visual "
+                        "anchor and preserve character placement, wardrobe, lighting, camera "
+                        "angle, and set continuity unless the feedback explicitly overrides it."
+                    )
+                    if continuity_note:
+                        contents.append(f"CONTINUITY_INSTRUCTION: {continuity_note}")
+                    _append_media_reference(contents, continuity_handles[cluster_id])
                 _append_clip_reference(contents, assets_dir, clip_handles, cluster, cluster_id)
             # Lazy load the video generation skill prompt and overrides only when needed
             video_prompt_skill_text = prompt_skill_text or _default_seedance_skill_text()
@@ -473,11 +497,11 @@ def generate_video_prompts_batch(
                     if cluster_id not in prompt_batch_ids or cluster_id in results_by_id:
                         continue
                     prompt = item.get("english_prompt", "").strip()
+                    cluster_context = next(c for cid, c in prompt_batch if cid == cluster_id)
                     
                     # Run prompt quality checks
                     if run_validator:
-                        cluster_dict = next(c for cid, c in prompt_batch if cid == cluster_id)
-                        feedback_items = cluster_dict.get("feedback_items", [])
+                        feedback_items = cluster_context.get("feedback_items", [])
                         selected_assets = selected_assets_by_id.get(cluster_id, [])
                         has_clip = len(cluster_frame_paths.get(cluster_id, [])) > 0
                         
@@ -539,7 +563,7 @@ def generate_video_prompts_batch(
                             
                     results_by_id[cluster_id] = {
                         "cluster_id": cluster_id,
-                        "initial_frame_prompt": initial_frame_prompts[cluster_id],
+                        "initial_frame_prompt": initial_frame_prompts[cluster_id] or cluster_context.get("continuity_reference_note", ""),
                         "initial_frame_image_path": initial_frame_image_paths.get(cluster_id, ""),
                         "clip_frame_paths": cluster_frame_paths.get(cluster_id, []),
                         "selected_assets": selected_assets,

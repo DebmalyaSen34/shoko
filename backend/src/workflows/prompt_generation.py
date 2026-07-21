@@ -4,7 +4,6 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import json
-import math
 import base64
 import mimetypes
 import subprocess
@@ -14,6 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.generator.client import generate_structured
+from src.generator.media import _frame_offsets_for_duration
 from src.schemas import PromptResult
 from config.settings import OPENAI_REASONING_MODEL
 from scripts.generate_seedance_video import (
@@ -134,19 +134,10 @@ def _file_data_url(path: str) -> str:
 
 # FFMPEG Frame extraction helpers
 def extract_frames_per_second(video_path: str, output_dir: str, duration_s: float) -> List[str]:
-    """Extract one frame at the start of each second of the clip using ffmpeg."""
+    """Extract adaptive, full-clip frames while tolerating individual ffmpeg failures."""
     os.makedirs(output_dir, exist_ok=True)
-    duration = max(float(duration_s or 0.0), 0.0)
-    num_frames = int(math.ceil(duration))
-    if num_frames <= 0:
-        num_frames = 1
-
     frame_paths = []
-    for index in range(num_frames):
-        offset = float(index)
-        if offset >= duration and duration > 0.0:
-            offset = max(0.0, duration - 0.1)
-
+    for index, offset in enumerate(_frame_offsets_for_duration(duration_s), start=1):
         frame_path = os.path.join(output_dir, f"frame_{index:03d}.jpg")
         command = [
             "ffmpeg", "-y", "-ss", f"{offset:.3f}", "-i", video_path,

@@ -291,7 +291,9 @@ def run_pipeline(
     batch_size: int = 5,
     provider: Provider = "openai",
     initial_frames_dir: Optional[str] = None,
-    video_frames_dir: Optional[str] = None
+    video_frames_dir: Optional[str] = None,
+    continuity_frame_path: Optional[str] = None,
+    continuity_note: Optional[str] = None
 ):
     """Orchestrates the dynamic feedback agent workflow."""
     if batch_size <= 0:
@@ -349,6 +351,11 @@ def run_pipeline(
     frame_size = timeline_data.get("frame_size", "unknown")
     for cluster in video_clusters:
         cluster["frame_size"] = frame_size
+        if continuity_frame_path:
+            cluster["continuity_reference_frame_path"] = os.path.abspath(continuity_frame_path)
+            cluster["continuity_reference_note"] = continuity_note or (
+                "Use this previous clip last frame as the continuity reference and first-frame anchor."
+            )
     planned_requests = (
         (len(video_clusters) + batch_size - 1) // batch_size
         if video_clusters
@@ -689,6 +696,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--output-report", default=DEFAULT_OUTPUT_REPORT)
     parser.add_argument("--initial-frames-dir", default=None, help="Directory to save initial frame images. Defaults to a subdirectory of the output JSON path.")
     parser.add_argument("--video-frames-dir", default=None, help="Directory to save extracted video frames. Defaults to a subdirectory of the output JSON path.")
+    parser.add_argument("--continuity-frame-path", default=None, help="Optional previous-clip last frame to use as continuity and first-frame anchor.")
+    parser.add_argument("--continuity-note", default=None, help="Instruction describing how the continuity frame should be used.")
     parser.add_argument(
         "--provider",
         choices=("gemini", "openai"),
@@ -781,5 +790,7 @@ if __name__ == "__main__":
             batch_size=args.batch_size,
             provider=args.provider,
             initial_frames_dir=args.initial_frames_dir,
-            video_frames_dir=args.video_frames_dir
+            video_frames_dir=args.video_frames_dir,
+            continuity_frame_path=args.continuity_frame_path,
+            continuity_note=args.continuity_note,
         )

@@ -57,7 +57,7 @@ export function PreviewModal({ preview, onClose }: { preview: NonNullable<Previe
         </div>
         <div className="modal-body">
           {file.type === "image" && <img src={staticUrl(file.url)} alt={file.name} />}
-          {file.type === "video" && <video src={staticUrl(file.url)} controls autoPlay />}
+          {file.type === "video" && <video src={staticUrl(file.url)} controls autoPlay playsInline preload="auto" />}
           {file.type === "audio" && (
             <div className="audio-preview">
               <Icon name="audio" />

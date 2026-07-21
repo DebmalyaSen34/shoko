@@ -1,6 +1,6 @@
 from .client import Provider, generate_structured
 from .upload import OpenAIFileReference, _openai_file_reference, upload_file_and_wait
-from .media import _extract_video_frames
+from .media import _adaptive_frame_count, _extract_video_frames, _frame_offsets_for_duration
 from .orchestrator import (
     generate_video_prompts_batch,
     generate_single_video_prompt,
@@ -13,6 +13,8 @@ __all__ = [
     "OpenAIFileReference",
     "_openai_file_reference",
     "_extract_video_frames",
+    "_adaptive_frame_count",
+    "_frame_offsets_for_duration",
     "upload_file_and_wait",
     "generate_structured",
     "generate_video_prompts_batch",

@@ -141,13 +141,12 @@ function App() {
     (clipName: string, clipOccurrence?: number): PromptRecord | null => {
       const prompts = projectData?.prompts || [];
       const basenameMatch = (prompt: PromptRecord) => clipBasename(prompt.clip_used) === clipBasename(clipName);
+      const sameClipPrompts = prompts.filter(basenameMatch);
       if (typeof clipOccurrence === "number") {
-        const exactOccurrence = prompts.find(
-          (prompt) => basenameMatch(prompt) && prompt.clip_occurrence === clipOccurrence,
-        );
+        const exactOccurrence = sameClipPrompts.find((prompt) => prompt.clip_occurrence === clipOccurrence);
         if (exactOccurrence) return exactOccurrence;
       }
-      return prompts.find(basenameMatch) || null;
+      return sameClipPrompts.find((prompt) => prompt.clip_occurrence == null) || null;
     },
     [projectData],
   );
@@ -336,6 +335,7 @@ function App() {
             onClose={() => setActiveClipChat(null)}
             onExecuteWorkflow={executeWorkflow}
             onOpenPromptDetails={openResultFromVersion}
+            onPreview={setPreview}
           />
         )}
       </main>

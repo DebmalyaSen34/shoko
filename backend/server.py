@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -22,6 +22,7 @@ from config.settings import LITE_MODEL, LOKA_STORAGE_DIR, OPENAI_LITE_MODEL
 from src.workflows.project_setup import setup_project_workspace
 from src.workflows.timeline_extraction import extract_timeline_from_project
 from src.workflows.feedback_parsing import parse_and_align_feedback
+from src.workflows.prompt_generation import extract_last_frame, get_video_duration
 from src.logging_utils import log_event
 from src.chat_memory import ChatMemoryStore
 
@@ -391,6 +392,10 @@ def chat_memory_path(project_name: str) -> Path:
     return project_data_dir(project_name) / "chat_memory.json"
 
 
+def chat_workflow_intents_path(project_name: str) -> Path:
+    return project_data_dir(project_name) / "chat_workflow_intents.json"
+
+
 def load_chat_history(project_name: str) -> dict:
     data = read_json_file(chat_history_path(project_name), {"clips": {}})
     if not isinstance(data, dict):
@@ -413,6 +418,181 @@ def make_chat_message(role: str, content: str, metadata: Optional[dict] = None) 
     }
 
 
+def static_url_for_path(path: str | None) -> Optional[str]:
+    if not path:
+        return None
+    if re.match(r"^https?://", path):
+        return path
+
+    normalized = unquote(str(path).replace("\\", "/"))
+    abs_path = Path(normalized).expanduser()
+    try:
+        if abs_path.is_absolute():
+            resolved = abs_path.resolve()
+            if resolved.is_relative_to(ASSETS_DIR):
+                rel = resolved.relative_to(ASSETS_DIR)
+                return f"/assets/{quote(rel.as_posix())}"
+            if resolved.is_relative_to(DATA_DIR):
+                rel = resolved.relative_to(DATA_DIR)
+                return f"/data/{quote(rel.as_posix())}"
+    except Exception:
+        pass
+
+    for marker, prefix in (("/assets/", "/assets/"), ("assets/", "/assets/"), ("/data/", "/data/"), ("data/", "/data/")):
+        marker_index = normalized.find(marker)
+        if marker_index != -1:
+            clean = normalized[marker_index + (1 if marker.startswith("/") else 0):]
+            if clean.startswith("assets/"):
+                return f"/assets/{quote(clean.removeprefix('assets/'))}"
+            if clean.startswith("data/"):
+                return f"/data/{quote(clean.removeprefix('data/'))}"
+            return f"{prefix}{quote(clean.removeprefix(prefix.lstrip('/')))}"
+    return None
+
+
+def preview_path_for_media(path: str | None) -> str | None:
+    if not path:
+        return None
+    if re.match(r"^https?://", path):
+        return path
+
+    normalized = unquote(str(path).replace("\\", "/"))
+    abs_path = Path(normalized).expanduser()
+    try:
+        if abs_path.is_absolute():
+            resolved = abs_path.resolve()
+            if resolved.is_relative_to(ASSETS_DIR):
+                rel_to_assets = resolved.relative_to(ASSETS_DIR)
+                parts = rel_to_assets.parts
+                if len(parts) > 1:
+                    return Path(*parts[1:]).as_posix()
+                return rel_to_assets.as_posix()
+            if resolved.is_relative_to(DATA_DIR):
+                rel_to_data = resolved.relative_to(DATA_DIR)
+                return f"/data/{quote(rel_to_data.as_posix())}"
+    except Exception:
+        pass
+
+    if normalized.startswith("/assets/"):
+        parts = normalized.removeprefix("/assets/").split("/", 1)
+        return parts[1] if len(parts) == 2 else parts[0]
+    if normalized.startswith("assets/"):
+        parts = normalized.removeprefix("assets/").split("/", 1)
+        return parts[1] if len(parts) == 2 else parts[0]
+    if normalized.startswith("/data/") or normalized.startswith("data/"):
+        return static_url_for_path(normalized)
+    return normalized
+
+
+def media_size_for_path(path: str | None) -> str:
+    if not path or re.match(r"^https?://", path):
+        return ""
+    normalized = unquote(str(path).replace("\\", "/"))
+    try:
+        candidate = Path(normalized).expanduser()
+        if candidate.is_absolute() and candidate.exists():
+            return format_size(candidate.stat().st_size)
+        if normalized.startswith("/assets/"):
+            rel = normalized.removeprefix("/assets/")
+            parts = rel.split("/", 1)
+            if len(parts) == 2:
+                candidate = ASSETS_DIR / parts[0] / parts[1]
+                if candidate.exists():
+                    return format_size(candidate.stat().st_size)
+        if normalized.startswith("assets/"):
+            rel = normalized.removeprefix("assets/")
+            parts = rel.split("/", 1)
+            if len(parts) == 2:
+                candidate = ASSETS_DIR / parts[0] / parts[1]
+                if candidate.exists():
+                    return format_size(candidate.stat().st_size)
+    except Exception:
+        return ""
+    return ""
+
+
+def infer_media_type(path_or_url: str, fallback: str = "other") -> str:
+    lower = path_or_url.lower().split("?", 1)[0]
+    ext = Path(lower).suffix
+    if ext in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        return "image"
+    if ext in {".mp4", ".mov", ".mkv", ".webm"}:
+        return "video"
+    if ext in {".mp3", ".wav", ".m4a", ".aac"}:
+        return "audio"
+    return fallback
+
+
+def add_chat_media_item(
+    media: list[dict],
+    *,
+    label: str,
+    source: str,
+    path: str | None,
+    media_type: str | None = None,
+    thumbnail_path: str | None = None,
+) -> None:
+    url = static_url_for_path(path)
+    if not url:
+        return
+    if any(item.get("url") == url for item in media):
+        return
+    preview_path = preview_path_for_media(path)
+    filename = os.path.basename(unquote(str(preview_path or path).split("?", 1)[0])) or label
+    media.append({
+        "type": media_type or infer_media_type(str(path)),
+        "label": label,
+        "source": source,
+        "name": filename,
+        "path": preview_path,
+        "url": url,
+        "size": media_size_for_path(path),
+        "thumbnail_url": static_url_for_path(thumbnail_path),
+    })
+
+
+def wants_clip_media_gallery(text: str) -> bool:
+    lower = text.lower()
+    show_words = {"show", "display", "list", "view", "see", "open"}
+    media_words = {"asset", "assets", "reference", "references", "image", "images", "video", "videos", "frames", "media"}
+    return any(word in lower for word in show_words) and any(word in lower for word in media_words)
+
+
+def build_clip_media_gallery(context: dict) -> list[dict]:
+    media: list[dict] = []
+    latest_version = context.get("latest_version") or {}
+    feedback = context.get("feedback") or {}
+    clip_frame_paths = latest_version.get("clip_frame_paths") or []
+
+    for asset_path in latest_version.get("selected_assets") or []:
+        add_chat_media_item(media, label="Selected asset", source="selected_assets", path=asset_path)
+
+    initial_frame = latest_version.get("initial_frame_image_path")
+    if initial_frame:
+        add_chat_media_item(media, label="Initial frame", source="initial_frame", path=initial_frame, media_type="image")
+
+    for frame_path in clip_frame_paths:
+        add_chat_media_item(media, label="Extracted clip frame", source="clip_frames", path=frame_path, media_type="image")
+
+    referenced_frames = list(latest_version.get("referenced_frames") or [])
+    for item in feedback.get("feedback_items", []):
+        referenced_frames.extend(item.get("referenced_frames") or [])
+    referenced_frames.extend(feedback.get("referenced_frames") or [])
+    for ref_frame in referenced_frames:
+        label = "Referenced frame"
+        if ref_frame.get("timestamp"):
+            label = f"Referenced frame {ref_frame.get('timestamp')}"
+        add_chat_media_item(
+            media,
+            label=label,
+            source="referenced_frames",
+            path=ref_frame.get("frame_path"),
+            media_type="image",
+        )
+
+    return media
+
+
 def memory_store(project_name: str) -> ChatMemoryStore:
     return ChatMemoryStore(chat_memory_path(project_name))
 
@@ -420,11 +600,18 @@ def memory_store(project_name: str) -> ChatMemoryStore:
 def matching_prompt(project_data: dict, clip: dict, clip_index: int) -> Optional[dict]:
     clip_name = clip.get("clip", "")
     basename = os.path.basename(clip_name)
+    same_clip_prompts = []
     for prompt in project_data.get("prompts", []):
         prompt_clip = prompt.get("clip_used") or ""
         same_clip = prompt_clip == clip_name or os.path.basename(prompt_clip) == basename
-        occurrence = prompt.get("clip_occurrence")
-        if same_clip and (occurrence is None or occurrence == clip_index):
+        if same_clip:
+            same_clip_prompts.append(prompt)
+
+    for prompt in same_clip_prompts:
+        if prompt.get("clip_occurrence") == clip_index:
+            return prompt
+    for prompt in same_clip_prompts:
+        if prompt.get("clip_occurrence") is None:
             return prompt
     return None
 
@@ -542,20 +729,125 @@ def extract_memory_notes(message: str, assistant_text: str) -> list[str]:
     return notes
 
 
+def wants_previous_last_frame_continuity(text: str) -> bool:
+    lower = text.lower()
+    has_previous_clip = "previous clip" in lower or "prior clip" in lower or "last clip" in lower
+    has_last_frame = "last frame" in lower or "final frame" in lower or "ending frame" in lower
+    has_continuity = "continuity" in lower or "reference" in lower or "match" in lower
+    return has_previous_clip and has_last_frame and has_continuity
+
+
+def wants_autonomous_execution(text: str) -> bool:
+    lower = text.lower()
+    return any(word in lower for word in ["execute", "run", "start"]) and any(
+        word in lower for word in ["workflow", "pipeline", "generation"]
+    )
+
+
+def load_chat_workflow_intents(project_name: str) -> dict:
+    data = read_json_file(chat_workflow_intents_path(project_name), {"feedback": {}})
+    if not isinstance(data, dict):
+        return {"feedback": {}}
+    data.setdefault("feedback", {})
+    return data
+
+
+def save_chat_workflow_intents(project_name: str, intents: dict) -> None:
+    write_json_file(chat_workflow_intents_path(project_name), intents)
+
+
+def save_pending_workflow_intents(project_name: str, actions: list[dict], message: str, context: dict) -> None:
+    workflow_actions = [
+        action for action in actions
+        if action.get("type") == "execute_workflow" and action.get("feedback_index") is not None
+    ]
+    if not workflow_actions:
+        return
+
+    intents = load_chat_workflow_intents(project_name)
+    feedback_intents = intents.setdefault("feedback", {})
+    for action in workflow_actions:
+        feedback_index = str(action["feedback_index"])
+        feedback_intents[feedback_index] = {
+            "created_at": now_iso(),
+            "clip_index": context.get("clip_index"),
+            "clip_key": context.get("clip_key"),
+            "user_message": message,
+            "continuity_reference": action.get("continuity_reference"),
+            "autonomous": bool(action.get("autonomous")),
+            "status": "pending",
+        }
+    save_chat_workflow_intents(project_name, intents)
+
+
 def infer_action_suggestions(text: str, context: dict) -> list[dict]:
     lower = text.lower()
     suggestions = []
     feedback_items = (context.get("feedback") or {}).get("feedback_items", [])
     latest_version = context.get("latest_version") or {}
     if any(word in lower for word in ["workflow", "run", "execute"]) and feedback_items:
-        suggestions.append({
+        action = {
             "type": "execute_workflow",
             "label": "Run Workflow",
             "feedback_index": feedback_items[0].get("raw_index"),
-        })
+        }
+        if wants_previous_last_frame_continuity(text):
+            action["label"] = "Run With Previous Last Frame"
+            action["continuity_reference"] = "previous_clip_last_frame"
+        if wants_autonomous_execution(text):
+            action["autonomous"] = True
+        suggestions.append(action)
     if any(word in lower for word in ["video", "generate", "seedance", "render"]) and latest_version.get("video_model_prompt"):
         suggestions.append({"type": "prepare_video", "label": "Prepare Video"})
     return suggestions
+
+
+def add_unique_action(actions: list[dict], action: dict) -> None:
+    key = (action.get("type"), action.get("label"), action.get("feedback_index"), action.get("prompt"))
+    existing_keys = {
+        (item.get("type"), item.get("label"), item.get("feedback_index"), item.get("prompt"))
+        for item in actions
+    }
+    if key not in existing_keys:
+        actions.append(action)
+
+
+def dynamic_chat_suggestions(message: str, context: dict, explicit_actions: list[dict]) -> list[dict]:
+    lower = message.lower()
+    actions = list(explicit_actions)
+    feedback_items = (context.get("feedback") or {}).get("feedback_items", [])
+    latest_version = context.get("latest_version") or {}
+    media = build_clip_media_gallery(context)
+
+    if feedback_items:
+        feedback_index = feedback_items[0].get("raw_index")
+        workflow_label = "Run Workflow Again" if latest_version.get("video_model_prompt") else "Run Workflow"
+        add_unique_action(actions, {
+            "type": "execute_workflow",
+            "label": workflow_label,
+            "feedback_index": feedback_index,
+        })
+
+    if latest_version.get("video_model_prompt"):
+        add_unique_action(actions, {"type": "prepare_video", "label": "Generate Video"})
+
+    if media and not wants_clip_media_gallery(message):
+        add_unique_action(actions, {
+            "type": "send_message",
+            "label": "Show Assets",
+            "prompt": "Show all assets and references for this clip.",
+        })
+
+    if "feedback" not in lower and feedback_items:
+        add_unique_action(actions, {
+            "type": "send_message",
+            "label": "Show Feedback",
+            "prompt": "Show the feedback for this clip.",
+        })
+
+    if len(actions) > 4:
+        return actions[:4]
+    return actions
 
 
 def fallback_chat_reply(message: str, context: dict) -> str:
@@ -579,7 +871,11 @@ def fallback_chat_reply(message: str, context: dict) -> str:
         return "\n".join(f"#{item.get('raw_index')} {item.get('category')}: {item.get('remark')}" for item in feedback_items)
     if "asset" in lower:
         if selected_assets:
+            if wants_clip_media_gallery(message):
+                return "Here are the assets and references currently attached to this clip."
             return "Latest selected assets:\n" + "\n".join(f"- {os.path.basename(asset)}" for asset in selected_assets)
+        if wants_clip_media_gallery(message):
+            return "I can show the current clip, but no selected assets or generated references are attached to this clip yet."
         return "No selected assets are attached to the latest plan yet. The project asset library is available in context."
     if "workflow" in lower or "run" in lower:
         if feedback_items:
@@ -897,6 +1193,100 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
         except Exception as e:
             print(f"Error saving video_prompts.json: {e}")
 
+
+def workflow_intent_for_feedback(project_name: str, feedback_index: int) -> dict:
+    intents = load_chat_workflow_intents(project_name)
+    intent = (intents.get("feedback") or {}).get(str(feedback_index), {})
+    if intent.get("status") not in {"pending", None}:
+        return {}
+    return intent
+
+
+def mark_workflow_intent_used(project_name: str, feedback_index: int, updates: dict) -> None:
+    intents = load_chat_workflow_intents(project_name)
+    feedback_intents = intents.setdefault("feedback", {})
+    key = str(feedback_index)
+    current = feedback_intents.get(key, {})
+    current.update(updates)
+    current["updated_at"] = now_iso()
+    feedback_intents[key] = current
+    save_chat_workflow_intents(project_name, intents)
+
+
+def feedback_context_for_raw_index(project_name: str, feedback_index: int) -> Optional[dict]:
+    project_data = get_project_data(project_name)
+    for group in project_data.get("feedback", []):
+        for item in group.get("feedback_items", []):
+            if item.get("raw_index") == feedback_index:
+                clip_index = group.get("clip_occurrence")
+                if clip_index is None:
+                    clip_name = group.get("clip_used")
+                    for index, clip in enumerate(project_data.get("timeline", [])):
+                        if clip.get("clip") == clip_name:
+                            clip_index = index
+                            break
+                return {
+                    "group": group,
+                    "item": item,
+                    "clip_index": clip_index,
+                    "timeline": project_data.get("timeline", []),
+                }
+    return None
+
+
+def resolve_clip_file_for_continuity(project_name: str, clip_name: str) -> Optional[Path]:
+    project_assets = project_assets_dir(project_name)
+    for rel_dir in ("06_clips/_final", "06_clips/_raw"):
+        candidate = project_assets / rel_dir / clip_name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def prepare_continuity_reference_from_intent(project_name: str, feedback_index: int, intent: dict) -> tuple[Optional[str], Optional[str]]:
+    if intent.get("continuity_reference") != "previous_clip_last_frame":
+        return None, None
+
+    feedback_context = feedback_context_for_raw_index(project_name, feedback_index)
+    if not feedback_context:
+        return None, "No feedback context found for continuity reference."
+
+    clip_index = feedback_context.get("clip_index")
+    timeline = feedback_context.get("timeline") or []
+    if not isinstance(clip_index, int) or clip_index <= 0 or clip_index >= len(timeline):
+        return None, "This clip has no previous timeline clip to use for continuity."
+
+    previous_clip = timeline[clip_index - 1]
+    previous_clip_name = previous_clip.get("clip")
+    if not previous_clip_name:
+        return None, "Previous clip name is missing from the timeline."
+
+    previous_clip_path = resolve_clip_file_for_continuity(project_name, previous_clip_name)
+    if not previous_clip_path:
+        return None, f"Previous clip file not found for {previous_clip_name}."
+
+    output_dir = project_data_dir(project_name) / "chat_continuity_frames" / f"feedback_{feedback_index}"
+    duration_s = get_video_duration(str(previous_clip_path)) or float(previous_clip.get("duration_s") or 0.0) or 5.0
+    frame_path = extract_last_frame(str(previous_clip_path), str(output_dir), duration_s)
+    if not frame_path:
+        return None, f"Could not extract the last frame from {previous_clip_name}."
+
+    note = (
+        f"Use the extracted last frame from previous clip '{previous_clip_name}' as the continuity "
+        f"reference and first-frame anchor for the workflow."
+    )
+    mark_workflow_intent_used(
+        project_name,
+        feedback_index,
+        {
+            "status": "prepared",
+            "continuity_frame_path": frame_path,
+            "continuity_note": note,
+            "previous_clip": previous_clip_name,
+        },
+    )
+    return frame_path, note
+
 @app.get("/api/project/{project_name}")
 def get_project_data(project_name: str):
     project_dir = project_data_dir(project_name)
@@ -1043,13 +1433,17 @@ async def post_clip_chat(project_name: str, request: ClipChatRequest):
             )
         context = build_clip_chat_context(project_name, request.clip_index, query=message_text)
 
-    actions = infer_action_suggestions(message_text, context)
+    explicit_actions = infer_action_suggestions(message_text, context)
+    actions = dynamic_chat_suggestions(message_text, context, explicit_actions)
+    save_pending_workflow_intents(project_name, actions, message_text, context)
+    media = build_clip_media_gallery(context) if wants_clip_media_gallery(message_text) else []
     assistant_message = make_chat_message(
         "assistant",
         assistant_text,
         {
             "provider": request.provider,
             "actions": actions,
+            "media": media,
             "saved_memory_ids": [item["id"] for item in saved_memories],
         },
     )
@@ -1104,6 +1498,15 @@ async def run_workflow(project: str, index: int, provider: str = "openai"):
     timeline_path = project_dir / "timeline.json"
     output_json = project_dir / "output.json"
     output_report = project_dir / "output_report.md"
+    continuity_frame_path = None
+    continuity_note = None
+    continuity_error = None
+    intent = workflow_intent_for_feedback(project, index)
+    if intent:
+        continuity_frame_path, continuity_note = prepare_continuity_reference_from_intent(project, index, intent)
+        if not continuity_frame_path and intent.get("continuity_reference"):
+            continuity_error = "Continuity reference requested but could not be prepared."
+            mark_workflow_intent_used(project, index, {"status": "failed", "error": continuity_error})
     
     cmd = [
         sys.executable,
@@ -1116,9 +1519,17 @@ async def run_workflow(project: str, index: int, provider: str = "openai"):
         "--output-report", str(output_report),
         "--provider", provider
     ]
+    if continuity_frame_path:
+        cmd.extend(["--continuity-frame-path", continuity_frame_path])
+    if continuity_note:
+        cmd.extend(["--continuity-note", continuity_note])
     
     async def log_generator():
         yield f"data: [START] Launching workflow subprocess for feedback index {index}...\n\n"
+        if continuity_frame_path:
+            yield f"data: [CONTEXT] Prepared previous-clip last-frame continuity reference: {continuity_frame_path}\n\n"
+        elif continuity_error:
+            yield f"data: [CONTEXT] {continuity_error}\n\n"
         yield f"data: Executing command: {' '.join(cmd)}\n\n\n"
         workflow_started = time.perf_counter()
         log_event("workflow.subprocess.start", project=project, index=index, provider=provider, command=cmd)

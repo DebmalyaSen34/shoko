@@ -230,6 +230,73 @@ class ClusteredPipelineTests(unittest.TestCase):
             self.assertIs(openai_client, batch_generator.call_args.kwargs["client"])
             self.assertEqual("openai", batch_generator.call_args.kwargs["provider"])
 
+    def test_pipeline_adds_continuity_frame_to_target_clusters(self):
+        feedback = [
+            {"timestamp": "00:01", "category": "video", "remark": "video one"},
+        ]
+        timeline = {
+            "video_timeline": [
+                {
+                    "clip": "clip.mp4",
+                    "start_s": 0.0,
+                    "end_s": 2.0,
+                    "start_tc": "00:00:00:00",
+                    "end_tc": "00:00:02:00",
+                    "duration_s": 2.0,
+                }
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            feedback_path = os.path.join(temp_dir, "feedback.json")
+            timeline_path = os.path.join(temp_dir, "timeline.json")
+            output_json = os.path.join(temp_dir, "output", "result.json")
+            output_report = os.path.join(temp_dir, "output", "report.md")
+            continuity_frame = os.path.join(temp_dir, "last_frame.jpg")
+            with open(feedback_path, "w", encoding="utf-8") as file:
+                json.dump(feedback, file)
+            with open(timeline_path, "w", encoding="utf-8") as file:
+                json.dump(timeline, file)
+            with open(continuity_frame, "wb") as file:
+                file.write(b"frame")
+
+            with (
+                mock.patch.dict(os.environ, {"OPENAI_API_KEY": "openai-key"}, clear=True),
+                mock.patch("main.OpenAI", return_value=object()),
+                mock.patch("main.scan_visual_reference_assets", return_value=[]),
+                mock.patch(
+                    "main.generate_video_prompts_batch",
+                    return_value=[
+                        {
+                            "cluster_id": 0,
+                            "initial_frame_prompt": "continuity prompt",
+                            "initial_frame_image_path": continuity_frame,
+                            "selected_assets": [],
+                            "prompt_format": "plain_text",
+                            "reference_legend": "",
+                            "video_model_prompt": "video result",
+                            "explanation": "video",
+                            "status": "success",
+                        }
+                    ],
+                ) as batch_generator,
+                mock.patch("main.write_markdown_report"),
+            ):
+                main.run_pipeline(
+                    feedback_path=feedback_path,
+                    timeline_path=timeline_path,
+                    assets_dir=temp_dir,
+                    output_json=output_json,
+                    output_report=output_report,
+                    provider="openai",
+                    continuity_frame_path=continuity_frame,
+                    continuity_note="Use previous last frame.",
+                )
+
+            passed_cluster = batch_generator.call_args.kwargs["clusters"][0]
+            self.assertEqual(os.path.abspath(continuity_frame), passed_cluster["continuity_reference_frame_path"])
+            self.assertEqual("Use previous last frame.", passed_cluster["continuity_reference_note"])
+
     def test_report_lists_every_feedback_item_in_cluster(self):
         results = [
             {

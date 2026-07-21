@@ -1,6 +1,9 @@
 import os
 import sys
 from pathlib import Path
+from typing import Iterable
+
+from dotenv import load_dotenv
 
 LITE_MODEL = "gemini-2.5-flash"
 REASONING_MODEL = "gemini-2.5-flash"
@@ -15,6 +18,16 @@ DEFAULT_OUTPUT_JSON = "data/output/generated_prompts/generated_prompts_openai_0.
 DEFAULT_OUTPUT_REPORT = "data/output/result_docs/workflow_report_openai_0.md"
 
 APP_NAME = "Loka15 Studio"
+SECRET_ENV_KEYS = ("OPENAI_API_KEY", "GEMINI_API_KEY", "SEGMIND_API_KEY")
+RUNTIME_ENV_KEYS = (
+    "LOKA_STORAGE_DIR",
+    "LOKA_APP_VERSION",
+    "LOKA_BACKEND_PORT",
+    "LOKA_BACKEND_SHUTDOWN_TOKEN",
+)
+OS_ENV_KEYS_AT_START = frozenset(
+    key for key in (*SECRET_ENV_KEYS, *RUNTIME_ENV_KEYS, "LOKA_ENV_FILE") if key in os.environ
+)
 
 
 def default_app_storage_dir(app_name: str = APP_NAME) -> str:
@@ -34,4 +47,59 @@ def default_app_storage_dir(app_name: str = APP_NAME) -> str:
     return str(home / ".local" / "share" / app_name)
 
 
-LOKA_STORAGE_DIR = default_app_storage_dir()
+def configured_app_storage_dir(app_name: str = APP_NAME) -> str:
+    """Return the app storage root, honoring only the real OS env override."""
+    configured_dir = os.environ.get("LOKA_STORAGE_DIR")
+    if configured_dir:
+        return str(Path(configured_dir).expanduser())
+    return default_app_storage_dir(app_name)
+
+
+def backend_root_dir() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def app_config_dir(storage_dir: str | Path | None = None) -> Path:
+    root = Path(storage_dir or configured_app_storage_dir()).expanduser()
+    return root / "config"
+
+
+def app_config_env_path(storage_dir: str | Path | None = None) -> Path:
+    return app_config_dir(storage_dir) / ".env"
+
+
+def local_dev_env_path() -> Path:
+    return backend_root_dir() / ".env"
+
+
+def env_load_paths() -> list[Path]:
+    paths = [app_config_env_path(), local_dev_env_path()]
+    extra_env_path = os.environ.get("LOKA_ENV_FILE")
+    if extra_env_path:
+        paths.insert(0, Path(extra_env_path).expanduser())
+    return paths
+
+
+def load_runtime_env(paths: Iterable[Path] | None = None) -> list[str]:
+    """
+    Load runtime env files without overriding already exported OS variables.
+
+    Precedence:
+    1. OS environment variables
+    2. Explicit LOKA_ENV_FILE, when provided
+    3. Installed app config: {app_storage}/config/.env
+    4. Local development: backend/.env
+    5. Code defaults
+    """
+    loaded_paths: list[str] = []
+    for env_path in paths or env_load_paths():
+        if env_path.exists():
+            load_dotenv(env_path, override=False)
+            loaded_paths.append(str(env_path))
+    return loaded_paths
+
+
+LOADED_ENV_FILES = load_runtime_env()
+if "LOKA_STORAGE_DIR" not in OS_ENV_KEYS_AT_START:
+    os.environ.pop("LOKA_STORAGE_DIR", None)
+LOKA_STORAGE_DIR = configured_app_storage_dir()

@@ -7,11 +7,12 @@ type AppHeaderProps = {
   projects: string[];
   provider: Provider;
   onNewProject: () => void;
+  onOpenSettings: () => void;
   onProjectChange: (project: string) => void;
   onProviderChange: (provider: Provider) => void;
 };
 
-export function AppHeader({ activeProject, projects, provider, onNewProject, onProjectChange, onProviderChange }: AppHeaderProps) {
+export function AppHeader({ activeProject, projects, provider, onNewProject, onOpenSettings, onProjectChange, onProviderChange }: AppHeaderProps) {
   return (
     <header className="h-header-height bg-bg-secondary border-b border-border-color flex justify-between items-center px-6 z-[100] flex-none">
       <div className="flex items-center gap-3 min-w-0">
@@ -25,6 +26,9 @@ export function AppHeader({ activeProject, projects, provider, onNewProject, onP
       </div>
 
       <div className="flex items-center gap-4">
+        <button className="icon-btn" title="Settings" type="button" onClick={onOpenSettings}>
+          <Icon name="settings" />
+        </button>
         <button
           className="h-[34px] px-3.5 py-2 text-xs font-bold inline-flex items-center justify-center gap-2 rounded-md bg-gradient-to-br from-accent-primary to-[#4e4e5d] text-white shadow-[0_4px_12px_var(--accent-primary-glow)] hover:from-accent-primary-hover hover:to-[#5c5c6c] transition-all whitespace-nowrap cursor-pointer border-0"
           onClick={onNewProject}
@@ -65,4 +69,3 @@ export function AppHeader({ activeProject, projects, provider, onNewProject, onP
     </header>
   );
 }
-

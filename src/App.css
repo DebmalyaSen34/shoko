@@ -1898,6 +1898,171 @@ button {
   padding: 10px 12px;
 }
 
+.settings-modal {
+  max-width: 760px;
+  width: 94%;
+}
+
+.settings-body {
+  background: var(--bg-secondary);
+  align-items: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-secret-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-secret-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.82fr) minmax(260px, 1fr);
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.settings-secret-meta,
+.settings-secret-controls {
+  min-width: 0;
+}
+
+.settings-secret-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.settings-status {
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.settings-status.configured {
+  color: var(--success);
+  background: rgba(85, 220, 170, 0.09);
+  border: 1px solid rgba(85, 220, 170, 0.22);
+}
+
+.settings-status.missing {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+}
+
+.settings-secret-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.settings-secret-source .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.settings-secret-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.settings-secret-controls input[type="password"] {
+  width: 100%;
+  border: 1px solid var(--border-color);
+  background: #101015;
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 10px 12px;
+  outline: none;
+}
+
+.settings-secret-controls input[type="password"]:focus {
+  border-color: var(--accent-primary-hover);
+  box-shadow: 0 0 0 2px var(--accent-primary-glow);
+}
+
+.settings-secret-controls input:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.settings-clear-toggle {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.settings-clear-toggle input {
+  accent-color: var(--accent-primary);
+}
+
+.settings-path-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.settings-path-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 9px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.settings-path-row span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.settings-path-row code {
+  color: var(--accent-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.settings-error {
+  color: var(--danger);
+  border-color: rgba(255, 99, 99, 0.32);
+  background: rgba(255, 99, 99, 0.04);
+}
+
 .result-content-layout {
   display: grid;
   grid-template-columns: 4.2fr 5.8fr;
@@ -2367,7 +2532,10 @@ button {
   }
 
   .project-form-grid,
-  .asset-upload-grid {
+  .asset-upload-grid,
+  .settings-secret-row,
+  .settings-secret-controls,
+  .settings-path-row {
     grid-template-columns: 1fr;
   }
 

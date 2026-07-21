@@ -1,0 +1,141 @@
+name: Cross Platform Build
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-x64
+            platform: macos-13
+            tauri_args: --target x86_64-apple-darwin
+            rust_target: x86_64-apple-darwin
+            python_bin: python
+          - name: macos-arm64
+            platform: macos-14-arm64
+            tauri_args: --target aarch64-apple-darwin
+            rust_target: aarch64-apple-darwin
+            python_bin: python
+          - name: windows-x64
+            platform: windows-latest
+            tauri_args: ""
+            rust_target: ""
+            python_bin: python
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Rust target
+        if: matrix.rust_target != ''
+        run: rustup target add ${{ matrix.rust_target }}
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv pip install --python "${{ matrix.python_bin }}" -r requirements.txt -r requirements-build.txt
+
+      - name: Run backend tests
+        run: ${{ matrix.python_bin }} -m pytest backend/tests --ignore=backend/tests/test_supabase_client.py
+
+      - name: Build backend server
+        run: ${{ matrix.python_bin }} backend/scripts/build_backend_binary.py
+
+      - name: Smoke test packaged backend
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            backend_exe="backend/dist/backend-server/backend-server.exe"
+          else
+            backend_exe="backend/dist/backend-server/backend-server"
+            chmod +x "$backend_exe"
+          fi
+
+          export LOKA_STORAGE_DIR="$RUNNER_TEMP/loka15-backend-smoke"
+          export LOKA_BACKEND_PORT="8765"
+          export LOKA_BACKEND_SHUTDOWN_TOKEN="ci-smoke-token"
+
+          "$backend_exe" > "$RUNNER_TEMP/backend-smoke.log" 2>&1 &
+          backend_pid=$!
+
+          cleanup() {
+            curl -fsS -X POST -H "x-loka-shutdown-token: ci-smoke-token" http://127.0.0.1:8765/shutdown >/dev/null 2>&1 || true
+            kill "$backend_pid" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for attempt in {1..60}; do
+            if curl -fsS http://127.0.0.1:8765/health >/dev/null; then
+              curl -fsS http://127.0.0.1:8765/version
+              curl -fsS http://127.0.0.1:8765/api/config/runtime >/dev/null
+              exit 0
+            fi
+            if ! kill -0 "$backend_pid" >/dev/null 2>&1; then
+              cat "$RUNNER_TEMP/backend-smoke.log"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          cat "$RUNNER_TEMP/backend-smoke.log"
+          exit 1
+
+      - name: Stage backend server for Tauri bundle
+        shell: bash
+        run: |
+          rm -rf src-tauri/resources/backend
+          mkdir -p src-tauri/resources/backend
+          cp -R backend/dist/backend-server/. src-tauri/resources/backend/
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            test -f src-tauri/resources/backend/backend-server.exe
+          else
+            test -f src-tauri/resources/backend/backend-server
+            chmod +x src-tauri/resources/backend/backend-server
+          fi
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: ${{ matrix.tauri_args }}
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: ${{ matrix.name }}-[bundle]
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && format('Loka15 Studio {0}', github.ref_name) || '' }}
+          releaseDraft: true
+          prerelease: false

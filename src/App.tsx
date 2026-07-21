@@ -8,6 +8,7 @@ import { NewProjectModal } from "./components/modals/NewProjectModal";
 import { UploadAssetsModal } from "./components/modals/UploadAssetsModal";
 import { UploadFeedbackModal } from "./components/modals/UploadFeedbackModal";
 import { AddManualFeedbackModal } from "./components/modals/AddManualFeedbackModal";
+import { SettingsModal } from "./components/modals/SettingsModal";
 import { TimelinePanel } from "./components/timeline/TimelinePanel";
 import { ClipChatPanel } from "./components/chat/ClipChatPanel";
 import { ToastStack } from "./components/ToastStack";
@@ -33,6 +34,7 @@ function App() {
   const [showUploadAssets, setShowUploadAssets] = useState(false);
   const [showUploadFeedback, setShowUploadFeedback] = useState(false);
   const [showAddManualFeedback, setShowAddManualFeedback] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [activeClipForManualFeedback, setActiveClipForManualFeedback] = useState("");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [runningIndexes, setRunningIndexes] = useState<Set<number>>(new Set());
@@ -280,6 +282,7 @@ function App() {
         projects={projects}
         provider={provider}
         onNewProject={() => setShowNewProject(true)}
+        onOpenSettings={() => setShowSettings(true)}
         onProjectChange={(project) => void loadProject(project)}
         onProviderChange={setProvider}
       />
@@ -399,6 +402,12 @@ function App() {
             notify("Manual feedback added successfully.", "success");
             void loadProject(activeProject);
           }}
+        />
+      )}
+      {showSettings && (
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          onSaved={() => notify("Settings saved.", "success")}
         />
       )}
       <ToastStack toasts={toasts} />

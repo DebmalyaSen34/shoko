@@ -10,7 +10,18 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+backend/build/
+backend/dist/
+src-tauri/resources/backend/*
+!src-tauri/resources/backend/.gitkeep
+!src-tauri/resources/backend/README.txt
 *.local
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
 
 # Editor directories and files
 .vscode/*
@@ -28,5 +39,4 @@ __pycache__/
 *.pyc
 .venv/
 docs/
-.env
 api_responses.jsonl

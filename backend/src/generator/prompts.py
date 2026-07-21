@@ -3,6 +3,7 @@ from typing import List, Dict, Any, Optional
 
 from .media import _aspect_ratio
 from .upload import _append_media_reference
+from src.utils import app_resource_path
 
 DEFAULT_PROJECT_OVERRIDES = """
 
@@ -32,11 +33,7 @@ These rules override every conflicting instruction in the skill above:
 
 
 def _default_seedance_skill_text() -> str:
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    skill_path = os.path.join(
-        project_root,
-        "skill/video_generation_skill.md",
-    )
+    skill_path = app_resource_path("skill", "video_generation_skill.md")
     with open(skill_path, "r", encoding="utf-8") as file:
         return file.read()
 

@@ -127,6 +127,24 @@ export type Toast = {
   type: "info" | "success" | "error";
 };
 
+export type RuntimeSecretKeyStatus = {
+  configured: boolean;
+  source: "os_environment" | "app_or_dev_env_file" | "missing" | string;
+  locked_by_os_env: boolean;
+  can_update: boolean;
+};
+
+export type RuntimeConfig = {
+  app_storage_dir: string;
+  data_dir: string;
+  assets_dir: string;
+  loaded_env_files: string[];
+  secrets: {
+    config_env_path: string;
+    keys: Record<"OPENAI_API_KEY" | "GEMINI_API_KEY" | "SEGMIND_API_KEY", RuntimeSecretKeyStatus>;
+  };
+};
+
 export type ActiveClipChat = {
   clipIndex: number;
 } | null;

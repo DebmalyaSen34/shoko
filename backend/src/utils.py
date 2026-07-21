@@ -1,8 +1,20 @@
 import os
 import json
+import sys
 from pathlib import PureWindowsPath
 from config.premiere_pro_conf import TICKS_PER_SEC
 from typing import Optional
+
+
+def app_resource_path(*parts: str) -> str:
+    """Resolve a backend resource from source or a PyInstaller bundle."""
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        return os.path.join(bundle_root, *parts)
+
+    src_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(src_dir)
+    return os.path.join(project_root, *parts)
 
 def parse_timestamp_to_seconds(ts_str: Optional[str]) -> Optional[float]:
     """Convert MM:SS, H:MM:SS, or raw seconds to seconds."""
@@ -50,9 +62,7 @@ def win_basename(path):
 
 def load_prompt_templates() -> dict[str, str]:
     """Load system prompts from config/prompt_templates.json."""
-    src_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(src_dir)
-    templates_path = os.path.join(project_root, "config", "prompt_templates.json")
+    templates_path = app_resource_path("config", "prompt_templates.json")
     try:
         with open(templates_path, "r", encoding="utf-8") as f:
             return json.load(f)

@@ -1,6 +1,6 @@
 import type { AssetFile } from "../types";
 
-export function Icon({ name }: { name: string }) {
+export function Icon({ name, className = "" }: { name: string; className?: string }) {
   const paths: Record<string, string> = {
     board: "M4 5h16v12H4z M8 21h8 M12 17v4",
     box: "M4 8l8-4 8 4-8 4-8-4z M4 8v8l8 4 8-4V8 M12 12v8",
@@ -32,7 +32,7 @@ export function Icon({ name }: { name: string }) {
   };
 
   return (
-    <svg aria-hidden="true" className="icon" viewBox="0 0 24 24">
+    <svg aria-hidden="true" className={`icon ${className}`} viewBox="0 0 24 24">
       <path d={paths[name] || paths.file} />
     </svg>
   );

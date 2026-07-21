@@ -274,7 +274,7 @@ function App() {
   const chatPrompt = activeClipChat && chatClip ? findPrompt(chatClip.clip, activeClipChat.clipIndex) : null;
 
   return (
-    <div className="app-container">
+    <div className="flex flex-col w-screen h-screen bg-bg-primary">
       <AppHeader
         activeProject={activeProject}
         projects={projects}
@@ -284,7 +284,7 @@ function App() {
         onProviderChange={setProvider}
       />
 
-      <main className="app-body">
+      <main className="flex flex-1 h-[calc(100vh-var(--header-height)-32px)] overflow-hidden relative">
         <AssetsSidebar
           assetFilter={assetFilter}
           assetTotal={assetTotal}
@@ -340,9 +340,9 @@ function App() {
         )}
       </main>
 
-      <footer className="app-footer">
+      <footer className="h-8 bg-bg-secondary border-t border-border-color flex justify-between items-center px-6 text-[11px] text-text-muted font-medium flex-none select-none">
         <div>
-          <span className="footer-status-dot" /> Synced to {providerLabel} - {projectData?.sequence_name || activeProject || "No Project"}
+          <span className="w-[7px] h-[7px] rounded-full bg-[#4caf50] inline-block mr-1.5" /> Synced to {providerLabel} - {projectData?.sequence_name || activeProject || "No Project"}
         </div>
         <div>
           Showing clips {timelineCount ? 1 : 0} - {timelineCount} of {timelineCount} scroll horizontally

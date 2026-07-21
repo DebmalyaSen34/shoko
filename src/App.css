@@ -1,3 +1,32 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-primary: var(--bg-primary);
+  --color-bg-secondary: var(--bg-secondary);
+  --color-bg-tertiary: var(--bg-tertiary);
+  --color-card-bg: var(--card-bg);
+  --color-border-color: var(--border-color);
+  --color-border-hover: var(--border-hover);
+  --color-accent-primary: var(--accent-primary);
+  --color-accent-primary-hover: var(--accent-primary-hover);
+  --color-accent-primary-glow: var(--accent-primary-glow);
+  --color-accent-secondary: var(--accent-secondary);
+  --color-accent-secondary-glow: var(--accent-secondary-glow);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-success: var(--success);
+  --color-error: var(--error);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  --spacing-header-height: var(--header-height);
+  --spacing-sidebar-width: var(--sidebar-width);
+}
+
 :root {
   --bg-primary: #0a0a0e;
   --bg-secondary: #121216;

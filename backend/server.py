@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
 from urllib.parse import quote, unquote
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +26,9 @@ from src.workflows.prompt_generation import extract_last_frame, get_video_durati
 from src.workflows.clip_context import analyze_clip_context, clip_context_dir
 from src.logging_utils import log_event
 from src.chat_memory import ChatMemoryStore
+
+APP_VERSION = os.environ.get("LOKA_APP_VERSION", "0.1.0")
+BACKEND_STARTED_AT = datetime.now(timezone.utc)
 
 app = FastAPI(title="Video Project Timeline & Feedback UI")
 
@@ -127,6 +130,40 @@ def ensure_project_asset_tree(project_name: str) -> Path:
         (project_dir / rel_dir).mkdir(parents=True, exist_ok=True)
     project_data_dir(project_name).mkdir(parents=True, exist_ok=True)
     return project_dir
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "service": "loka15-backend",
+        "version": APP_VERSION,
+        "started_at": BACKEND_STARTED_AT.isoformat(),
+    }
+
+
+@app.get("/version")
+def version():
+    return {
+        "service": "loka15-backend",
+        "version": APP_VERSION,
+        "python": sys.version.split()[0],
+    }
+
+
+@app.post("/shutdown")
+async def shutdown(request: Request, background_tasks: BackgroundTasks):
+    expected_token = os.environ.get("LOKA_BACKEND_SHUTDOWN_TOKEN")
+    supplied_token = request.headers.get("x-loka-shutdown-token")
+    if not expected_token or supplied_token != expected_token:
+        raise HTTPException(status_code=403, detail="Invalid shutdown token")
+
+    def stop_process():
+        time.sleep(0.2)
+        os._exit(0)
+
+    background_tasks.add_task(stop_process)
+    return {"status": "shutting_down"}
 
 # Helper function to format file sizes
 def format_size(size_bytes: int) -> str:
@@ -1748,4 +1785,5 @@ app.mount("/data", StaticFiles(directory=DATA_DIR), name="data")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="127.0.0.1", port=8000, log_level="info")
+    port = int(os.environ.get("LOKA_BACKEND_PORT") or os.environ.get("PORT") or "8000")
+    uvicorn.run("server:app", host="127.0.0.1", port=port, log_level="info")

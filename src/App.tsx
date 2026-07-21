@@ -11,7 +11,7 @@ import { AddManualFeedbackModal } from "./components/modals/AddManualFeedbackMod
 import { TimelinePanel } from "./components/timeline/TimelinePanel";
 import { ClipChatPanel } from "./components/chat/ClipChatPanel";
 import { ToastStack } from "./components/ToastStack";
-import { apiUrl, API_BASE, staticUrl } from "./lib/api";
+import { apiUrl, API_BASE, initializeApiBase, staticUrl } from "./lib/api";
 import { clipBasename } from "./lib/format";
 import type { ActiveClipChat, PreviewState, ProjectData, PromptRecord, PromptVersion, Provider, ResultState, Toast } from "./types";
 
@@ -104,6 +104,7 @@ function App() {
 
     async function fetchProjects() {
       try {
+        await initializeApiBase();
         const response = await fetch(apiUrl("/api/projects"));
         if (!response.ok) throw new Error("Failed to load project list");
         const list = (await response.json()) as string[];

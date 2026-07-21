@@ -24,17 +24,14 @@ jobs:
             platform: macos-13
             tauri_args: --target x86_64-apple-darwin
             rust_target: x86_64-apple-darwin
-            python_bin: python
           - name: macos-arm64
             platform: macos-14-arm64
             tauri_args: --target aarch64-apple-darwin
             rust_target: aarch64-apple-darwin
-            python_bin: python
           - name: windows-x64
             platform: windows-latest
             tauri_args: ""
             rust_target: ""
-            python_bin: python
 
     steps:
       - name: Checkout
@@ -55,6 +52,17 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Resolve Python path
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_OS -eq "Windows") {
+            $pythonBin = Join-Path $env:pythonLocation "python.exe"
+          } else {
+            $pythonBin = Join-Path $env:pythonLocation "bin/python"
+          }
+          "PYTHON_BIN=$pythonBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & $pythonBin --version
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -67,13 +75,16 @@ jobs:
 
       - name: Install backend dependencies
         working-directory: backend
-        run: uv pip install --python "${{ matrix.python_bin }}" -r requirements.txt -r requirements-build.txt
+        shell: pwsh
+        run: uv pip install --python "$env:PYTHON_BIN" -r requirements.txt -r requirements-build.txt
 
       - name: Run backend tests
-        run: ${{ matrix.python_bin }} -m pytest backend/tests --ignore=backend/tests/test_supabase_client.py
+        shell: pwsh
+        run: '& $env:PYTHON_BIN -m pytest backend/tests --ignore=backend/tests/test_supabase_client.py'
 
       - name: Build backend server
-        run: ${{ matrix.python_bin }} backend/scripts/build_backend_binary.py
+        shell: pwsh
+        run: '& $env:PYTHON_BIN backend/scripts/build_backend_binary.py'
 
       - name: Smoke test packaged backend
         shell: bash

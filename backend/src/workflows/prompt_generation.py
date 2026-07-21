@@ -16,6 +16,7 @@ load_dotenv()
 from src.generator.client import generate_structured
 from src.generator.media import _frame_offsets_for_duration
 from src.schemas import PromptResult
+from src.workflows.clip_context import analyze_clip_context
 from config.settings import OPENAI_REASONING_MODEL
 from scripts.generate_seedance_video import (
     SupabaseAssetUrlCache,
@@ -344,18 +345,36 @@ def generate_video_prompts_from_plan(
         os.makedirs(clip_frames_dir, exist_ok=True)
 
         contents = []
+        feedback_context_items = [
+            {"timestamp": timestamp, "remark": remark}
+            for timestamp, remark in zip(item.get("source_feedback_timestamps", []), remarks)
+        ] or [{"remark": remark} for remark in remarks]
+        clip_context = analyze_clip_context(
+            project_name=project_name,
+            clip_name=clip_name,
+            clip_occurrence=item.get("clip_occurrence"),
+            clip_start_s=clip_start_s,
+            clip_end_s=clip_end_s,
+            clip_duration_s=clip_duration,
+            assets_dir=assets_dir,
+            output_base_dir=output_base_dir,
+            client=openai_client,
+            provider="openai",
+            model=openai_model,
+            feedback_items=feedback_context_items,
+        )
 
         # 2. Extract current clip frames (1 frame/sec) for visual guidance
         current_clip_path = os.path.join(project_assets_dir, "06_clips", "_raw", clip_name)
-        current_frames = []
-        if os.path.exists(current_clip_path):
+        current_frames = clip_context.get("frame_paths") or []
+        if not current_frames and os.path.exists(current_clip_path):
             current_frames = extract_frames_per_second(current_clip_path, clip_frames_dir, clip_duration)
-            for path in current_frames[:5]: # Limit to 5 frames
-                contents.append({
-                    "type": "input_image",
-                    "image_url": _file_data_url(path),
-                    "detail": "auto"
-                })
+        for path in current_frames[:5]: # Limit to 5 frames
+            contents.append({
+                "type": "input_image",
+                "image_url": _file_data_url(path),
+                "detail": "auto"
+            })
 
         selected_assets = []
         absent_requested_subjects = [
@@ -393,6 +412,10 @@ def generate_video_prompts_from_plan(
                     "video_model_prompt": "",
                     "selected_assets": selected_assets,
                     "clip_frame_paths": current_frames,
+                    "clip_context_path": clip_context.get("clip_context_path"),
+                    "clip_segment_path": clip_context.get("clip_segment_path"),
+                    "clip_context_summary": clip_context.get("summary", ""),
+                    "clip_context_status": clip_context.get("status"),
                     "referenced_frames": [],
                     "referenced_frame_paths": [],
                     "referenced_frame_labels": [],
@@ -520,9 +543,26 @@ def generate_video_prompts_from_plan(
             is_dialogue = False
 
         # 5. Build prompt instruction text
+        clip_context_for_prompt = {
+            key: clip_context.get(key)
+            for key in [
+                "summary",
+                "visible_characters",
+                "expressions",
+                "gaze",
+                "actions",
+                "blocking",
+                "camera_framing",
+                "location",
+                "continuity_notes",
+                "uncertainty_flags",
+                "status",
+            ]
+        }
         prompt_instruction = (
             f"You are modifying the video clip: \"{clip_name}\" "
             f"(Duration: {clip_duration:.2f}s, Segment: {item.get('clip_start_tc')} to {item.get('clip_end_tc')}).\n\n"
+            f"Saved Clip Understanding Context: {json.dumps(clip_context_for_prompt, ensure_ascii=False)}\n\n"
             f"Client Feedback Remarks: {json.dumps(remarks)}\n\n"
             f"Tasks:\n"
             f"1. Analyze the provided current clip frames (Image references) showing the starting layout, camera positioning, and composition.\n"
@@ -620,6 +660,10 @@ def generate_video_prompts_from_plan(
             "video_model_prompt": video_prompt,
             "selected_assets": selected_assets,
             "clip_frame_paths": current_frames,
+            "clip_context_path": clip_context.get("clip_context_path"),
+            "clip_segment_path": clip_context.get("clip_segment_path"),
+            "clip_context_summary": clip_context.get("summary", ""),
+            "clip_context_status": clip_context.get("status"),
             "referenced_frames": [{k: v for k, v in ref.items() if k != "label"} for ref in attached_referenced_frames],
             "referenced_frame_paths": referenced_frame_paths,
             "referenced_frame_labels": [ref_frame["label"] for ref_frame in attached_referenced_frames],

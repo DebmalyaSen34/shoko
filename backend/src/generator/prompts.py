@@ -68,12 +68,33 @@ def _cluster_prompt_context(cluster_id: int, cluster: Dict[str, Any]) -> str:
         f"- {item.get('remark', '')}"
         for item in cluster.get("feedback_items", [])
     )
+    clip_context = cluster.get("clip_context") or {}
+    context_text = ""
+    if clip_context:
+        context_fields = {
+            key: clip_context.get(key)
+            for key in [
+                "summary",
+                "visible_characters",
+                "expressions",
+                "gaze",
+                "actions",
+                "blocking",
+                "camera_framing",
+                "location",
+                "continuity_notes",
+                "uncertainty_flags",
+                "status",
+            ]
+        }
+        context_text = f"CLIP_UNDERSTANDING_CONTEXT:\n{context_fields}\n"
     return (
         f"CLUSTER_ID: {cluster_id}\n"
         f"CLIP: {clip_name or 'unknown'}\n"
         f"DURATION_SECONDS: {duration_s}\n"
         f"FRAME_SIZE: {frame_size}\n"
         f"ASPECT_RATIO: {aspect_ratio}\n"
+        f"{context_text}"
         f"VIDEO_FEEDBACK:\n{feedback}\n"
         "The original video for this cluster follows when available."
     )

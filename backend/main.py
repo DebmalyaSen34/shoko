@@ -21,6 +21,7 @@ from src.workflows.feedback_parsing import parse_and_align_feedback
 from src.workflows.referenced_frames import analyze_and_extract_referenced_frames
 from src.workflows.generation_planner import plan_generation_workflow
 from src.workflows.prompt_generation import extract_audio_segment, generate_video_prompts_from_plan
+from src.workflows.clip_context import analyze_clip_context
 from src.workflows.project_setup import setup_project_workspace
 from scripts.generate_seedance_video import SupabaseAssetUrlCache, attach_prepared_segmind_payload
 
@@ -401,8 +402,27 @@ def run_pipeline(
     clusters = cluster_feedback_by_clip(feedback_to_process, video_timeline)
     video_clusters = [cluster for cluster in clusters if cluster["category"] == "video"]
     frame_size = timeline_data.get("frame_size", "unknown")
+    project_data_dir_for_output = os.path.dirname(output_json)
+    inferred_project_name = os.path.basename(project_data_dir_for_output) or "project"
+    inferred_output_base_dir = os.path.dirname(project_data_dir_for_output) or "data"
     for cluster in video_clusters:
         cluster["frame_size"] = frame_size
+        clip = cluster.get("matched_clip")
+        clip_name = clip.get("clip") if clip else None
+        if clip_name:
+            cluster["clip_context"] = analyze_clip_context(
+                project_name=inferred_project_name,
+                clip_name=clip_name,
+                clip_occurrence=cluster.get("clip_occurrence"),
+                clip_start_s=clip.get("start_s") if clip else None,
+                clip_end_s=clip.get("end_s") if clip else None,
+                clip_duration_s=clip.get("duration_s") if clip else None,
+                assets_dir=assets_dir,
+                output_base_dir=inferred_output_base_dir,
+                client=client,
+                provider=provider,
+                feedback_items=cluster.get("feedback_items", []),
+            )
         if continuity_frame_path:
             cluster["continuity_reference_frame_path"] = os.path.abspath(continuity_frame_path)
             cluster["continuity_reference_note"] = continuity_note or (
@@ -464,6 +484,10 @@ def run_pipeline(
             "initial_frame_prompt": generated.get("initial_frame_prompt", ""),
             "initial_frame_image_path": generated.get("initial_frame_image_path", ""),
             "clip_frame_paths": generated.get("clip_frame_paths", []),
+            "clip_context_path": (cluster.get("clip_context") or {}).get("clip_context_path"),
+            "clip_segment_path": (cluster.get("clip_context") or {}).get("clip_segment_path"),
+            "clip_context_summary": (cluster.get("clip_context") or {}).get("summary", ""),
+            "clip_context_status": (cluster.get("clip_context") or {}).get("status"),
             "video_model_prompt": generated.get("video_model_prompt"),
             "explanation": generated.get("explanation"),
             "ratio": "9:16",

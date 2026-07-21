@@ -23,6 +23,7 @@ from src.workflows.project_setup import setup_project_workspace
 from src.workflows.timeline_extraction import extract_timeline_from_project
 from src.workflows.feedback_parsing import parse_and_align_feedback
 from src.workflows.prompt_generation import extract_last_frame, get_video_duration
+from src.workflows.clip_context import analyze_clip_context, clip_context_dir
 from src.logging_utils import log_event
 from src.chat_memory import ChatMemoryStore
 
@@ -585,6 +586,15 @@ def build_clip_media_gallery(context: dict) -> list[dict]:
     for frame_path in clip_frame_paths:
         add_chat_media_item(media, label="Extracted clip frame", source="clip_frames", path=frame_path, media_type="image")
 
+    if latest_version.get("clip_segment_path"):
+        add_chat_media_item(
+            media,
+            label="Analyzed clip segment",
+            source="clip_context",
+            path=latest_version.get("clip_segment_path"),
+            media_type="video",
+        )
+
     referenced_frames = list(latest_version.get("referenced_frames") or [])
     for item in feedback.get("feedback_items", []):
         referenced_frames.extend(item.get("referenced_frames") or [])
@@ -647,6 +657,85 @@ def latest_prompt_version(prompt: Optional[dict]) -> Optional[dict]:
     return None
 
 
+def load_clip_context(project_name: str, clip: dict, clip_index: int) -> Optional[dict]:
+    clip_name = clip.get("clip")
+    if not clip_name:
+        return None
+    context_path = Path(clip_context_dir(str(DATA_DIR), project_name, clip_name, clip_index)) / "clip_context.json"
+    if not context_path.exists():
+        return None
+    try:
+        with context_path.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+        if isinstance(data, dict):
+            return data
+    except Exception as exc:
+        print(f"Warning: Failed to load clip context {context_path}: {exc}")
+    return None
+
+
+def wants_clip_summary_or_analysis(text: str) -> bool:
+    lower = text.lower()
+    intent_words = {"summarize", "summary", "describe", "understand", "analysis", "analyze", "what happens", "what is happening"}
+    clip_words = {"clip", "shot", "scene", "video"}
+    return any(word in lower for word in intent_words) and any(word in lower for word in clip_words)
+
+
+def summarize_clip_context(clip_context: dict) -> str:
+    if not clip_context:
+        return "This clip has not been analyzed yet."
+    lines = []
+    summary = clip_context.get("summary")
+    if summary:
+        lines.append(summary)
+    for label, key in [
+        ("Visible characters", "visible_characters"),
+        ("Expressions", "expressions"),
+        ("Gaze", "gaze"),
+        ("Actions", "actions"),
+        ("Blocking", "blocking"),
+        ("Continuity notes", "continuity_notes"),
+        ("Uncertainty", "uncertainty_flags"),
+    ]:
+        values = clip_context.get(key) or []
+        if values:
+            lines.append(f"{label}: " + "; ".join(str(value) for value in values))
+    if clip_context.get("camera_framing"):
+        lines.append(f"Camera/framing: {clip_context.get('camera_framing')}")
+    if clip_context.get("location"):
+        lines.append(f"Location: {clip_context.get('location')}")
+    return "\n".join(lines) if lines else "The saved clip context has no summary details yet."
+
+
+def ensure_clip_context_for_chat(project_name: str, context: dict, provider: str) -> tuple[Optional[dict], Optional[str]]:
+    existing = context.get("clip_context")
+    if existing:
+        return existing, None
+    if provider != "openai":
+        return None, "Clip analysis on demand currently requires OpenAI."
+    if not os.environ.get("OPENAI_API_KEY"):
+        return None, "Clip analysis has not been run yet, and OPENAI_API_KEY is not configured."
+
+    from openai import OpenAI
+
+    clip = context.get("clip") or {}
+    clip_context = analyze_clip_context(
+        project_name=project_name,
+        clip_name=clip.get("clip"),
+        clip_occurrence=context.get("clip_index"),
+        clip_start_s=clip.get("start_s"),
+        clip_end_s=clip.get("end_s"),
+        clip_duration_s=clip.get("duration_s"),
+        assets_dir=str(ASSETS_DIR),
+        output_base_dir=str(DATA_DIR),
+        client=OpenAI(api_key=os.environ.get("OPENAI_API_KEY")),
+        provider="openai",
+        feedback_items=(context.get("feedback") or {}).get("feedback_items", []),
+    )
+    context["clip_context"] = clip_context
+    return clip_context, None
+
+
 def build_clip_chat_context(project_name: str, clip_index: int, query: str = "") -> dict:
     project_data = get_project_data(project_name)
     timeline = project_data.get("timeline", [])
@@ -657,6 +746,7 @@ def build_clip_chat_context(project_name: str, clip_index: int, query: str = "")
     feedback = matching_feedback(project_data, clip, clip_index)
     prompt = matching_prompt(project_data, clip, clip_index)
     latest_version = latest_prompt_version(prompt)
+    clip_context = load_clip_context(project_name, clip, clip_index)
     store = memory_store(project_name)
     key = clip_chat_key(clip.get("clip", ""), clip_index)
 
@@ -678,6 +768,7 @@ def build_clip_chat_context(project_name: str, clip_index: int, query: str = "")
         "feedback": feedback,
         "prompt": prompt,
         "latest_version": latest_version,
+        "clip_context": clip_context,
         "assets": project_data.get("assets", {}),
         "memory": store.for_clip(key, query=query),
     }
@@ -713,6 +804,7 @@ def compact_chat_context(context: dict) -> str:
             "selected_assets": selected_assets,
             "latest_video_prompt": latest_version.get("video_model_prompt"),
             "latest_prompt_explanation": latest_version.get("explanation"),
+            "clip_context": context.get("clip_context"),
             "quality_report": latest_version.get("quality_report"),
             "asset_library_sample": assets_by_category,
             "project_memory": project_memory,
@@ -870,6 +962,12 @@ def fallback_chat_reply(message: str, context: dict) -> str:
     memory = context.get("memory") or {}
     lower = message.lower()
 
+    if wants_clip_summary_or_analysis(message):
+        if context.get("clip_context"):
+            return summarize_clip_context(context.get("clip_context"))
+        if context.get("clip_context_error"):
+            return context.get("clip_context_error")
+        return "This clip has not been analyzed yet. Ask me to analyze the clip with OpenAI, or run the workflow first."
     if "memory" in lower:
         memory_count = len(memory.get("clip", [])) + len(memory.get("project", []))
         return (
@@ -906,6 +1004,13 @@ def fallback_chat_reply(message: str, context: dict) -> str:
 
 
 async def generate_chat_reply(provider: str, message: str, context: dict, messages: list[dict]) -> str:
+    if wants_clip_summary_or_analysis(message):
+        if context.get("clip_context"):
+            return summarize_clip_context(context.get("clip_context"))
+        if context.get("clip_context_error"):
+            return context.get("clip_context_error")
+        return "This clip has not been analyzed yet. Ask me to analyze the clip with OpenAI, or run the workflow first."
+
     system_prompt = (
         "You are Loka15 Studio's clip assistant inside a video feedback and generation tool. "
         "Answer as a practical editor-facing collaborator. Use only the supplied context. "
@@ -1059,6 +1164,10 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
         "clip_start_s",
         "clip_end_s",
         "clip_duration_s",
+        "clip_context_path",
+        "clip_segment_path",
+        "clip_context_summary",
+        "clip_context_status",
     ]
 
     def copy_handoff_fields(target: dict, source: dict) -> None:
@@ -1424,6 +1533,11 @@ async def post_clip_chat(project_name: str, request: ClipChatRequest):
 
     user_message = make_chat_message("user", message_text)
     clip_messages.append(user_message)
+
+    if wants_clip_summary_or_analysis(message_text):
+        _clip_context, analysis_error = ensure_clip_context_for_chat(project_name, context, request.provider)
+        if analysis_error:
+            context["clip_context_error"] = analysis_error
 
     assistant_text = await generate_chat_reply(request.provider, message_text, context, clip_messages)
     memory_notes = extract_memory_notes(message_text, assistant_text)

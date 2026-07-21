@@ -470,6 +470,84 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
                 output_base_dir=self.output_base_dir
             )
 
+    @mock.patch("src.workflows.prompt_generation.analyze_clip_context")
+    @mock.patch("src.workflows.prompt_generation.generate_structured")
+    @mock.patch("src.workflows.prompt_generation._file_data_url")
+    @mock.patch("src.workflows.prompt_generation.extract_frames_per_second")
+    def test_generate_video_prompts_includes_saved_clip_context(
+        self, mock_frames_fps, mock_file_url, mock_gen_structured, mock_clip_context
+    ):
+        local_plan = [
+            {
+                "clip_used": "clip2.mp4",
+                "previous_clip": None,
+                "clip_start_tc": "00:00:10:00",
+                "clip_end_tc": "00:00:15:00",
+                "clip_start_s": 10.0,
+                "clip_end_s": 15.0,
+                "generation_type": "simple",
+                "classification_reasoning": "Mother expression edit.",
+                "audio_used": None,
+                "audio_path": None,
+                "is_dialogue_active": False,
+                "characters_present": ["Mother"],
+                "location": None,
+                "requires_previous_clip_continuity": False,
+                "remarks_to_process": ["Have mother begin to get angry and look down."],
+                "source_feedback_timestamps": ["00:46"],
+            }
+        ]
+        local_plan_path = os.path.join(self.test_dir, "context_plan.json")
+        with open(local_plan_path, "w", encoding="utf-8") as file:
+            json.dump(local_plan, file)
+
+        mock_clip_context.return_value = {
+            "summary": "Mother is looking into the camera without emotion.",
+            "visible_characters": ["Mother"],
+            "expressions": ["neutral"],
+            "gaze": ["looking into camera"],
+            "actions": [],
+            "blocking": ["Mother in foreground"],
+            "camera_framing": "close shot",
+            "location": "interior",
+            "continuity_notes": [],
+            "uncertainty_flags": [],
+            "status": "video_and_frames",
+            "clip_context_path": os.path.join(self.output_base_dir, "context.json"),
+            "clip_segment_path": os.path.join(self.output_base_dir, "segment.mp4"),
+            "frame_paths": ["/dummy/context_frame.jpg"],
+        }
+        mock_file_url.return_value = "data:image/jpeg;base64,frame"
+        mock_frames_fps.return_value = ["/dummy/fallback_frame.jpg"]
+
+        def mock_gen_side_effect(*args, **kwargs):
+            instruction_text = kwargs.get("contents", [])[-1]
+            self.assertIn("Saved Clip Understanding Context", instruction_text)
+            self.assertIn("Mother is looking into the camera without emotion", instruction_text)
+            self.assertLess(
+                instruction_text.index("Saved Clip Understanding Context"),
+                instruction_text.index("Client Feedback Remarks"),
+            )
+            return {
+                "video_model_prompt": "Mother shifts from neutral camera gaze to anger and looks down.",
+                "explanation": "Used saved context.",
+            }
+        mock_gen_structured.side_effect = mock_gen_side_effect
+
+        result_path = generate_video_prompts_from_plan(
+            plan_json_path=local_plan_path,
+            project_name="test_prompt_project",
+            assets_dir=self.assets_dir,
+            openai_client=mock.MagicMock(),
+            output_base_dir=self.output_base_dir,
+        )
+
+        with open(result_path, "r", encoding="utf-8") as file:
+            prompts_data = json.load(file)
+
+        self.assertEqual("video_and_frames", prompts_data[0]["clip_context_status"])
+        self.assertTrue(prompts_data[0]["clip_segment_path"].endswith("segment.mp4"))
+
     @mock.patch("src.workflows.prompt_generation.generate_structured")
     @mock.patch("src.workflows.prompt_generation._file_data_url")
     @mock.patch("src.workflows.prompt_generation.extract_frames_per_second")

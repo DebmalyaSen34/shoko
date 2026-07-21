@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
@@ -255,3 +256,93 @@ def test_build_clip_media_gallery_includes_clip_assets_and_reference_frames(tmp_
     assert media[0]["url"] == "/assets/project-a/01_characters/vir.png"
     assert media[1]["url"] == "/data/project-a/video_frames/frame_001.jpg"
     assert media[2]["label"] == "Referenced frame 00:04"
+
+
+def test_chat_summarizes_saved_clip_context(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    assets_dir = tmp_path / "assets"
+    project_dir = data_dir / "project-a"
+    context_dir = project_dir / "analysis" / "clip_context" / "0_clip"
+    context_dir.mkdir(parents=True)
+    project_dir.mkdir(exist_ok=True)
+    (project_dir / "timeline.json").write_text(
+        json.dumps({
+            "video_timeline": [
+                {
+                    "clip": "clip.mp4",
+                    "start_tc": "00:00",
+                    "end_tc": "00:02",
+                    "start_s": 0,
+                    "end_s": 2,
+                    "duration_s": 2,
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+    (context_dir / "clip_context.json").write_text(
+        json.dumps({
+            "status": "video_and_frames",
+            "summary": "Mother looks into the camera without emotion.",
+            "visible_characters": ["Mother"],
+            "gaze": ["toward camera"],
+            "actions": ["standing still"],
+            "frame_paths": [],
+        }),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+
+    context = server.build_clip_chat_context("project-a", 0, query="summarize this clip")
+    reply = server.fallback_chat_reply("summarize this clip", context)
+
+    assert "Mother looks into the camera without emotion." in reply
+    assert "Visible characters: Mother" in reply
+    assert "Gaze: toward camera" in reply
+
+
+def test_chat_summary_request_runs_clip_context_analysis_when_missing(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    assets_dir = tmp_path / "assets"
+    project_dir = data_dir / "project-a"
+    project_dir.mkdir(parents=True)
+    (project_dir / "timeline.json").write_text(
+        json.dumps({
+            "video_timeline": [
+                {
+                    "clip": "clip.mp4",
+                    "start_tc": "00:00",
+                    "end_tc": "00:02",
+                    "start_s": 0,
+                    "end_s": 2,
+                    "duration_s": 2,
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    with (
+        mock.patch("server.OpenAI", create=True) as openai_cls,
+        mock.patch("server.analyze_clip_context") as analyze,
+    ):
+        analyze.return_value = {
+            "status": "frames_only",
+            "summary": "A woman stands in a close shot.",
+            "visible_characters": ["Woman"],
+            "frame_paths": [],
+        }
+        context = server.build_clip_chat_context("project-a", 0, query="summarize this clip")
+        clip_context, error = server.ensure_clip_context_for_chat("project-a", context, "openai")
+
+    assert error is None
+    assert clip_context["summary"] == "A woman stands in a close shot."
+    assert context["clip_context"] == clip_context
+    analyze.assert_called_once()
+    assert analyze.call_args.kwargs["output_base_dir"] == str(data_dir)

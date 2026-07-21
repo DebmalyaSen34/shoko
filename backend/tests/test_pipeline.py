@@ -161,6 +161,168 @@ class ClusteredPipelineTests(unittest.TestCase):
             with open(output_json, "r", encoding="utf-8") as file:
                 self.assertEqual([], json.load(file))
 
+    def test_index_run_expands_to_same_group_video_siblings(self):
+        feedback = [
+            {
+                "timestamp": "00:45",
+                "category": "video",
+                "remark": "Show Vir grasping his mother's hand.",
+                "group_id": "output23::7",
+                "clip_used": "output (23).mp4",
+                "clip_occurrence": 7,
+                "sibling_raw_indexes": [1],
+            },
+            {
+                "timestamp": "00:46",
+                "category": "video",
+                "remark": "Have mother begin to get angry and look down.",
+                "group_id": "output23::7",
+                "clip_used": "output (23).mp4",
+                "clip_occurrence": 7,
+                "sibling_raw_indexes": [0],
+            },
+        ]
+        timeline = {
+            "video_timeline": [
+                {
+                    "clip": "output (23).mp4",
+                    "start_s": 44.0,
+                    "end_s": 48.0,
+                    "start_tc": "00:00:44:00",
+                    "end_tc": "00:00:48:00",
+                    "duration_s": 4.0,
+                }
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            feedback_path = os.path.join(temp_dir, "feedback.json")
+            timeline_path = os.path.join(temp_dir, "timeline.json")
+            output_json = os.path.join(temp_dir, "output", "result.json")
+            output_report = os.path.join(temp_dir, "output", "report.md")
+            with open(feedback_path, "w", encoding="utf-8") as file:
+                json.dump(feedback, file)
+            with open(timeline_path, "w", encoding="utf-8") as file:
+                json.dump(timeline, file)
+
+            with (
+                mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}),
+                mock.patch("main.genai.Client", return_value=object()),
+                mock.patch("main.scan_visual_reference_assets", return_value=[]),
+                mock.patch(
+                    "main.generate_video_prompts_batch",
+                    return_value=[
+                        {
+                            "cluster_id": 0,
+                            "selected_assets": [],
+                            "prompt_format": "plain_text",
+                            "reference_legend": "",
+                            "video_model_prompt": "combined prompt",
+                            "explanation": "combined",
+                            "status": "success",
+                        }
+                    ],
+                ) as batch_generator,
+                mock.patch("main.write_markdown_report"),
+            ):
+                main.run_pipeline(
+                    feedback_path=feedback_path,
+                    timeline_path=timeline_path,
+                    assets_dir=temp_dir,
+                    output_json=output_json,
+                    output_report=output_report,
+                    index=1,
+                )
+
+            passed_clusters = batch_generator.call_args.kwargs["clusters"]
+            self.assertEqual(1, len(passed_clusters))
+            self.assertEqual(
+                [
+                    "Show Vir grasping his mother's hand.",
+                    "Have mother begin to get angry and look down.",
+                ],
+                [item["remark"] for item in passed_clusters[0]["feedback_items"]],
+            )
+
+    def test_index_run_does_not_pull_audio_only_sibling_into_video_cluster(self):
+        feedback = [
+            {
+                "timestamp": "00:45",
+                "category": "video",
+                "remark": "Show Vir grasping his mother's hand.",
+                "group_id": "output23::7",
+                "clip_used": "output (23).mp4",
+                "clip_occurrence": 7,
+                "sibling_raw_indexes": [1],
+            },
+            {
+                "timestamp": "00:46",
+                "category": "audio",
+                "remark": "Make the line louder.",
+                "group_id": "output23::7",
+                "clip_used": "output (23).mp4",
+                "clip_occurrence": 7,
+                "sibling_raw_indexes": [0],
+            },
+        ]
+        timeline = {
+            "video_timeline": [
+                {
+                    "clip": "output (23).mp4",
+                    "start_s": 44.0,
+                    "end_s": 48.0,
+                    "start_tc": "00:00:44:00",
+                    "end_tc": "00:00:48:00",
+                    "duration_s": 4.0,
+                }
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            feedback_path = os.path.join(temp_dir, "feedback.json")
+            timeline_path = os.path.join(temp_dir, "timeline.json")
+            output_json = os.path.join(temp_dir, "output", "result.json")
+            output_report = os.path.join(temp_dir, "output", "report.md")
+            with open(feedback_path, "w", encoding="utf-8") as file:
+                json.dump(feedback, file)
+            with open(timeline_path, "w", encoding="utf-8") as file:
+                json.dump(timeline, file)
+
+            with (
+                mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}),
+                mock.patch("main.genai.Client", return_value=object()),
+                mock.patch("main.scan_visual_reference_assets", return_value=[]),
+                mock.patch(
+                    "main.generate_video_prompts_batch",
+                    return_value=[
+                        {
+                            "cluster_id": 0,
+                            "selected_assets": [],
+                            "prompt_format": "plain_text",
+                            "reference_legend": "",
+                            "video_model_prompt": "video only prompt",
+                            "explanation": "video only",
+                            "status": "success",
+                        }
+                    ],
+                ) as batch_generator,
+                mock.patch("main.write_markdown_report"),
+            ):
+                main.run_pipeline(
+                    feedback_path=feedback_path,
+                    timeline_path=timeline_path,
+                    assets_dir=temp_dir,
+                    output_json=output_json,
+                    output_report=output_report,
+                    index=0,
+                )
+
+            passed_clusters = batch_generator.call_args.kwargs["clusters"]
+            self.assertEqual(
+                ["Show Vir grasping his mother's hand."],
+                [item["remark"] for item in passed_clusters[0]["feedback_items"]],
+            )
+
     def test_pipeline_can_initialize_openai_provider(self):
         feedback = [
             {"timestamp": "00:01", "category": "video", "remark": "video one"},

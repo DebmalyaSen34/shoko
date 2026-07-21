@@ -205,13 +205,24 @@ def ensure_raw_feedback(project_name: str) -> str:
         aligned_data = json.load(f)
         
     raw_items = []
-    for group in aligned_data:
+    for group_index, group in enumerate(aligned_data):
+        group_id = f"{group.get('clip_used') or 'unmatched'}::{group.get('clip_occurrence', group_index)}"
+        group_start = len(raw_items)
         for item in group.get("feedback_items", []):
             raw_items.append({
                 "timestamp": item.get("timestamp"),
                 "category": item.get("category", "video"),
-                "remark": item.get("remark")
+                "remark": item.get("remark"),
+                "group_id": group_id,
+                "clip_used": group.get("clip_used"),
+                "clip_occurrence": group.get("clip_occurrence"),
             })
+
+        group_indexes = list(range(group_start, len(raw_items)))
+        for raw_index in group_indexes:
+            raw_items[raw_index]["sibling_raw_indexes"] = [
+                other_index for other_index in group_indexes if other_index != raw_index
+            ]
             
     with raw_path.open("w", encoding="utf-8") as f:
         json.dump(raw_items, f, indent=2, ensure_ascii=False)

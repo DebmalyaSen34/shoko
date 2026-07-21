@@ -192,5 +192,80 @@ class TestGenerationPlannerWorkflow(unittest.TestCase):
                 output_base_dir=self.output_base_dir
             )
 
+    @mock.patch("src.workflows.generation_planner.generate_structured")
+    def test_absent_requested_subject_forces_complex_compound_plan(self, mock_gen_structured):
+        mock_feedback = [
+            {
+                "clip_used": "output (23).mp4",
+                "clip_occurrence": 7,
+                "previous_clip": "previous.mp4",
+                "clip_start_tc": "00:00:44:00",
+                "clip_end_tc": "00:00:48:00",
+                "clip_start_s": 44.0,
+                "clip_end_s": 48.0,
+                "audio_used": None,
+                "feedback_items": [
+                    {
+                        "timestamp": "00:45",
+                        "category": "video",
+                        "remark": "Show Vir grasping his mother's hand and acting innocent."
+                    },
+                    {
+                        "timestamp": "00:46",
+                        "category": "video",
+                        "remark": "Have mother begin to get angry and look down."
+                    }
+                ]
+            }
+        ]
+        with open(self.feedback_path, "w", encoding="utf-8") as file:
+            json.dump(mock_feedback, file)
+
+        mock_gen_structured.return_value = {
+            "plans": [
+                {
+                    "clip_used": "output (23).mp4",
+                    "previous_clip": "previous.mp4",
+                    "clip_start_tc": "00:00:44:00",
+                    "clip_end_tc": "00:00:48:00",
+                    "clip_start_s": 44.0,
+                    "clip_end_s": 48.0,
+                    "generation_type": "simple",
+                    "classification_reasoning": "Mother expression edit.",
+                    "audio_used": None,
+                    "is_dialogue_active": False,
+                    "characters_present": ["Mother", "Vir"],
+                    "location": None,
+                    "requires_previous_clip_continuity": False,
+                    "remarks_to_process": ["Show Vir grasping his mother's hand and acting innocent."],
+                    "absent_requested_subjects": []
+                }
+            ]
+        }
+
+        result_path = plan_generation_workflow(
+            feedback_json_path=self.feedback_path,
+            project_name="test_plan_project",
+            openai_client=mock.MagicMock(),
+            output_base_dir=self.output_base_dir,
+        )
+
+        with open(result_path, "r", encoding="utf-8") as file:
+            plan_data = json.load(file)
+
+        self.assertEqual(1, len(plan_data))
+        self.assertEqual("complex", plan_data[0]["generation_type"])
+        self.assertEqual(["Vir"], plan_data[0]["absent_requested_subjects"])
+        self.assertIn("Vir", plan_data[0]["characters_present"])
+        self.assertTrue(plan_data[0]["compound_feedback"])
+        self.assertEqual(["00:45", "00:46"], plan_data[0]["source_feedback_timestamps"])
+        self.assertEqual(
+            [
+                "Show Vir grasping his mother's hand and acting innocent.",
+                "Have mother begin to get angry and look down.",
+            ],
+            plan_data[0]["remarks_to_process"],
+        )
+
 if __name__ == "__main__":
     unittest.main()

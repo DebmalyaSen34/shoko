@@ -1,4 +1,5 @@
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -172,6 +173,47 @@ def test_upload_feedback_parses_and_aligns(tmp_path, monkeypatch):
     parse_mock.assert_called_once()
 
 
+def test_ensure_raw_feedback_preserves_group_context(tmp_path, monkeypatch):
+    data_dir = tmp_path / "app-storage" / "data"
+    project_dir = data_dir / "project-a"
+    project_dir.mkdir(parents=True)
+    (project_dir / "feedback.json").write_text(
+        json.dumps(
+            [
+                {
+                    "clip_used": "output (23).mp4",
+                    "clip_occurrence": 7,
+                    "feedback_items": [
+                        {
+                            "timestamp": "00:45",
+                            "category": "video",
+                            "remark": "Show Vir grasping his mother's hand.",
+                        },
+                        {
+                            "timestamp": "00:46",
+                            "category": "video",
+                            "remark": "Have mother look down.",
+                        },
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    monkeypatch.chdir(tmp_path)
+
+    raw_path = Path(server.ensure_raw_feedback("project-a"))
+
+    raw_items = json.loads(raw_path.read_text(encoding="utf-8"))
+    assert raw_items[0]["group_id"] == "output (23).mp4::7"
+    assert raw_items[0]["clip_used"] == "output (23).mp4"
+    assert raw_items[0]["clip_occurrence"] == 7
+    assert raw_items[0]["sibling_raw_indexes"] == [1]
+    assert raw_items[1]["sibling_raw_indexes"] == [0]
+
+
 def test_add_manual_feedback(tmp_path, monkeypatch):
     data_dir = tmp_path / "app-storage" / "data"
     project_dir = data_dir / "project-a"
@@ -211,5 +253,4 @@ def test_add_manual_feedback(tmp_path, monkeypatch):
     assert data[0]["feedback_items"][0]["remark"] == "This is a manually added feedback remark."
     assert data[0]["feedback_items"][0]["category"] == "video"
     assert data[0]["feedback_items"][0]["timestamp"] == "00:12"
-
 

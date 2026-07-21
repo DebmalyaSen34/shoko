@@ -470,5 +470,122 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
                 output_base_dir=self.output_base_dir
             )
 
+    @mock.patch("src.workflows.prompt_generation.generate_structured")
+    @mock.patch("src.workflows.prompt_generation._file_data_url")
+    @mock.patch("src.workflows.prompt_generation.extract_frames_per_second")
+    @mock.patch("src.workflows.prompt_generation.extract_audio_segment")
+    def test_absent_requested_character_uses_character_sheet(
+        self, mock_extract_audio, mock_frames_fps, mock_file_url, mock_gen_structured
+    ):
+        local_plan = [
+            {
+                "clip_used": "clip2.mp4",
+                "previous_clip": None,
+                "clip_start_tc": "00:00:10:00",
+                "clip_end_tc": "00:00:15:00",
+                "clip_start_s": 10.0,
+                "clip_end_s": 15.0,
+                "generation_type": "complex",
+                "classification_reasoning": "Vir must be added to the shot.",
+                "audio_used": None,
+                "audio_path": None,
+                "is_dialogue_active": False,
+                "characters_present": ["Mother"],
+                "location": None,
+                "requires_previous_clip_continuity": False,
+                "remarks_to_process": ["Show Vir grasping his mother's hand."],
+                "compound_feedback": True,
+                "source_feedback_timestamps": ["00:45", "00:46"],
+                "absent_requested_subjects": ["Vir"],
+            }
+        ]
+        local_plan_path = os.path.join(self.test_dir, "absent_plan.json")
+        with open(local_plan_path, "w", encoding="utf-8") as file:
+            json.dump(local_plan, file)
+
+        mock_extract_audio.return_value = False
+        mock_file_url.return_value = "data:image/png;base64,dummy_data"
+        mock_frames_fps.return_value = ["/dummy/frame1.jpg"]
+
+        def mock_gen_side_effect(*args, **kwargs):
+            instruction_text = kwargs.get("contents", [])[-1]
+            self.assertIn("explicitly requested by feedback but are not present", instruction_text)
+            self.assertIn("Vir", instruction_text)
+            self.assertIn("compound same-clip edit", instruction_text)
+            return {
+                "video_model_prompt": "Vir enters the shot using image 2 identity, grasps his mother's hand.",
+                "explanation": "Used Vir sheet for the added subject.",
+            }
+        mock_gen_structured.side_effect = mock_gen_side_effect
+
+        result_path = generate_video_prompts_from_plan(
+            plan_json_path=local_plan_path,
+            project_name="test_prompt_project",
+            assets_dir=self.assets_dir,
+            openai_client=mock.MagicMock(),
+            output_base_dir=self.output_base_dir,
+        )
+
+        with open(result_path, "r", encoding="utf-8") as file:
+            prompts_data = json.load(file)
+
+        self.assertEqual(["Vir"], prompts_data[0]["absent_requested_subjects"])
+        self.assertEqual([], prompts_data[0]["missing_required_subject_sheets"])
+        self.assertIn(self.vir_sheet, prompts_data[0]["selected_assets"])
+        self.assertFalse(prompts_data[0]["prompt_generation_review_required"])
+        self.assertEqual("success", prompts_data[0]["status"])
+
+    @mock.patch("src.workflows.prompt_generation.generate_structured")
+    @mock.patch("src.workflows.prompt_generation._file_data_url")
+    @mock.patch("src.workflows.prompt_generation.extract_frames_per_second")
+    @mock.patch("src.workflows.prompt_generation.extract_audio_segment")
+    def test_missing_absent_character_sheet_marks_review_needed(
+        self, mock_extract_audio, mock_frames_fps, mock_file_url, mock_gen_structured
+    ):
+        os.remove(self.vir_sheet)
+        local_plan = [
+            {
+                "clip_used": "clip2.mp4",
+                "previous_clip": None,
+                "clip_start_tc": "00:00:10:00",
+                "clip_end_tc": "00:00:15:00",
+                "clip_start_s": 10.0,
+                "clip_end_s": 15.0,
+                "generation_type": "complex",
+                "classification_reasoning": "Vir must be added to the shot.",
+                "audio_used": None,
+                "audio_path": None,
+                "is_dialogue_active": False,
+                "characters_present": ["Vir"],
+                "location": None,
+                "requires_previous_clip_continuity": False,
+                "remarks_to_process": ["Show Vir grasping his mother's hand."],
+                "absent_requested_subjects": ["Vir"],
+            }
+        ]
+        local_plan_path = os.path.join(self.test_dir, "missing_sheet_plan.json")
+        with open(local_plan_path, "w", encoding="utf-8") as file:
+            json.dump(local_plan, file)
+
+        mock_extract_audio.return_value = False
+        mock_file_url.return_value = "data:image/png;base64,dummy_data"
+        mock_frames_fps.return_value = ["/dummy/frame1.jpg"]
+
+        result_path = generate_video_prompts_from_plan(
+            plan_json_path=local_plan_path,
+            project_name="test_prompt_project",
+            assets_dir=self.assets_dir,
+            openai_client=mock.MagicMock(),
+            output_base_dir=self.output_base_dir,
+        )
+
+        with open(result_path, "r", encoding="utf-8") as file:
+            prompts_data = json.load(file)
+
+        mock_gen_structured.assert_not_called()
+        self.assertEqual("warning", prompts_data[0]["status"])
+        self.assertTrue(prompts_data[0]["prompt_generation_review_required"])
+        self.assertEqual(["Vir"], prompts_data[0]["missing_required_subject_sheets"])
+
 if __name__ == "__main__":
     unittest.main()

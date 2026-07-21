@@ -4,6 +4,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import json
+import re
 from pydantic import BaseModel, Field
 from typing import List, Literal, Optional
 from dotenv import load_dotenv
@@ -38,9 +39,92 @@ class SegmentPlanItem(BaseModel):
     requires_previous_clip_continuity: bool = Field(..., description="True if this segment visually depends on the previous shot's actions or setting for continuity.")
     previous_clip_dependency_reason: Optional[str] = Field(None, description="Reason for previous clip continuity dependency if required.")
     remarks_to_process: List[str] = Field(..., description="List of visual remarks to be processed for this clip.")
+    compound_feedback: bool = Field(False, description="True when this plan item processes multiple compatible feedback remarks together.")
+    source_feedback_timestamps: List[Optional[str]] = Field(default_factory=list, description="Source feedback timestamps included in this plan item.")
+    absent_requested_subjects: List[str] = Field(default_factory=list, description="Explicitly requested characters that are not visible in the current clip and require reference sheets.")
 
 class GenerationPlan(BaseModel):
     plans: List[SegmentPlanItem]
+
+
+def _is_visual_category(category: str) -> bool:
+    return (category or "video").lower() in {"video", "both"}
+
+
+def _segment_key(item: dict) -> tuple:
+    return (item.get("clip_used"), item.get("clip_start_s"))
+
+
+def _feedback_metadata_by_segment(feedback_data: list[dict]) -> dict[tuple, dict]:
+    metadata = {}
+    for segment in feedback_data:
+        visual_items = [
+            item for item in segment.get("feedback_items", [])
+            if _is_visual_category(item.get("category", "video"))
+        ]
+        metadata[_segment_key(segment)] = {
+            "remarks": [item.get("remark", "") for item in visual_items if item.get("remark")],
+            "timestamps": [item.get("timestamp") for item in visual_items],
+            "compound": len(visual_items) > 1,
+            "clip_occurrence": segment.get("clip_occurrence"),
+        }
+    return metadata
+
+
+def _coalesce_plan_items(plans_list: list[dict]) -> list[dict]:
+    coalesced = {}
+    order = []
+    for item in plans_list:
+        key = _segment_key(item)
+        if key not in coalesced:
+            coalesced[key] = item
+            order.append(key)
+            continue
+
+        existing = coalesced[key]
+        existing["generation_type"] = (
+            "complex"
+            if "complex" in {existing.get("generation_type"), item.get("generation_type")}
+            else existing.get("generation_type") or item.get("generation_type")
+        )
+        for field in ("remarks_to_process", "characters_present", "source_feedback_timestamps", "absent_requested_subjects"):
+            merged = []
+            for value in existing.get(field, []) + item.get(field, []):
+                if value not in merged:
+                    merged.append(value)
+            existing[field] = merged
+        if not existing.get("location") and item.get("location"):
+            existing["location"] = item.get("location")
+        existing["compound_feedback"] = True
+    return [coalesced[key] for key in order]
+
+
+def _infer_explicitly_requested_subjects(remarks: list[str], characters: list[str]) -> list[str]:
+    action_pattern = re.compile(r"\b(show|add|bring|introduce|include|insert|appear|enters?|comes? in)\b")
+    clauses = [
+        clause.strip().lower()
+        for remark in remarks
+        for clause in re.split(r"[.;\n]", remark or "")
+        if clause.strip()
+    ]
+
+    requested = []
+    for clause in clauses:
+        action_match = action_pattern.search(clause)
+        if not action_match:
+            continue
+        candidates = []
+        for character in characters:
+            if not character:
+                continue
+            character_match = re.search(rf"\b{re.escape(character.lower())}\b", clause[action_match.end():])
+            if character_match:
+                candidates.append((character_match.start(), character))
+        if candidates:
+            _position, character = min(candidates, key=lambda item: item[0])
+            if character not in requested:
+                requested.append(character)
+    return requested
 
 
 # 2. Planning Function
@@ -82,6 +166,8 @@ def plan_generation_workflow(
         "- 'simple': If the feedback involves simple visual edits, post-processing camera moves (e.g., 'zoom in reaction', 'crop from floor'), simple timing, or transitions, without requiring character/location sheet assets.\n"
         "- 'none': If the segment has no visual edits (e.g., only audio/dubbing remarks are present, or there are no visual changes requested).\n\n"
         "Identify context requirements such as characters mentioned, locations mentioned, and whether there is visual continuity dependency on the previous clip.\n"
+        "When one input segment contains multiple compatible visual remarks for the same clip, return one plan item that processes those visual remarks together in timestamp order.\n"
+        "If a remark explicitly asks to show, add, bring in, or involve a named character who is not visible in the current clip context, list that character in absent_requested_subjects, include the character in characters_present, and classify the segment as complex because a character sheet is required.\n"
         "Also, detect whether there is active dialogue or spoken speech in this segment based on: (1) if audio_used contains 'dub', 'dialogue', 'vo', or 'voice'; (2) if the feedback remarks mention speech pronunciation, dialog line changes, or quotes; or (3) if the audio_used is present. If active speech/dialogue is detected, set is_dialogue_active to true."
     )
 
@@ -97,7 +183,8 @@ def plan_generation_workflow(
         system_instruction=system_instruction
     )
 
-    plans_list = structured_response.get("plans", [])
+    plans_list = _coalesce_plan_items(structured_response.get("plans", []))
+    segment_metadata = _feedback_metadata_by_segment(feedback_data)
 
     # 3. Post-Processing: Sort plans chronologically by clip_start_s
     # If clip_start_s is None (e.g., unmatched segments), we place them at the end.
@@ -133,6 +220,35 @@ def plan_generation_workflow(
 
     assets_audio_dir = os.path.join(os.getcwd(), "assets", project_name, "04_audio")
     for item in sorted_plans:
+        metadata = segment_metadata.get(_segment_key(item), {})
+        visual_remarks = metadata.get("remarks", [])
+        if visual_remarks:
+            item["remarks_to_process"] = visual_remarks
+        item["source_feedback_timestamps"] = metadata.get(
+            "timestamps",
+            item.get("source_feedback_timestamps", []),
+        )
+        item["compound_feedback"] = bool(
+            metadata.get("compound") or item.get("compound_feedback")
+        )
+        absent_subjects = [
+            subject for subject in item.get("absent_requested_subjects", [])
+            if subject
+        ]
+        if not absent_subjects:
+            absent_subjects = _infer_explicitly_requested_subjects(
+                item.get("remarks_to_process", []),
+                item.get("characters_present", []),
+            )
+        if absent_subjects:
+            item["absent_requested_subjects"] = absent_subjects
+            item["generation_type"] = "complex"
+            characters = item.get("characters_present", [])
+            for subject in absent_subjects:
+                if subject not in characters:
+                    characters.append(subject)
+            item["characters_present"] = characters
+
         # Resolve referenced frames
         clip_used = item.get("clip_used")
         start_s = item.get("clip_start_s")

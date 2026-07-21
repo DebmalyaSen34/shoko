@@ -288,6 +288,10 @@ function TimelineCard({
 }) {
   const hasFeedback = Boolean(feedback?.feedback_items?.length);
   const latestError = prompt?.latest_error;
+  const isVisualFeedback = (category?: string) => {
+    const normalized = (category || "video").toLowerCase();
+    return normalized === "video" || normalized === "both";
+  };
 
   return (
     <article className={`timeline-card ${hasFeedback ? "has-feedback" : ""}`}>
@@ -368,7 +372,7 @@ function TimelineCard({
                     </div>
                     <div className="feedback-remark">{item.remark}</div>
 
-                    {version?.video_model_prompt ? (
+                    {isVisualFeedback(item.category) && version?.video_model_prompt ? (
                       <GeneratedPlan
                         versions={versions}
                         selectedVersion={selectedVersion}
@@ -379,6 +383,12 @@ function TimelineCard({
                         onRun={() => executeWorkflow(item.raw_index)}
                         onDetails={() => openResultFromVersion(version)}
                       />
+                    ) : !isVisualFeedback(item.category) ? (
+                      <div className="workflow-btn-wrapper">
+                        <div className="muted-small">
+                          Audio feedback is tracked on this clip, but this generated result is a video prompt. Run visual feedback to generate video prompt details.
+                        </div>
+                      </div>
                     ) : (
                       <>
                         {latestError && <ErrorWarning error={latestError} />}

@@ -127,6 +127,63 @@ def _attach_legacy_audio_reference(
     return item
 
 
+def _feedback_lanes(category: str) -> set[str]:
+    normalized = (category or "video").lower()
+    if normalized == "both":
+        return {"video", "audio"}
+    if normalized == "audio":
+        return {"audio"}
+    return {"video"}
+
+
+def _same_generation_group(clicked: dict, candidate: dict) -> bool:
+    clicked_group = clicked.get("group_id")
+    candidate_group = candidate.get("group_id")
+    if clicked_group and candidate_group:
+        same_group = clicked_group == candidate_group
+    else:
+        same_group = (
+            clicked.get("clip_used") == candidate.get("clip_used")
+            and clicked.get("clip_occurrence") == candidate.get("clip_occurrence")
+        )
+    return same_group and bool(
+        _feedback_lanes(clicked.get("category", "video"))
+        & _feedback_lanes(candidate.get("category", "video"))
+    )
+
+
+def _expand_feedback_selection(feedback_list: list[dict], index: Optional[int]) -> list[tuple[int, dict]]:
+    if index is None:
+        return list(enumerate(feedback_list))
+    if index < 0 or index >= len(feedback_list):
+        print(f"Error: Index {index} is out of bounds.", file=sys.stderr)
+        sys.exit(1)
+
+    clicked = feedback_list[index]
+    sibling_indexes = clicked.get("sibling_raw_indexes")
+    if isinstance(sibling_indexes, list):
+        selected_indexes = {
+            sibling_index
+            for sibling_index in sibling_indexes + [index]
+            if isinstance(sibling_index, int) and 0 <= sibling_index < len(feedback_list)
+        }
+        selected_indexes = {
+            sibling_index
+            for sibling_index in selected_indexes
+            if _same_generation_group(clicked, feedback_list[sibling_index])
+        }
+    else:
+        selected_indexes = {
+            candidate_index
+            for candidate_index, candidate in enumerate(feedback_list)
+            if _same_generation_group(clicked, candidate)
+        }
+
+    if not selected_indexes:
+        selected_indexes = {index}
+    return [(candidate_index, feedback_list[candidate_index]) for candidate_index in sorted(selected_indexes)]
+
+
 def _normalize_stage(stage: Optional[str], argument_name: str) -> Optional[str]:
     if stage is None:
         return None
@@ -334,15 +391,10 @@ def run_pipeline(
     print(f"Done (Discovered {len(reference_assets)} references)")
     
     # 2. Determine target remarks
-    remarks_to_process = []
+    remarks_to_process = _expand_feedback_selection(feedback_list, index)
     if index is not None:
-        if index < 0 or index >= len(feedback_list):
-            print(f"Error: Index {index} is out of bounds.", file=sys.stderr)
-            sys.exit(1)
-        remarks_to_process = [(index, feedback_list[index])]
-        print(f"[Step 4/6] Setting target remark to index {index} (1 item to process)...")
+        print(f"[Step 4/6] Setting target remark to index {index} ({len(remarks_to_process)} item(s) to process)...")
     else:
-        remarks_to_process = list(enumerate(feedback_list))
         print(f"[Step 4/6] Processing all {len(feedback_list)} feedback items...")
         
     feedback_to_process = [item for _, item in remarks_to_process]

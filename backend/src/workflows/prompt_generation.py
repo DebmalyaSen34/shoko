@@ -6,6 +6,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 import json
 import base64
 import mimetypes
+import re
 import subprocess
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -243,6 +244,49 @@ def resolve_reference_assets(assets_dir: str, characters: List[str], location: O
     return sorted(list(set(matched)))
 
 
+def _asset_matches_subject(path: str, subject: str) -> bool:
+    subject_lower = (subject or "").strip().lower()
+    if not subject_lower:
+        return False
+    return subject_lower in os.path.basename(path).lower()
+
+
+def _missing_required_subject_sheets(selected_assets: List[str], subjects: List[str]) -> List[str]:
+    missing = []
+    for subject in subjects:
+        if not any(_asset_matches_subject(path, subject) for path in selected_assets):
+            missing.append(subject)
+    return missing
+
+
+def _infer_explicitly_requested_subjects(remarks: List[str], characters: List[str]) -> List[str]:
+    action_pattern = re.compile(r"\b(show|add|bring|introduce|include|insert|appear|enters?|comes? in)\b")
+    clauses = [
+        clause.strip().lower()
+        for remark in remarks
+        for clause in re.split(r"[.;\n]", remark or "")
+        if clause.strip()
+    ]
+
+    requested = []
+    for clause in clauses:
+        action_match = action_pattern.search(clause)
+        if not action_match:
+            continue
+        candidates = []
+        for character in characters:
+            if not character:
+                continue
+            character_match = re.search(rf"\b{re.escape(character.lower())}\b", clause[action_match.end():])
+            if character_match:
+                candidates.append((character_match.start(), character))
+        if candidates:
+            _position, character = min(candidates, key=lambda item: item[0])
+            if character not in requested:
+                requested.append(character)
+    return requested
+
+
 # 3. Main Workflow Function
 def generate_video_prompts_from_plan(
     plan_json_path: str,
@@ -299,21 +343,7 @@ def generate_video_prompts_from_plan(
         clip_frames_dir = os.path.abspath(os.path.join(output_base_dir, project_name, "clip_frames", os.path.splitext(clip_name)[0]))
         os.makedirs(clip_frames_dir, exist_ok=True)
 
-        selected_assets = []
         contents = []
-
-        # 1. Resolve Preproduction reference sheets if complex
-        if generation_type == "complex":
-            characters = item.get("characters_present", [])
-            loc = item.get("location")
-            selected_assets = resolve_reference_assets(project_assets_dir, characters, loc)
-            # Add base64 reference sheets to prompt contents
-            for path in selected_assets[:3]: # Limit to 3 assets
-                contents.append({
-                    "type": "input_image",
-                    "image_url": _file_data_url(path),
-                    "detail": "auto"
-                })
 
         # 2. Extract current clip frames (1 frame/sec) for visual guidance
         current_clip_path = os.path.join(project_assets_dir, "06_clips", "_raw", clip_name)
@@ -321,6 +351,71 @@ def generate_video_prompts_from_plan(
         if os.path.exists(current_clip_path):
             current_frames = extract_frames_per_second(current_clip_path, clip_frames_dir, clip_duration)
             for path in current_frames[:5]: # Limit to 5 frames
+                contents.append({
+                    "type": "input_image",
+                    "image_url": _file_data_url(path),
+                    "detail": "auto"
+                })
+
+        selected_assets = []
+        absent_requested_subjects = [
+            subject for subject in item.get("absent_requested_subjects", [])
+            if subject
+        ]
+        if not absent_requested_subjects:
+            absent_requested_subjects = _infer_explicitly_requested_subjects(
+                remarks,
+                item.get("characters_present", []),
+            )
+
+        # 1. Resolve preproduction reference sheets after current frames are known.
+        if generation_type == "complex":
+            characters = item.get("characters_present", [])
+            for subject in absent_requested_subjects:
+                if subject not in characters:
+                    characters.append(subject)
+            loc = item.get("location")
+            selected_assets = resolve_reference_assets(project_assets_dir, characters, loc)
+            missing_subject_sheets = _missing_required_subject_sheets(
+                selected_assets,
+                absent_requested_subjects,
+            )
+            if missing_subject_sheets:
+                warning = (
+                    "Missing required character sheet(s) for explicitly requested absent subject(s): "
+                    + ", ".join(missing_subject_sheets)
+                )
+                results.append({
+                    "clip_used": clip_name,
+                    "clip_occurrence": item.get("clip_occurrence"),
+                    "category": "video",
+                    "generation_type": generation_type,
+                    "video_model_prompt": "",
+                    "selected_assets": selected_assets,
+                    "clip_frame_paths": current_frames,
+                    "referenced_frames": [],
+                    "referenced_frame_paths": [],
+                    "referenced_frame_labels": [],
+                    "audio_used": item.get("audio_used"),
+                    "audio_path": item.get("audio_path"),
+                    "is_dialogue_active": False,
+                    "generate_audio": False,
+                    "has_reference_audio": False,
+                    "ratio": "9:16",
+                    "duration": 5,
+                    "status": "warning",
+                    "quality_warning": warning,
+                    "prompt_generation_review_required": True,
+                    "absent_requested_subjects": absent_requested_subjects,
+                    "missing_required_subject_sheets": missing_subject_sheets,
+                    "explanation": warning,
+                    "video_provider": "segmind",
+                    "segmind_payload_status": "skipped",
+                    "segmind_payload_error": warning,
+                })
+                continue
+
+            for path in selected_assets[:3]: # Limit to 3 assets
                 contents.append({
                     "type": "input_image",
                     "image_url": _file_data_url(path),
@@ -454,6 +549,20 @@ def generate_video_prompts_from_plan(
         else:
             prompt_instruction += "2. This is a simple camera or transition edit; do not worry about character/location reference sheets.\n"
 
+        if absent_requested_subjects:
+            prompt_instruction += (
+                "   The following characters are explicitly requested by feedback but are not present in the current clip frames: "
+                f"{', '.join(absent_requested_subjects)}. Use their matching character sheet reference(s) for identity, wardrobe, scale, and styling. "
+                "Introduce them only to satisfy the client feedback, while preserving the current shot's camera, blocking, lighting, and continuity.\n"
+            )
+
+        if item.get("compound_feedback"):
+            timestamps = item.get("source_feedback_timestamps", [])
+            prompt_instruction += (
+                "   This is a compound same-clip edit. Merge all client remarks into one coherent staged action instead of treating them as separate alternatives. "
+                f"Source feedback timestamps: {json.dumps(timestamps)}.\n"
+            )
+
         if first_frame_url:
             prev_prompt_desc = previous_clip_prompts.get(prev_clip_name, "n/A")
             prompt_instruction += (
@@ -530,6 +639,12 @@ def generate_video_prompts_from_plan(
             "ratio": "9:16",
             "duration": 5,
             "status": "success",
+            "quality_warning": None,
+            "prompt_generation_review_required": False,
+            "compound_feedback": bool(item.get("compound_feedback")),
+            "source_feedback_timestamps": item.get("source_feedback_timestamps", []),
+            "absent_requested_subjects": absent_requested_subjects,
+            "missing_required_subject_sheets": [],
             "explanation": explanation
         }
         if first_frame_url and last_frame_path:

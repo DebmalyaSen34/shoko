@@ -60,6 +60,18 @@ jobs:
           echo "PYTHON_BIN=$python_bin" >> "$GITHUB_ENV"
           "$python_bin" --version
 
+      - name: Create backend virtual environment
+        shell: bash
+        run: |
+          uv venv --python "$PYTHON_BIN" backend/.venv-ci
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            venv_python="$PWD/backend/.venv-ci/Scripts/python.exe"
+          else
+            venv_python="$PWD/backend/.venv-ci/bin/python"
+          fi
+          echo "VENV_PYTHON=$venv_python" >> "$GITHUB_ENV"
+          "$venv_python" --version
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -73,15 +85,15 @@ jobs:
       - name: Install backend dependencies
         working-directory: backend
         shell: bash
-        run: uv pip install --python "$PYTHON_BIN" -r requirements.txt -r requirements-build.txt
+        run: uv pip install --python "$VENV_PYTHON" -r requirements.txt -r requirements-build.txt
 
       - name: Run backend tests
         shell: bash
-        run: '"$PYTHON_BIN" -m pytest backend/tests --ignore=backend/tests/test_supabase_client.py'
+        run: '"$VENV_PYTHON" -m pytest backend/tests --ignore=backend/tests/test_supabase_client.py'
 
       - name: Build backend server
         shell: bash
-        run: '"$PYTHON_BIN" backend/scripts/build_backend_binary.py'
+        run: '"$VENV_PYTHON" backend/scripts/build_backend_binary.py'
 
       - name: Smoke test packaged backend
         shell: bash

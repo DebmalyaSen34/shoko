@@ -134,6 +134,20 @@ def _file_data_url(path: str) -> str:
         encoded = base64.b64encode(file.read()).decode("ascii")
     return f"data:{mime_type};base64,{encoded}"
 
+def _resolve_audio_path(project_assets_dir: str, audio_name: Optional[str], audio_path: Optional[str]) -> Optional[str]:
+    """Resolve a plan audio path, falling back to the project's durable audio asset location."""
+    candidates = []
+    if audio_path:
+        candidates.append(audio_path)
+    if audio_name:
+        candidates.append(os.path.join(project_assets_dir, "04_audio", audio_name))
+        candidates.append(os.path.join(project_assets_dir, "04_audio", os.path.basename(audio_name)))
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return audio_path
+
 # FFMPEG Frame extraction helpers
 def extract_frames_per_second(video_path: str, output_dir: str, duration_s: float) -> List[str]:
     """Extract adaptive, full-clip frames while tolerating individual ffmpeg failures."""
@@ -508,7 +522,7 @@ def generate_video_prompts_from_plan(
         # 4. Dialogue and Audio Base64 setup (Way A)
         is_dialogue = item.get("is_dialogue_active", False)
         audio_name = item.get("audio_used")
-        audio_path = item.get("audio_path")
+        audio_path = _resolve_audio_path(project_assets_dir, audio_name, item.get("audio_path"))
         audio_url = None
         trimmed_audio_path = None
         audio_trim_error = None

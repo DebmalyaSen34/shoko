@@ -139,9 +139,20 @@ def _resolve_audio_path(project_assets_dir: str, audio_name: Optional[str], audi
     candidates = []
     if audio_path:
         candidates.append(audio_path)
+        clean_audio_path = audio_path.replace("\\", "/")
+        filename = os.path.basename(clean_audio_path)
+        if filename:
+            candidates.append(os.path.join(project_assets_dir, "04_audio", filename))
+            candidates.append(os.path.join(project_assets_dir, filename))
+
     if audio_name:
+        clean_audio_name = audio_name.replace("\\", "/")
+        filename = os.path.basename(clean_audio_name)
         candidates.append(os.path.join(project_assets_dir, "04_audio", audio_name))
-        candidates.append(os.path.join(project_assets_dir, "04_audio", os.path.basename(audio_name)))
+        candidates.append(os.path.join(project_assets_dir, "04_audio", clean_audio_name))
+        if filename:
+            candidates.append(os.path.join(project_assets_dir, "04_audio", filename))
+            candidates.append(os.path.join(project_assets_dir, filename))
 
     for candidate in candidates:
         if candidate and os.path.exists(candidate):
@@ -534,7 +545,9 @@ def generate_video_prompts_from_plan(
         # transcribe or fall back to the full mix; the trimmed file is the
         # source of truth for dialogue timing and cadence.
         if audio_trim_duration_s > 0 and audio_path and os.path.exists(audio_path):
-            trimmed_audio_name = f"trimmed_{os.path.splitext(audio_name)[0]}.mp3"
+            clean_audio_identifier = os.path.basename((audio_name or audio_path or "audio").replace("\\", "/"))
+            audio_stem = os.path.splitext(clean_audio_identifier)[0]
+            trimmed_audio_name = f"trimmed_{audio_stem}.mp3"
             trimmed_audio_path = os.path.join(clip_frames_dir, trimmed_audio_name)
             success = extract_audio_segment(
                 input_audio_path=audio_path,

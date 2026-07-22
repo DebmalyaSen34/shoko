@@ -274,7 +274,7 @@ def test_build_clip_media_gallery_includes_clip_assets_and_reference_frames(tmp_
     assert media[2]["label"] == "Referenced frame 00:04"
 
 
-def test_build_clip_media_gallery_includes_analyzed_clip_context_media(tmp_path, monkeypatch):
+def test_build_clip_media_gallery_omits_analyzed_clip_context_media(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     assets_dir = tmp_path / "assets"
     segment = data_dir / "project-a" / "analysis" / "clip_context" / "0_clip" / "segment.mp4"
@@ -297,13 +297,7 @@ def test_build_clip_media_gallery_includes_analyzed_clip_context_media(tmp_path,
         },
     })
 
-    assert [item["source"] for item in media] == ["clip_context", "clip_context", "clip_context"]
-    assert media[0]["type"] == "video"
-    assert media[0]["url"] == "/data/project-a/analysis/clip_context/0_clip/segment.mp4"
-    assert media[1]["type"] == "audio"
-    assert media[1]["url"] == "/data/project-a/analysis/clip_context/0_clip/audio/segment_audio.mp3"
-    assert media[2]["type"] == "image"
-    assert media[2]["url"] == "/data/project-a/analysis/clip_context/0_clip/frames/frame_001.jpg"
+    assert media == []
 
 
 def test_chat_summarizes_saved_clip_context(tmp_path, monkeypatch):

@@ -706,7 +706,6 @@ def build_clip_media_gallery(context: dict) -> list[dict]:
     media: list[dict] = []
     latest_version = context.get("latest_version") or {}
     feedback = context.get("feedback") or {}
-    clip_context = context.get("clip_context") or {}
     clip_frame_paths = latest_version.get("clip_frame_paths") or []
 
     for asset_path in latest_version.get("selected_assets") or []:
@@ -718,42 +717,6 @@ def build_clip_media_gallery(context: dict) -> list[dict]:
 
     for frame_path in clip_frame_paths:
         add_chat_media_item(media, label="Extracted clip frame", source="clip_frames", path=frame_path, media_type="image")
-
-    if latest_version.get("clip_segment_path"):
-        add_chat_media_item(
-            media,
-            label="Analyzed clip segment",
-            source="clip_context",
-            path=latest_version.get("clip_segment_path"),
-            media_type="video",
-        )
-
-    if clip_context.get("clip_segment_path"):
-        add_chat_media_item(
-            media,
-            label="Analyzed clip segment",
-            source="clip_context",
-            path=clip_context.get("clip_segment_path"),
-            media_type="video",
-        )
-
-    if clip_context.get("audio_segment_path"):
-        add_chat_media_item(
-            media,
-            label="Analyzed clip audio",
-            source="clip_context",
-            path=clip_context.get("audio_segment_path"),
-            media_type="audio",
-        )
-
-    for frame_path in clip_context.get("frame_paths") or []:
-        add_chat_media_item(
-            media,
-            label="Analyzed clip frame",
-            source="clip_context",
-            path=frame_path,
-            media_type="image",
-        )
 
     referenced_frames = list(latest_version.get("referenced_frames") or [])
     for item in feedback.get("feedback_items", []):

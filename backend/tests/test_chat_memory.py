@@ -346,3 +346,167 @@ def test_chat_summary_request_runs_clip_context_analysis_when_missing(tmp_path, 
     assert context["clip_context"] == clip_context
     analyze.assert_called_once()
     assert analyze.call_args.kwargs["output_base_dir"] == str(data_dir)
+
+
+def test_extract_reference_frame_attaches_to_current_feedback(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    assets_dir = tmp_path / "assets"
+    project_dir = data_dir / "project-a"
+    raw_dir = assets_dir / "project-a" / "06_clips" / "_raw"
+    project_dir.mkdir(parents=True)
+    raw_dir.mkdir(parents=True)
+    (raw_dir / "reaction.mp4").write_bytes(b"video")
+    (project_dir / "timeline.json").write_text(
+        json.dumps({
+            "video_timeline": [
+                {
+                    "clip": "setup.mp4",
+                    "start_tc": "00:00",
+                    "end_tc": "00:40",
+                    "start_s": 0,
+                    "end_s": 40,
+                    "duration_s": 40,
+                },
+                {
+                    "clip": "reaction.mp4",
+                    "start_tc": "00:40",
+                    "end_tc": "00:50",
+                    "start_s": 40,
+                    "end_s": 50,
+                    "duration_s": 10,
+                },
+            ]
+        }),
+        encoding="utf-8",
+    )
+    (project_dir / "feedback.json").write_text(
+        json.dumps([
+            {
+                "clip_used": "setup.mp4",
+                "clip_occurrence": 0,
+                "feedback_items": [
+                    {"timestamp": "00:02", "category": "video", "remark": "Use the later reaction."}
+                ],
+            }
+        ]),
+        encoding="utf-8",
+    )
+
+    def fake_extract(_clip_path, _offset_s, output_path):
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(b"frame")
+        return True
+
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    monkeypatch.setattr(server, "extract_frame_at_offset", fake_extract)
+
+    result = server.extract_reference_frame(
+        "project-a",
+        current_clip_index=0,
+        timestamp="00:44",
+        reason="Vir evil-smile reaction",
+    )
+
+    assert result["status"] == "ok"
+    ref = result["reference_frame"]
+    assert ref["clip_used"] == "reaction.mp4"
+    assert ref["offset_s"] == 4
+    assert Path(ref["frame_path"]).exists()
+
+    feedback = json.loads((project_dir / "feedback.json").read_text(encoding="utf-8"))
+    group_refs = feedback[0]["referenced_frames"]
+    item_refs = feedback[0]["feedback_items"][0]["referenced_frames"]
+    assert len(group_refs) == 1
+    assert item_refs == group_refs
+    assert group_refs[0]["timestamp"] == "00:44"
+
+
+def test_parse_explicit_reference_frame_request_requires_clear_attachment_intent():
+    parsed = server.parse_explicit_reference_frame_request(
+        "Can you extract frame from the clip belonging to 00:44 and add as a reference here"
+    )
+
+    assert parsed == {
+        "timestamp": "00:44",
+        "reason": "Can you extract frame from the clip belonging to 00:44 and add as a reference here",
+        "attach_to": "current_feedback",
+    }
+    assert server.parse_explicit_reference_frame_request("What happens around 00:44?") is None
+
+
+def test_clip_chat_extracts_reference_frame_and_returns_media(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    assets_dir = tmp_path / "assets"
+    project_dir = data_dir / "project-a"
+    raw_dir = assets_dir / "project-a" / "06_clips" / "_raw"
+    project_dir.mkdir(parents=True)
+    raw_dir.mkdir(parents=True)
+    (raw_dir / "reaction.mp4").write_bytes(b"video")
+    (project_dir / "timeline.json").write_text(
+        json.dumps({
+            "video_timeline": [
+                {
+                    "clip": "setup.mp4",
+                    "start_tc": "00:00",
+                    "end_tc": "00:40",
+                    "start_s": 0,
+                    "end_s": 40,
+                    "duration_s": 40,
+                },
+                {
+                    "clip": "reaction.mp4",
+                    "start_tc": "00:40",
+                    "end_tc": "00:50",
+                    "start_s": 40,
+                    "end_s": 50,
+                    "duration_s": 10,
+                },
+            ],
+            "sequence_name": "Draft",
+            "total_duration_tc": "00:50",
+            "total_duration_s": 50,
+        }),
+        encoding="utf-8",
+    )
+    (project_dir / "feedback.json").write_text(
+        json.dumps([
+            {
+                "clip_used": "setup.mp4",
+                "clip_occurrence": 0,
+                "feedback_items": [
+                    {"timestamp": "00:02", "category": "video", "remark": "Use the later reaction."}
+                ],
+            }
+        ]),
+        encoding="utf-8",
+    )
+
+    def fake_extract(_clip_path, _offset_s, output_path):
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(b"frame")
+        return True
+
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    monkeypatch.setattr(server, "extract_frame_at_offset", fake_extract)
+    client = TestClient(server.app)
+
+    response = client.post(
+        "/api/projects/project-a/chat/clip",
+        json={
+            "clip_index": 0,
+            "provider": "openai",
+            "message": "Can you extract frame from the clip belonging to 00:44 and add as a reference here",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assistant = body["assistant_message"]
+    assert "Extracted frame at 00:44" in assistant["content"]
+    media = assistant["metadata"]["media"]
+    assert len(media) == 1
+    assert media[0]["source"] == "referenced_frames"
+    assert media[0]["url"].startswith("/data/project-a/referenced_frames/")
+    assert body["suggested_actions"]

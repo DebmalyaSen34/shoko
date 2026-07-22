@@ -179,6 +179,7 @@ export type ClipChatMessage = {
     actions?: ClipChatAction[];
     media?: ClipChatMedia[];
     saved_memory_ids?: string[];
+    tool_results?: Record<string, unknown>[];
     kind?: string;
   };
 };

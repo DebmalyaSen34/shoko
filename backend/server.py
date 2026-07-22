@@ -33,6 +33,9 @@ from src.workflows.timeline_extraction import extract_timeline_from_project
 from src.workflows.feedback_parsing import parse_and_align_feedback
 from src.workflows.prompt_generation import extract_last_frame, get_video_duration
 from src.workflows.clip_context import analyze_clip_context, clip_context_dir
+from src.workflows.referenced_frames import extract_frame_at_offset
+from src.clustering import find_matching_clip_occurrence
+from src.utils import parse_timestamp_to_seconds
 from src.logging_utils import log_event
 from src.chat_memory import ChatMemoryStore
 
@@ -865,6 +868,164 @@ def ensure_clip_context_for_chat(project_name: str, context: dict, provider: str
     return clip_context, None
 
 
+def _safe_reference_frame_stem(timestamp: str, clip_name: str) -> str:
+    safe_timestamp = re.sub(r"[^A-Za-z0-9._-]+", "_", timestamp.strip()).strip("._-") or "timestamp"
+    safe_clip = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(clip_name).stem).strip("._-") or "clip"
+    return f"ref_{safe_timestamp}_{safe_clip}"
+
+
+def _reference_frame_output_path(project_name: str, timestamp: str, clip_name: str) -> Path:
+    base_dir = project_data_dir(project_name) / "referenced_frames"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    stem = _safe_reference_frame_stem(timestamp, clip_name)
+    candidate = base_dir / f"{stem}.jpg"
+    if not candidate.exists():
+        return candidate
+    return candidate
+
+
+def _resolve_raw_clip_path(project_name: str, clip_name: str) -> Optional[Path]:
+    candidates = [
+        project_assets_dir(project_name) / "06_clips" / "_raw" / clip_name,
+        project_assets_dir(project_name) / "06_clips" / "_final" / clip_name,
+        ASSETS_DIR / project_name / "06_clips" / "_raw" / clip_name,
+        ASSETS_DIR / project_name / "06_clips" / "_final" / clip_name,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _feedback_group_matches_clip(group: dict, clip_name: str, clip_index: int) -> bool:
+    occurrence = group.get("clip_occurrence")
+    return group.get("clip_used") == clip_name and (occurrence is None or occurrence == clip_index)
+
+
+def _append_unique_referenced_frame(target: dict, ref_frame: dict) -> bool:
+    refs = target.setdefault("referenced_frames", [])
+    frame_path = ref_frame.get("frame_path")
+    for existing in refs:
+        if existing.get("frame_path") == frame_path:
+            existing.update({key: value for key, value in ref_frame.items() if value not in (None, "")})
+            return False
+    refs.append(ref_frame)
+    return True
+
+
+def _attach_reference_frame_to_feedback(project_name: str, current_clip_index: int, ref_frame: dict) -> None:
+    feedback_path = project_data_dir(project_name) / "feedback.json"
+    feedback_data = read_json_file(feedback_path, [])
+    if not isinstance(feedback_data, list):
+        feedback_data = []
+
+    timeline = read_json_file(project_data_dir(project_name) / "timeline.json", {}).get("video_timeline", [])
+    if current_clip_index < 0 or current_clip_index >= len(timeline):
+        raise HTTPException(status_code=404, detail="Clip index not found")
+    current_clip_name = timeline[current_clip_index].get("clip")
+
+    group = next(
+        (candidate for candidate in feedback_data if _feedback_group_matches_clip(candidate, current_clip_name, current_clip_index)),
+        None,
+    )
+    if group is None:
+        group = {
+            "clip_used": current_clip_name,
+            "clip_occurrence": current_clip_index,
+            "previous_clip": None,
+            "audio_used": None,
+            "feedback_items": [],
+        }
+        feedback_data.append(group)
+
+    _append_unique_referenced_frame(group, ref_frame)
+    feedback_items = group.setdefault("feedback_items", [])
+    if feedback_items:
+        _append_unique_referenced_frame(feedback_items[0], ref_frame)
+
+    write_json_file(feedback_path, feedback_data)
+
+
+def extract_reference_frame(
+    project_name: str,
+    current_clip_index: int,
+    timestamp: str,
+    reason: str = "",
+    attach_to: str = "current_feedback",
+) -> dict:
+    timestamp = (timestamp or "").strip()
+    if not timestamp:
+        raise HTTPException(status_code=400, detail="A timestamp is required.")
+
+    ref_sec = parse_timestamp_to_seconds(timestamp)
+    if ref_sec is None:
+        raise HTTPException(status_code=400, detail=f"Could not parse timestamp '{timestamp}'.")
+
+    timeline_path = project_data_dir(project_name) / "timeline.json"
+    timeline_data = read_json_file(timeline_path, {})
+    video_timeline = timeline_data.get("video_timeline", [])
+    clip_idx, matched_clip = find_matching_clip_occurrence(video_timeline, ref_sec)
+    if not matched_clip:
+        raise HTTPException(status_code=404, detail=f"Timestamp {timestamp} does not match any timeline clip.")
+
+    clip_name = matched_clip.get("clip")
+    clip_start_s = float(matched_clip.get("start_s") or 0.0)
+    clip_duration_s = float(matched_clip.get("duration_s") or max(0.0, float(matched_clip.get("end_s") or 0.0) - clip_start_s))
+    offset_s = max(0.0, min(ref_sec - clip_start_s, clip_duration_s))
+    source_clip_path = _resolve_raw_clip_path(project_name, clip_name)
+    if not source_clip_path:
+        raise HTTPException(status_code=404, detail=f"Raw clip file not found for {clip_name}.")
+
+    output_frame_path = _reference_frame_output_path(project_name, timestamp, clip_name)
+    if not output_frame_path.exists():
+        if not extract_frame_at_offset(str(source_clip_path), offset_s, str(output_frame_path)):
+            raise HTTPException(status_code=500, detail=f"Could not extract a frame from {clip_name} at {timestamp}.")
+
+    ref_frame = {
+        "timestamp": timestamp,
+        "reason": reason.strip() or f"Reference frame extracted from {timestamp}",
+        "frame_path": str(output_frame_path.resolve()),
+        "clip_used": clip_name,
+        "clip_occurrence": clip_idx,
+        "offset_s": offset_s,
+        "source_clip_path": str(source_clip_path.resolve()),
+        "attached_to": attach_to,
+    }
+
+    if attach_to == "current_feedback":
+        _attach_reference_frame_to_feedback(project_name, current_clip_index, ref_frame)
+
+    return {
+        "status": "ok",
+        "reference_frame": ref_frame,
+        "message": f"Extracted frame at {timestamp} from {clip_name} and attached it as a reference.",
+    }
+
+
+REFERENCE_FRAME_TIMESTAMP_PATTERN = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b")
+
+
+def parse_explicit_reference_frame_request(text: str) -> Optional[dict]:
+    lower = text.lower()
+    timestamp_match = REFERENCE_FRAME_TIMESTAMP_PATTERN.search(text)
+    if not timestamp_match:
+        return None
+
+    has_extract_intent = any(word in lower for word in ["extract", "grab", "capture", "pull", "save"])
+    has_reference_intent = any(word in lower for word in ["reference", "attach", "add"])
+    mentions_frame = "frame" in lower or "still" in lower
+    if not (has_extract_intent and has_reference_intent and mentions_frame):
+        return None
+
+    timestamp = timestamp_match.group(0)
+    reason = text.strip()
+    return {
+        "timestamp": timestamp,
+        "reason": reason,
+        "attach_to": "current_feedback",
+    }
+
+
 def build_clip_chat_context(project_name: str, clip_index: int, query: str = "") -> dict:
     project_data = get_project_data(project_name)
     timeline = project_data.get("timeline", [])
@@ -1132,20 +1293,112 @@ def fallback_chat_reply(message: str, context: dict) -> str:
     )
 
 
-async def generate_chat_reply(provider: str, message: str, context: dict, messages: list[dict]) -> str:
+def reference_frame_tool_schema() -> dict:
+    return {
+        "type": "function",
+        "name": "extract_reference_frame",
+        "description": (
+            "Extract a still frame from the project timeline at an explicit timestamp and attach it "
+            "as a reference to the currently open clip chat. Use only when the user clearly asks to "
+            "extract, grab, capture, save, add, or attach a frame/still/reference."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "timestamp": {
+                    "type": "string",
+                    "description": "Timeline timestamp such as 00:44, 1:04, or 00:01:04.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Short editor-facing reason for the reference frame.",
+                },
+                "attach_to": {
+                    "type": "string",
+                    "enum": ["current_feedback"],
+                    "description": "Where to attach the extracted frame.",
+                },
+            },
+            "required": ["timestamp", "reason", "attach_to"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    }
+
+
+def _response_output_items(response: Any) -> list[Any]:
+    output = getattr(response, "output", None)
+    if output is None and isinstance(response, dict):
+        output = response.get("output")
+    return list(output or [])
+
+
+def _output_item_value(item: Any, key: str, default: Any = None) -> Any:
+    if isinstance(item, dict):
+        return item.get(key, default)
+    return getattr(item, key, default)
+
+
+def _response_text(response: Any) -> str:
+    text = getattr(response, "output_text", None)
+    if text is None and isinstance(response, dict):
+        text = response.get("output_text")
+    return (text or "").strip()
+
+
+def _tool_call_arguments(item: Any) -> dict:
+    raw_args = _output_item_value(item, "arguments", "{}")
+    if isinstance(raw_args, dict):
+        return raw_args
+    try:
+        parsed = json.loads(raw_args or "{}")
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _tool_call_id(item: Any) -> str:
+    return str(_output_item_value(item, "call_id") or _output_item_value(item, "id") or "")
+
+
+def _extract_reference_frame_tool_calls(response: Any) -> list[Any]:
+    calls = []
+    for item in _response_output_items(response):
+        if _output_item_value(item, "type") == "function_call" and _output_item_value(item, "name") == "extract_reference_frame":
+            calls.append(item)
+    return calls
+
+
+def _run_reference_frame_tool_call(project_name: str, context: dict, arguments: dict) -> dict:
+    return extract_reference_frame(
+        project_name=project_name,
+        current_clip_index=int(context.get("clip_index") or 0),
+        timestamp=str(arguments.get("timestamp") or ""),
+        reason=str(arguments.get("reason") or ""),
+        attach_to=str(arguments.get("attach_to") or "current_feedback"),
+    )
+
+
+async def generate_chat_reply_with_tools(provider: str, message: str, context: dict, messages: list[dict]) -> tuple[str, list[dict]]:
     if wants_clip_summary_or_analysis(message):
         if context.get("clip_context"):
-            return summarize_clip_context(context.get("clip_context"))
+            return summarize_clip_context(context.get("clip_context")), []
         if context.get("clip_context_error"):
-            return context.get("clip_context_error")
-        return "This clip has not been analyzed yet. Ask me to analyze the clip with OpenAI, or run the workflow first."
+            return context.get("clip_context_error"), []
+        return "This clip has not been analyzed yet. Ask me to analyze the clip with OpenAI, or run the workflow first.", []
+
+    explicit_reference = parse_explicit_reference_frame_request(message)
+    if explicit_reference:
+        result = _run_reference_frame_tool_call(context.get("project", {}).get("name", ""), context, explicit_reference)
+        return result["message"], [result]
 
     system_prompt = (
         "You are Loka15 Studio's clip assistant inside a video feedback and generation tool. "
         "Answer as a practical editor-facing collaborator. Use only the supplied context. "
         "You can discuss timeline, clip details, feedback, assets, prior prompt generations, quality reports, memory, workflow execution, and video-generation handoff. "
+        "You can call extract_reference_frame when the user clearly asks to extract/grab/capture/save/add/attach a frame or still at an explicit timestamp as a reference for this clip. "
         "If the user asks to save a durable preference, include a final line starting with 'Memory:' followed by the exact note. "
-        "Do not claim that you executed actions; the app will show action buttons separately."
+        "Do not claim that you executed actions unless a tool result says the action completed."
     )
     context_text = compact_chat_context(context)
     history = [
@@ -1168,8 +1421,45 @@ async def generate_chat_reply(provider: str, message: str, context: dict, messag
             response = client.responses.create(
                 model=os.environ.get("OPENAI_CHAT_MODEL", OPENAI_LITE_MODEL),
                 input=input_messages,
+                tools=[reference_frame_tool_schema()],
             )
-            return response.output_text.strip()
+            tool_calls = _extract_reference_frame_tool_calls(response)
+            tool_results = []
+            if tool_calls:
+                tool_outputs = []
+                for call in tool_calls:
+                    call_id = _tool_call_id(call)
+                    try:
+                        result = _run_reference_frame_tool_call(
+                            context.get("project", {}).get("name", ""),
+                            context,
+                            _tool_call_arguments(call),
+                        )
+                    except HTTPException as exc:
+                        result = {"status": "error", "message": exc.detail}
+                    except Exception as exc:
+                        result = {"status": "error", "message": str(exc)}
+                    tool_results.append(result)
+                    tool_outputs.append({
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps(result, ensure_ascii=False),
+                    })
+
+                followup = client.responses.create(
+                    model=os.environ.get("OPENAI_CHAT_MODEL", OPENAI_LITE_MODEL),
+                    input=tool_outputs,
+                    previous_response_id=getattr(response, "id", None),
+                )
+                reply_text = _response_text(followup)
+                if reply_text:
+                    return reply_text, tool_results
+                successful = [result for result in tool_results if result.get("status") == "ok"]
+                if successful:
+                    return successful[-1].get("message", "Reference frame extracted."), tool_results
+                return tool_results[-1].get("message", "Reference frame extraction failed."), tool_results
+            reply_text = _response_text(response)
+            return (reply_text or fallback_chat_reply(message, context)), []
 
         if provider == "gemini" and os.environ.get("GEMINI_API_KEY"):
             from google import genai
@@ -1183,7 +1473,7 @@ async def generate_chat_reply(provider: str, message: str, context: dict, messag
                 model=os.environ.get("GEMINI_CHAT_MODEL", LITE_MODEL),
                 contents=prompt,
             )
-            return (response.text or "").strip()
+            return (response.text or "").strip(), []
     except Exception as exc:
         log_event(
             "clip_chat.llm_error",
@@ -1194,7 +1484,12 @@ async def generate_chat_reply(provider: str, message: str, context: dict, messag
             error=str(exc)[:500],
         )
 
-    return fallback_chat_reply(message, context)
+    return fallback_chat_reply(message, context), []
+
+
+async def generate_chat_reply(provider: str, message: str, context: dict, messages: list[dict]) -> str:
+    text, _tool_results = await generate_chat_reply_with_tools(provider, message, context, messages)
+    return text
 
 @app.post("/api/projects/{project_name}/feedback/item")
 def add_manual_feedback(project_name: str, item: ManualFeedbackRequest):
@@ -1668,7 +1963,9 @@ async def post_clip_chat(project_name: str, request: ClipChatRequest):
         if analysis_error:
             context["clip_context_error"] = analysis_error
 
-    assistant_text = await generate_chat_reply(request.provider, message_text, context, clip_messages)
+    assistant_text, tool_results = await generate_chat_reply_with_tools(request.provider, message_text, context, clip_messages)
+    if tool_results:
+        context = build_clip_chat_context(project_name, request.clip_index, query=message_text)
     memory_notes = extract_memory_notes(message_text, assistant_text)
     saved_memories = []
 
@@ -1690,7 +1987,7 @@ async def post_clip_chat(project_name: str, request: ClipChatRequest):
     explicit_actions = infer_action_suggestions(message_text, context)
     actions = dynamic_chat_suggestions(message_text, context, explicit_actions)
     save_pending_workflow_intents(project_name, actions, message_text, context)
-    media = build_clip_media_gallery(context) if wants_clip_media_gallery(message_text) else []
+    media = build_clip_media_gallery(context) if (wants_clip_media_gallery(message_text) or tool_results) else []
     assistant_message = make_chat_message(
         "assistant",
         assistant_text,
@@ -1699,6 +1996,7 @@ async def post_clip_chat(project_name: str, request: ClipChatRequest):
             "actions": actions,
             "media": media,
             "saved_memory_ids": [item["id"] for item in saved_memories],
+            "tool_results": tool_results,
         },
     )
     clip_messages.append(assistant_message)

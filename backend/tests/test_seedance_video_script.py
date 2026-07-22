@@ -279,6 +279,27 @@ class SeedanceVideoScriptTests(unittest.TestCase):
         self.assertEqual("skipped", enriched["segmind_payload_status"])
         self.assertIn("SEGMIND_API_KEY", enriched["segmind_payload_error"])
 
+    def test_attach_prepared_segmind_payload_preserves_local_reference_audio_without_upload(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = os.path.join(temp_dir, "trimmed_audio.mp3")
+            with open(audio_path, "wb") as file:
+                file.write(b"audio data")
+
+            with mock.patch.dict(os.environ, {}, clear=True):
+                enriched = attach_prepared_segmind_payload(
+                    {
+                        "video_model_prompt": "prompt",
+                        "audio_reference_path": audio_path,
+                        "duration": 5,
+                    },
+                    api_key=None,
+                    cache=None,
+                )
+
+        self.assertEqual("skipped", enriched["segmind_payload_status"])
+        self.assertTrue(enriched["has_reference_audio"])
+        self.assertEqual([], enriched["segmind_reference_audios"])
+
     def test_build_segmind_payload_normalizes_stale_prepared_payload(self):
         payload = build_segmind_payload(
             item={

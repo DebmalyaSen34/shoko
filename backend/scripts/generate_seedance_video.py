@@ -395,6 +395,23 @@ def _cached_supabase_audio_url(
     return public_url
 
 
+def _has_reference_audio(item: dict[str, Any], payload: dict[str, Any]) -> bool:
+    if payload.get("reference_audios"):
+        return True
+
+    audio_ref = (
+        item.get("audio_reference_path")
+        or item.get("trimmed_audio_path")
+        or item.get("audio_url")
+        or item.get("audio_path")
+    )
+    if not audio_ref:
+        return False
+    if is_url(audio_ref) or is_data_url(audio_ref):
+        return True
+    return os.path.exists(str(audio_ref))
+
+
 def _replace_handles_for_segmind(
     prompt_text: str,
     *,
@@ -695,7 +712,7 @@ def attach_prepared_segmind_payload(
                 "video_model_prompt": payload.get("prompt", enriched.get("video_model_prompt")),
                 "duration": payload.get("duration", SEGMIND_DURATION_SECONDS),
                 "generate_audio": payload.get("generate_audio", False),
-                "has_reference_audio": bool(payload.get("reference_audios")),
+                "has_reference_audio": _has_reference_audio(enriched, payload),
                 "segmind_prompt": payload.get("prompt", ""),
                 "segmind_reference_images": payload.get("reference_images", []),
                 "segmind_reference_videos": payload.get("reference_videos", []),
@@ -746,7 +763,7 @@ def attach_prepared_segmind_payload(
             "video_model_prompt": payload.get("prompt", enriched.get("video_model_prompt")),
             "duration": payload.get("duration", SEGMIND_DURATION_SECONDS),
             "generate_audio": payload.get("generate_audio", False),
-            "has_reference_audio": bool(payload.get("reference_audios")),
+            "has_reference_audio": _has_reference_audio(enriched, payload),
             "segmind_prompt": payload.get("prompt", ""),
             "segmind_first_frame_url": payload.get("first_frame_url"),
             "segmind_reference_images": payload.get("reference_images", []),

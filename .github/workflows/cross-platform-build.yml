@@ -50,15 +50,15 @@ jobs:
           enable-cache: true
 
       - name: Resolve Python path
-        shell: pwsh
+        shell: bash
         run: |
-          if ($env:RUNNER_OS -eq "Windows") {
-            $pythonBin = Join-Path $env:pythonLocation "python.exe"
-          } else {
-            $pythonBin = (Get-Command python3).Source
-          }
-          "PYTHON_BIN=$pythonBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          & $pythonBin --version
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            python_bin="${pythonLocation}/python.exe"
+          else
+            python_bin="$(command -v python3)"
+          fi
+          echo "PYTHON_BIN=$python_bin" >> "$GITHUB_ENV"
+          "$python_bin" --version
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -72,16 +72,16 @@ jobs:
 
       - name: Install backend dependencies
         working-directory: backend
-        shell: pwsh
-        run: uv pip install --python "$env:PYTHON_BIN" -r requirements.txt -r requirements-build.txt
+        shell: bash
+        run: uv pip install --python "$PYTHON_BIN" -r requirements.txt -r requirements-build.txt
 
       - name: Run backend tests
-        shell: pwsh
-        run: '& $env:PYTHON_BIN -m pytest backend/tests --ignore=backend/tests/test_supabase_client.py'
+        shell: bash
+        run: '"$PYTHON_BIN" -m pytest backend/tests --ignore=backend/tests/test_supabase_client.py'
 
       - name: Build backend server
-        shell: pwsh
-        run: '& $env:PYTHON_BIN backend/scripts/build_backend_binary.py'
+        shell: bash
+        run: '"$PYTHON_BIN" backend/scripts/build_backend_binary.py'
 
       - name: Smoke test packaged backend
         shell: bash

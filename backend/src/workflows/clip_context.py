@@ -106,6 +106,64 @@ def extract_context_frames(video_path: str, output_dir: str, duration_s: float) 
     return frame_paths
 
 
+def resolve_audio_path(project_assets_dir: str, audio_name: Optional[str], audio_path: Optional[str]) -> Optional[str]:
+    candidates = []
+    if audio_path:
+        candidates.append(audio_path)
+        clean_audio_path = audio_path.replace("\\", "/")
+        filename = os.path.basename(clean_audio_path)
+        if filename:
+            candidates.append(os.path.join(project_assets_dir, "04_audio", filename))
+            candidates.append(os.path.join(project_assets_dir, filename))
+
+    if audio_name:
+        clean_audio_name = audio_name.replace("\\", "/")
+        filename = os.path.basename(clean_audio_name)
+        candidates.append(os.path.join(project_assets_dir, "04_audio", audio_name))
+        candidates.append(os.path.join(project_assets_dir, "04_audio", clean_audio_name))
+        if filename:
+            candidates.append(os.path.join(project_assets_dir, "04_audio", filename))
+            candidates.append(os.path.join(project_assets_dir, filename))
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return os.path.abspath(candidate)
+    return audio_path
+
+
+def extract_audio_segment(input_audio_path: str, output_audio_path: str, start_s: float, end_s: float) -> bool:
+    duration = max(0.0, float(end_s or 0.0) - float(start_s or 0.0))
+    if duration <= 0:
+        return False
+    os.makedirs(os.path.dirname(output_audio_path), exist_ok=True)
+    command = [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        f"{max(float(start_s or 0.0), 0.0):.3f}",
+        "-t",
+        f"{duration:.3f}",
+        "-i",
+        input_audio_path,
+        "-acodec",
+        "libmp3lame" if output_audio_path.endswith(".mp3") else "pcm_s16le",
+        output_audio_path,
+    ]
+    completed = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=False)
+    return completed.returncode == 0 and os.path.exists(output_audio_path)
+
+
+def transcribe_audio_segment(client, audio_path: str, model: Optional[str] = None) -> str:
+    with open(audio_path, "rb") as file:
+        response = client.audio.transcriptions.create(
+            model=model or os.environ.get("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe"),
+            file=file,
+        )
+    if isinstance(response, dict):
+        return str(response.get("text") or "").strip()
+    return str(getattr(response, "text", "") or "").strip()
+
+
 def _status_for_context(segment_available: bool, segment_attached: bool, frames: List[str], error: Optional[str]) -> str:
     if error and not frames:
         return "failed"
@@ -132,11 +190,15 @@ def analyze_clip_context(
     provider: Provider = "openai",
     model: str = OPENAI_REASONING_MODEL,
     feedback_items: Optional[List[dict]] = None,
+    audio_name: Optional[str] = None,
+    audio_path: Optional[str] = None,
 ) -> dict:
     context_dir = clip_context_dir(output_base_dir, project_name, clip_name, clip_occurrence)
     frames_dir = os.path.join(context_dir, "frames")
+    audio_dir = os.path.join(context_dir, "audio")
     context_path = os.path.join(context_dir, "clip_context.json")
     segment_path = os.path.join(context_dir, "segment.mp4")
+    audio_segment_path = os.path.join(audio_dir, "segment_audio.mp3")
     os.makedirs(context_dir, exist_ok=True)
 
     duration = max(float(clip_duration_s or 0.0), 0.0)
@@ -167,18 +229,44 @@ def analyze_clip_context(
     segment_available = trim_clip_segment(source_path, segment_path, duration, source_offset_s)
     frame_source = segment_path if segment_available else source_path
     frame_paths = extract_context_frames(frame_source, frames_dir, duration)
+    audio_status = "not_configured"
+    audio_error = None
+    audio_transcript = ""
+    resolved_audio_path = resolve_audio_path(os.path.join(abs_assets_dir, project_name), audio_name, audio_path)
+    if resolved_audio_path and os.path.exists(resolved_audio_path):
+        audio_status = "missing_segment"
+        if clip_start_s is not None and clip_end_s is not None:
+            try:
+                if extract_audio_segment(resolved_audio_path, audio_segment_path, float(clip_start_s), float(clip_end_s)):
+                    audio_status = "segment_ready"
+                    if provider == "openai":
+                        try:
+                            audio_transcript = transcribe_audio_segment(client, audio_segment_path)
+                            audio_status = "transcribed" if audio_transcript else "transcribed_empty"
+                        except Exception as exc:
+                            audio_status = "transcription_failed"
+                            audio_error = f"Audio transcription failed: {exc}"
+                else:
+                    audio_error = (
+                        f"Failed to trim audio from {float(clip_start_s):.3f}s "
+                        f"to {float(clip_end_s):.3f}s."
+                    )
+            except Exception as exc:
+                audio_status = "failed"
+                audio_error = f"Audio segment extraction failed: {exc}"
+        else:
+            audio_status = "missing_timeline_bounds"
+            audio_error = "Audio path exists, but clip start/end seconds are unavailable."
+    elif audio_name or audio_path:
+        audio_status = "missing_source"
+        audio_error = f"Audio file not found: {audio_path or audio_name}"
 
     contents = []
     uploaded_ref: Optional[OpenAIFileReference] = None
     segment_attached = False
     upload_error = None
     if provider == "openai" and segment_available:
-        try:
-            uploaded_ref = _openai_file_reference(client, segment_path)
-            contents.append(uploaded_ref.content_block)
-            segment_attached = True
-        except Exception as exc:
-            upload_error = f"Segment upload failed; continuing with frames only: {exc}"
+        upload_error = "OpenAI clip analysis uses extracted frames because current vision models do not accept video input directly."
 
     for frame_path in frame_paths:
         contents.append({
@@ -189,13 +277,16 @@ def analyze_clip_context(
 
     feedback_items = feedback_items or []
     prompt = (
-        "Analyze the provided timeline-used video segment and/or chronological frames. "
+        "Analyze the provided chronological video frames and any matching audio transcript. "
         "Return only user-visible observations that can help improve an AI video prompt. "
-        "Do not include hidden reasoning. If the segment video file is unavailable, rely on frames.\n\n"
+        "Do not include hidden reasoning. Treat the frames as visual evidence and the transcript as audio/dialogue evidence.\n\n"
         f"CLIP: {clip_name}\n"
         f"CLIP_OCCURRENCE: {clip_occurrence}\n"
         f"TIMELINE_BOUNDS_SECONDS: {clip_start_s} to {clip_end_s}\n"
         f"SEGMENT_DURATION_SECONDS: {duration}\n"
+        f"AUDIO_STATUS: {audio_status}\n"
+        f"AUDIO_TRANSCRIPT: {audio_transcript or '[none]'}\n"
+        f"AUDIO_ERROR: {audio_error or '[none]'}\n"
         f"FEEDBACK_CONTEXT: {json.dumps(feedback_items, ensure_ascii=False)}"
     )
     contents.append(prompt)
@@ -252,6 +343,12 @@ def analyze_clip_context(
         "source_clip_path": os.path.abspath(source_path),
         "source_offset_s": source_offset_s,
         "source_offset_note": "Timeline parser currently stores sequence bounds and clip duration, not source media in/out. Segment uses source offset 0.",
+        "audio_used": audio_name,
+        "audio_path": os.path.abspath(resolved_audio_path) if resolved_audio_path and os.path.exists(resolved_audio_path) else resolved_audio_path,
+        "audio_segment_path": os.path.abspath(audio_segment_path) if os.path.exists(audio_segment_path) else None,
+        "audio_transcript": audio_transcript,
+        "audio_status": audio_status,
+        "audio_error": audio_error,
         "source_feedback_timestamps": [item.get("timestamp") for item in feedback_items],
         "source_feedback_indexes": [item.get("raw_index") for item in feedback_items if item.get("raw_index") is not None],
         "created_at": datetime.now(timezone.utc).isoformat(),

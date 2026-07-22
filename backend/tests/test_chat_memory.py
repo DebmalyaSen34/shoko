@@ -151,6 +151,22 @@ def test_dynamic_chat_suggestions_include_contextual_next_steps():
     } in actions
 
 
+def test_dynamic_chat_suggestions_include_regenerate_summary_when_summary_shown():
+    context = {
+        "feedback": {"feedback_items": []},
+        "latest_version": {},
+        "clip_context": {"summary": "Cached visual summary."},
+    }
+
+    actions = server.dynamic_chat_suggestions("give me summary", context, [])
+
+    assert {
+        "type": "send_message",
+        "label": "Regenerate Summary",
+        "prompt": "Regenerate the clip summary by analyzing the clip frames and audio again.",
+    } in actions
+
+
 def test_prepare_continuity_reference_prefers_previous_final_clip(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     assets_dir = tmp_path / "assets"
@@ -258,6 +274,38 @@ def test_build_clip_media_gallery_includes_clip_assets_and_reference_frames(tmp_
     assert media[2]["label"] == "Referenced frame 00:04"
 
 
+def test_build_clip_media_gallery_includes_analyzed_clip_context_media(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    assets_dir = tmp_path / "assets"
+    segment = data_dir / "project-a" / "analysis" / "clip_context" / "0_clip" / "segment.mp4"
+    audio = data_dir / "project-a" / "analysis" / "clip_context" / "0_clip" / "audio" / "segment_audio.mp3"
+    frame = data_dir / "project-a" / "analysis" / "clip_context" / "0_clip" / "frames" / "frame_001.jpg"
+    for path in (segment, audio, frame):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"media")
+
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+
+    media = server.build_clip_media_gallery({
+        "latest_version": {},
+        "feedback": {},
+        "clip_context": {
+            "clip_segment_path": str(segment),
+            "audio_segment_path": str(audio),
+            "frame_paths": [str(frame)],
+        },
+    })
+
+    assert [item["source"] for item in media] == ["clip_context", "clip_context", "clip_context"]
+    assert media[0]["type"] == "video"
+    assert media[0]["url"] == "/data/project-a/analysis/clip_context/0_clip/segment.mp4"
+    assert media[1]["type"] == "audio"
+    assert media[1]["url"] == "/data/project-a/analysis/clip_context/0_clip/audio/segment_audio.mp3"
+    assert media[2]["type"] == "image"
+    assert media[2]["url"] == "/data/project-a/analysis/clip_context/0_clip/frames/frame_001.jpg"
+
+
 def test_chat_summarizes_saved_clip_context(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     assets_dir = tmp_path / "assets"
@@ -346,6 +394,67 @@ def test_chat_summary_request_runs_clip_context_analysis_when_missing(tmp_path, 
     assert context["clip_context"] == clip_context
     analyze.assert_called_once()
     assert analyze.call_args.kwargs["output_base_dir"] == str(data_dir)
+
+
+def test_chat_summary_uses_cached_context_unless_regeneration_is_forced(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    assets_dir = tmp_path / "assets"
+    project_dir = data_dir / "project-a"
+    context_dir = project_dir / "analysis" / "clip_context" / "0_clip"
+    context_dir.mkdir(parents=True)
+    (project_dir / "timeline.json").write_text(
+        json.dumps({
+            "video_timeline": [
+                {
+                    "clip": "clip.mp4",
+                    "start_tc": "00:00",
+                    "end_tc": "00:02",
+                    "start_s": 0,
+                    "end_s": 2,
+                    "duration_s": 2,
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+    (context_dir / "clip_context.json").write_text(
+        json.dumps({"status": "frames_only", "summary": "Cached summary.", "frame_paths": []}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    with mock.patch("server.analyze_clip_context") as analyze:
+        context = server.build_clip_chat_context("project-a", 0, query="summary")
+        clip_context, error = server.ensure_clip_context_for_chat("project-a", context, "openai")
+
+    assert error is None
+    assert clip_context["summary"] == "Cached summary."
+    analyze.assert_not_called()
+
+    with (
+        mock.patch("server.OpenAI", create=True),
+        mock.patch("server.analyze_clip_context") as analyze,
+    ):
+        analyze.return_value = {"status": "frames_only", "summary": "Fresh summary.", "frame_paths": []}
+        context = server.build_clip_chat_context("project-a", 0, query="regenerate summary")
+        clip_context, error = server.ensure_clip_context_for_chat("project-a", context, "openai", force=True)
+
+    assert error is None
+    assert clip_context["summary"] == "Fresh summary."
+    analyze.assert_called_once()
+
+
+def test_short_summary_request_triggers_clip_analysis():
+    assert server.wants_clip_summary_or_analysis("give me summary")
+    assert server.wants_clip_summary_or_analysis("summarize")
+    assert server.wants_clip_summary_or_analysis("what do you see?")
+    assert not server.wants_clip_summary_or_analysis("show feedback")
+    assert server.wants_regenerated_clip_summary("regenerate the clip summary")
+    assert server.wants_regenerated_clip_summary("reanalyze context")
+    assert not server.wants_regenerated_clip_summary("give me summary")
 
 
 def test_extract_reference_frame_attaches_to_current_feedback(tmp_path, monkeypatch):

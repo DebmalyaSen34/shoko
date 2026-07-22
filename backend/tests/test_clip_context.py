@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from unittest import mock
 
-from src.generator.upload import OpenAIFileReference
 from src.workflows.clip_context import analyze_clip_context
 
 
@@ -25,11 +24,12 @@ class TestClipContextWorkflow(unittest.TestCase):
         shutil.rmtree(self.test_dir)
 
     @mock.patch("src.workflows.clip_context.generate_structured")
-    @mock.patch("src.workflows.clip_context._openai_file_reference")
+    @mock.patch("src.workflows.clip_context.transcribe_audio_segment")
+    @mock.patch("src.workflows.clip_context.extract_audio_segment")
     @mock.patch("src.workflows.clip_context.extract_context_frames")
     @mock.patch("src.workflows.clip_context.trim_clip_segment")
-    def test_analyzes_timeline_segment_and_saves_under_output_base(
-        self, mock_trim, mock_frames, mock_file_ref, mock_generate
+    def test_analyzes_timeline_segment_frames_and_saves_under_output_base(
+        self, mock_trim, mock_frames, mock_extract_audio, mock_transcribe, mock_generate
     ):
         def trim_side_effect(source_path, output_path, duration_s, source_offset_s=0.0):
             self.assertEqual(self.clip_path, source_path)
@@ -52,10 +52,14 @@ class TestClipContextWorkflow(unittest.TestCase):
 
         mock_trim.side_effect = trim_side_effect
         mock_frames.side_effect = frames_side_effect
-        mock_file_ref.return_value = OpenAIFileReference(
-            {"type": "input_file", "file_id": "file-123"},
-            file_id="file-123",
+        audio_path = os.path.join(self.assets_dir, self.project_name, "04_audio", "mix.mp3")
+        os.makedirs(os.path.dirname(audio_path), exist_ok=True)
+        with open(audio_path, "wb") as file:
+            file.write(b"audio")
+        mock_extract_audio.side_effect = lambda _input, output, _start, _end: (
+            os.makedirs(os.path.dirname(output), exist_ok=True) or open(output, "wb").write(b"audio segment") or True
         )
+        mock_transcribe.return_value = "Vir laughs and says hello."
         mock_generate.return_value = {
             "summary": "Mother faces camera without emotion.",
             "visible_characters": ["Mother"],
@@ -82,9 +86,13 @@ class TestClipContextWorkflow(unittest.TestCase):
             client=mock_client,
             provider="openai",
             feedback_items=[{"timestamp": "00:45", "remark": "Show Vir."}],
+            audio_name="mix.mp3",
         )
 
-        self.assertEqual("video_and_frames", result["status"])
+        self.assertEqual("frames_only", result["status"])
+        self.assertEqual("transcribed", result["audio_status"])
+        self.assertEqual("Vir laughs and says hello.", result["audio_transcript"])
+        self.assertTrue(result["audio_segment_path"].endswith("segment_audio.mp3"))
         self.assertTrue(result["clip_context_path"].startswith(os.path.abspath(self.output_base_dir)))
         self.assertNotIn("backend/data", result["clip_context_path"])
         self.assertTrue(os.path.exists(result["clip_context_path"]))
@@ -92,16 +100,18 @@ class TestClipContextWorkflow(unittest.TestCase):
             saved = json.load(file)
         self.assertEqual("Mother faces camera without emotion.", saved["summary"])
         contents = mock_generate.call_args.kwargs["contents"]
-        self.assertTrue(any(item.get("type") == "input_file" for item in contents if isinstance(item, dict)))
+        self.assertFalse(any(item.get("type") == "input_file" for item in contents if isinstance(item, dict)))
         self.assertTrue(any(item.get("type") == "input_image" for item in contents if isinstance(item, dict)))
-        mock_client.files.delete.assert_called_once_with("file-123")
+        self.assertIn("AUDIO_TRANSCRIPT: Vir laughs and says hello.", contents[-1])
+        mock_client.files.delete.assert_not_called()
+        mock_extract_audio.assert_called_once()
+        mock_transcribe.assert_called_once()
 
     @mock.patch("src.workflows.clip_context.generate_structured")
-    @mock.patch("src.workflows.clip_context._openai_file_reference")
     @mock.patch("src.workflows.clip_context.extract_context_frames")
     @mock.patch("src.workflows.clip_context.trim_clip_segment")
-    def test_falls_back_to_frames_only_when_segment_upload_fails(
-        self, mock_trim, mock_frames, mock_file_ref, mock_generate
+    def test_openai_uses_frames_only_for_clip_analysis(
+        self, mock_trim, mock_frames, mock_generate
     ):
         mock_trim.side_effect = lambda _source, output, _duration, source_offset_s=0.0: (
             os.makedirs(os.path.dirname(output), exist_ok=True) or open(output, "wb").write(b"segment") or True
@@ -110,7 +120,6 @@ class TestClipContextWorkflow(unittest.TestCase):
         with open(frame_path, "wb") as file:
             file.write(b"frame")
         mock_frames.return_value = [frame_path]
-        mock_file_ref.side_effect = RuntimeError("unsupported video upload")
         mock_generate.return_value = {
             "summary": "Frames show a neutral mother.",
             "visible_characters": ["Mother"],
@@ -138,7 +147,7 @@ class TestClipContextWorkflow(unittest.TestCase):
         )
 
         self.assertEqual("frames_only", result["status"])
-        self.assertIn("Segment upload failed", result["error"])
+        self.assertIn("uses extracted frames", result["error"])
 
 
 if __name__ == "__main__":

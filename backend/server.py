@@ -706,6 +706,7 @@ def build_clip_media_gallery(context: dict) -> list[dict]:
     media: list[dict] = []
     latest_version = context.get("latest_version") or {}
     feedback = context.get("feedback") or {}
+    clip_context = context.get("clip_context") or {}
     clip_frame_paths = latest_version.get("clip_frame_paths") or []
 
     for asset_path in latest_version.get("selected_assets") or []:
@@ -725,6 +726,33 @@ def build_clip_media_gallery(context: dict) -> list[dict]:
             source="clip_context",
             path=latest_version.get("clip_segment_path"),
             media_type="video",
+        )
+
+    if clip_context.get("clip_segment_path"):
+        add_chat_media_item(
+            media,
+            label="Analyzed clip segment",
+            source="clip_context",
+            path=clip_context.get("clip_segment_path"),
+            media_type="video",
+        )
+
+    if clip_context.get("audio_segment_path"):
+        add_chat_media_item(
+            media,
+            label="Analyzed clip audio",
+            source="clip_context",
+            path=clip_context.get("audio_segment_path"),
+            media_type="audio",
+        )
+
+    for frame_path in clip_context.get("frame_paths") or []:
+        add_chat_media_item(
+            media,
+            label="Analyzed clip frame",
+            source="clip_context",
+            path=frame_path,
+            media_type="image",
         )
 
     referenced_frames = list(latest_version.get("referenced_frames") or [])
@@ -808,9 +836,31 @@ def load_clip_context(project_name: str, clip: dict, clip_index: int) -> Optiona
 
 def wants_clip_summary_or_analysis(text: str) -> bool:
     lower = text.lower()
-    intent_words = {"summarize", "summary", "describe", "understand", "analysis", "analyze", "what happens", "what is happening"}
-    clip_words = {"clip", "shot", "scene", "video"}
-    return any(word in lower for word in intent_words) and any(word in lower for word in clip_words)
+    explicit_analysis_phrases = {
+        "summarize",
+        "summary",
+        "describe",
+        "understand",
+        "analysis",
+        "analyze",
+        "what happens",
+        "what is happening",
+        "what do you see",
+        "what can you see",
+        "look at this",
+        "watch this",
+    }
+    clip_words = {"clip", "shot", "scene", "video", "frame", "frames", "visual", "visible"}
+    if any(phrase in lower for phrase in explicit_analysis_phrases):
+        return True
+    return any(word in lower for word in ["see", "visible", "happening", "shown"]) and any(word in lower for word in clip_words)
+
+
+def wants_regenerated_clip_summary(text: str) -> bool:
+    lower = text.lower()
+    regeneration_words = {"regenerate", "refresh", "reanalyze", "re-analyze", "rerun", "re-run", "update"}
+    summary_words = {"summary", "summarize", "analysis", "analyze", "context"}
+    return any(word in lower for word in regeneration_words) and any(word in lower for word in summary_words)
 
 
 def summarize_clip_context(clip_context: dict) -> str:
@@ -836,12 +886,16 @@ def summarize_clip_context(clip_context: dict) -> str:
         lines.append(f"Camera/framing: {clip_context.get('camera_framing')}")
     if clip_context.get("location"):
         lines.append(f"Location: {clip_context.get('location')}")
+    if clip_context.get("audio_transcript"):
+        lines.append(f"Audio transcript: {clip_context.get('audio_transcript')}")
+    elif clip_context.get("audio_status") and clip_context.get("audio_status") != "not_configured":
+        lines.append(f"Audio status: {clip_context.get('audio_status')}")
     return "\n".join(lines) if lines else "The saved clip context has no summary details yet."
 
 
-def ensure_clip_context_for_chat(project_name: str, context: dict, provider: str) -> tuple[Optional[dict], Optional[str]]:
+def ensure_clip_context_for_chat(project_name: str, context: dict, provider: str, force: bool = False) -> tuple[Optional[dict], Optional[str]]:
     existing = context.get("clip_context")
-    if existing:
+    if existing and not force:
         return existing, None
     if provider != "openai":
         return None, "Clip analysis on demand currently requires OpenAI."
@@ -851,6 +905,8 @@ def ensure_clip_context_for_chat(project_name: str, context: dict, provider: str
     from openai import OpenAI
 
     clip = context.get("clip") or {}
+    feedback = context.get("feedback") or {}
+    latest_version = context.get("latest_version") or {}
     clip_context = analyze_clip_context(
         project_name=project_name,
         clip_name=clip.get("clip"),
@@ -863,6 +919,8 @@ def ensure_clip_context_for_chat(project_name: str, context: dict, provider: str
         client=OpenAI(api_key=os.environ.get("OPENAI_API_KEY")),
         provider="openai",
         feedback_items=(context.get("feedback") or {}).get("feedback_items", []),
+        audio_name=feedback.get("audio_used") or latest_version.get("audio_used"),
+        audio_path=feedback.get("audio_path") or latest_version.get("audio_path") or latest_version.get("trimmed_audio_path"),
     )
     context["clip_context"] = clip_context
     return clip_context, None
@@ -1224,6 +1282,13 @@ def dynamic_chat_suggestions(message: str, context: dict, explicit_actions: list
     if latest_version.get("video_model_prompt"):
         add_unique_action(actions, {"type": "prepare_video", "label": "Generate Video"})
 
+    if context.get("clip_context") and wants_clip_summary_or_analysis(message):
+        add_unique_action(actions, {
+            "type": "send_message",
+            "label": "Regenerate Summary",
+            "prompt": "Regenerate the clip summary by analyzing the clip frames and audio again.",
+        })
+
     if media and not wants_clip_media_gallery(message):
         add_unique_action(actions, {
             "type": "send_message",
@@ -1238,8 +1303,8 @@ def dynamic_chat_suggestions(message: str, context: dict, explicit_actions: list
             "prompt": "Show the feedback for this clip.",
         })
 
-    if len(actions) > 4:
-        return actions[:4]
+    if len(actions) > 5:
+        return actions[:5]
     return actions
 
 
@@ -1958,8 +2023,15 @@ async def post_clip_chat(project_name: str, request: ClipChatRequest):
     user_message = make_chat_message("user", message_text)
     clip_messages.append(user_message)
 
-    if wants_clip_summary_or_analysis(message_text):
-        _clip_context, analysis_error = ensure_clip_context_for_chat(project_name, context, request.provider)
+    analysis_requested = wants_clip_summary_or_analysis(message_text)
+    regenerate_summary = wants_regenerated_clip_summary(message_text)
+    if analysis_requested:
+        _clip_context, analysis_error = ensure_clip_context_for_chat(
+            project_name,
+            context,
+            request.provider,
+            force=regenerate_summary,
+        )
         if analysis_error:
             context["clip_context_error"] = analysis_error
 
@@ -1987,7 +2059,7 @@ async def post_clip_chat(project_name: str, request: ClipChatRequest):
     explicit_actions = infer_action_suggestions(message_text, context)
     actions = dynamic_chat_suggestions(message_text, context, explicit_actions)
     save_pending_workflow_intents(project_name, actions, message_text, context)
-    media = build_clip_media_gallery(context) if (wants_clip_media_gallery(message_text) or tool_results) else []
+    media = build_clip_media_gallery(context) if (wants_clip_media_gallery(message_text) or tool_results or analysis_requested) else []
     assistant_message = make_chat_message(
         "assistant",
         assistant_text,

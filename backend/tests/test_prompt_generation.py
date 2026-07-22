@@ -8,6 +8,14 @@ from unittest import mock
 from src.workflows.prompt_generation import extract_frames_per_second, generate_video_prompts_from_plan
 
 class TestPromptGenerationWorkflow(unittest.TestCase):
+    @staticmethod
+    def _mock_successful_audio_trim(**kwargs):
+        output_audio_path = kwargs["output_audio_path"]
+        os.makedirs(os.path.dirname(output_audio_path), exist_ok=True)
+        with open(output_audio_path, "wb") as f:
+            f.write(b"dummy audio content")
+        return True
+
     def setUp(self):
         self.test_dir = tempfile.mkdtemp()
         self.plan_path = os.path.join(self.test_dir, "generation_plan.json")
@@ -129,7 +137,7 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
         # Arrange
         mock_clip_context.return_value = {}
         mock_get_duration.return_value = 5.0
-        mock_extract_audio.return_value = True
+        mock_extract_audio.side_effect = self._mock_successful_audio_trim
         mock_file_url.return_value = "data:image/png;base64,dummy_data"
         mock_frames_fps.return_value = ["/dummy/frame1.jpg"]
         mock_last_frame.return_value = "/dummy/last_frame.jpg"
@@ -228,7 +236,7 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
         # Arrange
         mock_clip_context.return_value = {}
         mock_get_duration.return_value = 5.0
-        mock_extract_audio.return_value = True
+        mock_extract_audio.side_effect = self._mock_successful_audio_trim
         mock_file_url.return_value = "data:audio/mp3;base64,dummy_audio"
         mock_frames_fps.return_value = ["/dummy/frame1.jpg"]
         mock_last_frame.return_value = "/dummy/last_frame.jpg"
@@ -416,7 +424,7 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
                 f.write("dummy audio content")
 
         mock_get_duration.return_value = 5.0
-        mock_extract_audio.return_value = True
+        mock_extract_audio.side_effect = self._mock_successful_audio_trim
         mock_file_url.return_value = "data:audio/mp3;base64,dummy_audio"
         mock_frames_fps.return_value = ["/dummy/frame1.jpg"]
         mock_last_frame.return_value = "/dummy/last_frame.jpg"

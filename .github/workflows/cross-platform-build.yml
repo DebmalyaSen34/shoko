@@ -39,6 +39,7 @@ jobs:
           bun-version: latest
 
       - name: Setup Python
+        if: runner.os == 'Windows'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -54,7 +55,7 @@ jobs:
           if ($env:RUNNER_OS -eq "Windows") {
             $pythonBin = Join-Path $env:pythonLocation "python.exe"
           } else {
-            $pythonBin = Join-Path $env:pythonLocation "bin/python"
+            $pythonBin = (Get-Command python3).Source
           }
           "PYTHON_BIN=$pythonBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           & $pythonBin --version

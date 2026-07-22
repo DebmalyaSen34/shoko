@@ -272,15 +272,15 @@ class BatchGeneratorTests(unittest.TestCase):
                 batch_size=1,
             )
 
-        uploaded_paths = [call.args[1] for call in upload.call_args_list]
+        uploaded_paths = [os.path.normpath(call.args[1]) for call in upload.call_args_list]
         self.assertCountEqual(
-            [
+            [os.path.normpath(path) for path in [
                 selected_character,
                 selected_location,
                 "data/output/video_frames/clip_0_clip-0/frame_001.jpg",
                 "data/output/video_frames/clip_0_clip-0/frame_002.jpg",
                 "data/output/video_frames/clip_0_clip-0/frame_003.jpg",
-            ],
+            ]],
             uploaded_paths,
         )
         self.assertEqual([selected_character, selected_location], results[0]["selected_assets"])
@@ -422,13 +422,18 @@ class BatchGeneratorTests(unittest.TestCase):
         client.files.delete.assert_not_called()
 
     def test_openai_uploaded_file_reference_uses_file_id_without_filename(self):
-        with tempfile.NamedTemporaryFile(suffix=".mp4") as temp_file:
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
             temp_file.write(b"video")
             temp_file.flush()
+            temp_file_path = temp_file.name
+
+        try:
             client = mock.MagicMock()
             client.files.create.return_value = SimpleNamespace(id="file_uploaded")
 
-            ref = _openai_file_reference(client, temp_file.name)
+            ref = _openai_file_reference(client, temp_file_path)
+        finally:
+            os.unlink(temp_file_path)
 
         self.assertEqual(
             {

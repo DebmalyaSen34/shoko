@@ -75,7 +75,9 @@ class TestVideoGenerationWorkflow(unittest.TestCase):
         }
 
         # Act
-        with mock.patch("os.getcwd", return_value=self.workspace_dir):
+        previous_cwd = os.getcwd()
+        os.chdir(self.workspace_dir)
+        try:
             generated_clips = run_video_generation_workflow(
                 prompts_json_path=self.prompts_path,
                 project_name="test_video_project",
@@ -83,6 +85,8 @@ class TestVideoGenerationWorkflow(unittest.TestCase):
                 output_dir=self.output_dir,
                 poll_interval_seconds=1
             )
+        finally:
+            os.chdir(previous_cwd)
 
         # Assert
         # Verify calls
@@ -108,7 +112,7 @@ class TestVideoGenerationWorkflow(unittest.TestCase):
         expected_final_path = os.path.abspath(
             os.path.join(self.workspace_dir, "assets", "test_video_project", "06_clips", "_final", "clip2.mp4")
         )
-        self.assertEqual(generated_clips[0], expected_final_path)
+        self.assertEqual(os.path.realpath(generated_clips[0]), os.path.realpath(expected_final_path))
 
     def test_missing_api_key(self):
         # Act & Assert

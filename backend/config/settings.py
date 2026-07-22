@@ -1,6 +1,6 @@
 import os
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 from dotenv import load_dotenv
@@ -32,18 +32,20 @@ OS_ENV_KEYS_AT_START = frozenset(
 
 def default_app_storage_dir(app_name: str = APP_NAME) -> str:
     """Return the per-user app data directory for the current OS."""
-    home = Path.home()
     if sys.platform == "darwin":
+        home = PurePosixPath(str(Path.home()).replace("\\", "/"))
         return str(home / "Library" / "Application Support" / app_name)
     if sys.platform.startswith("win"):
         base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
         if base:
             return str(Path(base) / app_name)
+        home = Path.home()
         return str(home / "AppData" / "Local" / app_name)
 
     xdg_data_home = os.environ.get("XDG_DATA_HOME")
     if xdg_data_home:
-        return str(Path(xdg_data_home) / app_name)
+        return str(PurePosixPath(xdg_data_home.replace("\\", "/")) / app_name)
+    home = PurePosixPath(str(Path.home()).replace("\\", "/"))
     return str(home / ".local" / "share" / app_name)
 
 
@@ -51,7 +53,7 @@ def configured_app_storage_dir(app_name: str = APP_NAME) -> str:
     """Return the app storage root, honoring only the real OS env override."""
     configured_dir = os.environ.get("LOKA_STORAGE_DIR")
     if configured_dir:
-        return str(Path(configured_dir).expanduser())
+        return os.path.expanduser(configured_dir)
     return default_app_storage_dir(app_name)
 
 

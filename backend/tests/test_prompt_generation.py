@@ -122,10 +122,12 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
     @mock.patch("src.workflows.prompt_generation.extract_last_frame")
     @mock.patch("src.workflows.prompt_generation.extract_audio_segment")
     @mock.patch("src.workflows.prompt_generation.get_video_duration")
+    @mock.patch("src.workflows.prompt_generation.analyze_clip_context")
     def test_generate_video_prompts_from_plan_successful(
-        self, mock_get_duration, mock_extract_audio, mock_last_frame, mock_frames_fps, mock_file_url, mock_gen_structured
+        self, mock_clip_context, mock_get_duration, mock_extract_audio, mock_last_frame, mock_frames_fps, mock_file_url, mock_gen_structured
     ):
         # Arrange
+        mock_clip_context.return_value = {}
         mock_get_duration.return_value = 5.0
         mock_extract_audio.return_value = True
         mock_file_url.return_value = "data:image/png;base64,dummy_data"
@@ -219,10 +221,12 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
     @mock.patch("src.workflows.prompt_generation.extract_last_frame")
     @mock.patch("src.workflows.prompt_generation.extract_audio_segment")
     @mock.patch("src.workflows.prompt_generation.get_video_duration")
+    @mock.patch("src.workflows.prompt_generation.analyze_clip_context")
     def test_generate_video_prompts_from_plan_with_transcription(
-        self, mock_get_duration, mock_extract_audio, mock_last_frame, mock_frames_fps, mock_file_url, mock_gen_structured
+        self, mock_clip_context, mock_get_duration, mock_extract_audio, mock_last_frame, mock_frames_fps, mock_file_url, mock_gen_structured
     ):
         # Arrange
+        mock_clip_context.return_value = {}
         mock_get_duration.return_value = 5.0
         mock_extract_audio.return_value = True
         mock_file_url.return_value = "data:audio/mp3;base64,dummy_audio"
@@ -289,9 +293,11 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
     @mock.patch("src.workflows.prompt_generation.extract_last_frame")
     @mock.patch("src.workflows.prompt_generation.extract_audio_segment")
     @mock.patch("src.workflows.prompt_generation.get_video_duration")
+    @mock.patch("src.workflows.prompt_generation.analyze_clip_context")
     def test_generate_video_prompts_from_plan_preserves_referenced_frames(
-        self, mock_get_duration, mock_extract_audio, mock_last_frame, mock_frames_fps, mock_file_url, mock_gen_structured
+        self, mock_clip_context, mock_get_duration, mock_extract_audio, mock_last_frame, mock_frames_fps, mock_file_url, mock_gen_structured
     ):
+        mock_clip_context.return_value = {}
         ref_frame_path = os.path.join(self.test_dir, "ref_00_44.jpg")
         with open(ref_frame_path, "wb") as file:
             file.write(b"referenced frame")
@@ -355,10 +361,12 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
     @mock.patch("src.workflows.prompt_generation.extract_last_frame")
     @mock.patch("src.workflows.prompt_generation.extract_audio_segment")
     @mock.patch("src.workflows.prompt_generation.get_video_duration")
+    @mock.patch("src.workflows.prompt_generation.analyze_clip_context")
     def test_generate_video_prompts_from_plan_short_duration_and_empty_transcript(
-        self, mock_get_duration, mock_extract_audio, mock_last_frame, mock_frames_fps, mock_file_url, mock_gen_structured
+        self, mock_clip_context, mock_get_duration, mock_extract_audio, mock_last_frame, mock_frames_fps, mock_file_url, mock_gen_structured
     ):
         # Arrange: local plan with a short duration clip (1.5s < 1.8s) and a clip with empty transcript
+        mock_clip_context.return_value = {}
         local_plan = [
             {
                 "clip_used": "clip2.mp4",
@@ -552,9 +560,11 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
     @mock.patch("src.workflows.prompt_generation._file_data_url")
     @mock.patch("src.workflows.prompt_generation.extract_frames_per_second")
     @mock.patch("src.workflows.prompt_generation.extract_audio_segment")
+    @mock.patch("src.workflows.prompt_generation.analyze_clip_context")
     def test_absent_requested_character_uses_character_sheet(
-        self, mock_extract_audio, mock_frames_fps, mock_file_url, mock_gen_structured
+        self, mock_clip_context, mock_extract_audio, mock_frames_fps, mock_file_url, mock_gen_structured
     ):
+        mock_clip_context.return_value = {}
         local_plan = [
             {
                 "clip_used": "clip2.mp4",
@@ -617,9 +627,11 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
     @mock.patch("src.workflows.prompt_generation._file_data_url")
     @mock.patch("src.workflows.prompt_generation.extract_frames_per_second")
     @mock.patch("src.workflows.prompt_generation.extract_audio_segment")
+    @mock.patch("src.workflows.prompt_generation.analyze_clip_context")
     def test_missing_absent_character_sheet_marks_review_needed(
-        self, mock_extract_audio, mock_frames_fps, mock_file_url, mock_gen_structured
+        self, mock_clip_context, mock_extract_audio, mock_frames_fps, mock_file_url, mock_gen_structured
     ):
+        mock_clip_context.return_value = {}
         os.remove(self.vir_sheet)
         local_plan = [
             {

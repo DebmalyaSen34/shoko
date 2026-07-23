@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import "./App.css";
 import { AppHeader } from "./components/AppHeader";
 import { AssetsSidebar } from "./components/assets/AssetsSidebar";
-import { ErrorModal, PreviewModal, ResultModal } from "./components/modals/Modals";
+import { ErrorModal, GenerateVideoOptionsModal, PreviewModal, ResultModal } from "./components/modals/Modals";
 import { NewProjectModal } from "./components/modals/NewProjectModal";
 import { UploadAssetsModal } from "./components/modals/UploadAssetsModal";
 import { UploadFeedbackModal } from "./components/modals/UploadFeedbackModal";
@@ -14,7 +14,37 @@ import { ClipChatPanel } from "./components/chat/ClipChatPanel";
 import { ToastStack } from "./components/ToastStack";
 import { apiUrl, API_BASE, initializeApiBase, staticUrl } from "./lib/api";
 import { clipBasename } from "./lib/format";
-import type { ActiveClipChat, PreviewState, ProjectData, PromptRecord, PromptVersion, Provider, ResultState, Toast } from "./types";
+import type { ActiveClipChat, GenerateVideoOptions, GeneratedVideo, PreviewState, ProjectData, PromptRecord, PromptVersion, Provider, ResultState, Toast } from "./types";
+
+const DEFAULT_VIDEO_OPTIONS: GenerateVideoOptions = {
+  resolution: "720p",
+  generate_audio: false,
+  aspect_ratio: "9:16",
+  duration: 5,
+};
+
+const VIDEO_OPTIONS_STORAGE_KEY = "loka15.video-generation.options";
+
+type PendingVideoRequest = {
+  clipIndex: number;
+  promptVersionIndex?: number;
+  resolve: (result: { video: GeneratedVideo; generated_videos: GeneratedVideo[] }) => void;
+  reject: (error: Error) => void;
+};
+
+function loadRememberedVideoOptions(): GenerateVideoOptions {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(VIDEO_OPTIONS_STORAGE_KEY) || "{}") as Partial<GenerateVideoOptions>;
+    return {
+      resolution: parsed.resolution || DEFAULT_VIDEO_OPTIONS.resolution,
+      generate_audio: parsed.generate_audio ?? DEFAULT_VIDEO_OPTIONS.generate_audio,
+      aspect_ratio: parsed.aspect_ratio || DEFAULT_VIDEO_OPTIONS.aspect_ratio,
+      duration: parsed.duration || DEFAULT_VIDEO_OPTIONS.duration,
+    };
+  } catch {
+    return DEFAULT_VIDEO_OPTIONS;
+  }
+}
 
 function App() {
   const [projects, setProjects] = useState<string[]>([]);
@@ -38,6 +68,9 @@ function App() {
   const [activeClipForManualFeedback, setActiveClipForManualFeedback] = useState("");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [runningIndexes, setRunningIndexes] = useState<Set<number>>(new Set());
+  const [generatingVideoKeys, setGeneratingVideoKeys] = useState<Set<string>>(new Set());
+  const [videoOptions, setVideoOptions] = useState<GenerateVideoOptions>(() => loadRememberedVideoOptions());
+  const [pendingVideoRequest, setPendingVideoRequest] = useState<PendingVideoRequest | null>(null);
   const [selectedVersions, setSelectedVersions] = useState<Record<string, number>>({});
   const [activeClipChat, setActiveClipChat] = useState<ActiveClipChat>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
@@ -175,8 +208,103 @@ function App() {
           version.audio_url,
         error: version.audio_trim_error,
       },
+      generatedVideos: version.generated_videos || [],
     });
   }, []);
+
+  const runGenerateVideo = useCallback(
+    async (clipIndex: number, promptVersionIndex: number | undefined, options: GenerateVideoOptions) => {
+      if (!activeProject) throw new Error("No active project selected.");
+      const key = `${clipIndex}:${promptVersionIndex ?? "latest"}`;
+      setGeneratingVideoKeys((current) => new Set(current).add(key));
+      notify("Video generation started with Segmind...");
+
+      try {
+        const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(activeProject)}/generate-video`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            clip_index: clipIndex,
+            prompt_version_index: promptVersionIndex,
+            provider: "segmind",
+            resolution: options.resolution,
+            generate_audio: options.generate_audio,
+            aspect_ratio: options.aspect_ratio,
+            duration: options.duration,
+          }),
+        });
+        if (!response.ok) {
+          let message = await response.text();
+          try {
+            const parsed = JSON.parse(message) as { detail?: string | { message?: string; request_id?: string; next_step?: string } };
+            if (typeof parsed.detail === "string") {
+              message = parsed.detail;
+            } else if (parsed.detail?.message) {
+              message = parsed.detail.message;
+              if (parsed.detail.request_id) message += ` Request id: ${parsed.detail.request_id}.`;
+              if (parsed.detail.next_step) message += ` ${parsed.detail.next_step}`;
+            }
+          } catch {
+            // Keep the raw response text.
+          }
+          throw new Error(message);
+        }
+        const data = (await response.json()) as { video: GeneratedVideo; generated_videos: GeneratedVideo[] };
+        notify("Video generated successfully.", "success");
+        await loadProject(activeProject, { preserveTimelineScroll: true });
+        return data;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Video generation failed.";
+        notify(message, "error");
+        throw error;
+      } finally {
+        setGeneratingVideoKeys((current) => {
+          const next = new Set(current);
+          next.delete(key);
+          return next;
+        });
+      }
+    },
+    [activeProject, loadProject, notify],
+  );
+
+  const rememberVideoOptions = useCallback(
+    (options: GenerateVideoOptions) => {
+      setVideoOptions(options);
+      window.localStorage.setItem(VIDEO_OPTIONS_STORAGE_KEY, JSON.stringify(options));
+      notify("Video generation choices remembered.", "success");
+    },
+    [notify],
+  );
+
+  const generateVideo = useCallback(
+    (clipIndex: number, promptVersionIndex?: number) =>
+      new Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>((resolve, reject) => {
+        setPendingVideoRequest({ clipIndex, promptVersionIndex, resolve, reject });
+      }),
+    [],
+  );
+
+  const closeVideoOptionsModal = useCallback(() => {
+    pendingVideoRequest?.reject(new Error("Video generation cancelled."));
+    setPendingVideoRequest(null);
+  }, [pendingVideoRequest]);
+
+  const submitVideoOptions = useCallback(
+    async (options: GenerateVideoOptions) => {
+      if (!pendingVideoRequest) return;
+      setVideoOptions(options);
+      const request = pendingVideoRequest;
+      setPendingVideoRequest(null);
+      try {
+        const result = await runGenerateVideo(request.clipIndex, request.promptVersionIndex, options);
+        request.resolve(result);
+      } catch (error) {
+        request.reject(error instanceof Error ? error : new Error("Video generation failed."));
+      }
+    },
+    [pendingVideoRequest, runGenerateVideo],
+  );
 
   const executeWorkflow = useCallback(
     (feedbackIndex: number) => {
@@ -318,6 +446,8 @@ function App() {
           executeWorkflow={executeWorkflow}
           findPrompt={findPrompt}
           openResultFromVersion={openResultFromVersion}
+          generatingVideoKeys={generatingVideoKeys}
+          onGenerateVideo={generateVideo}
           setZoom={setZoom}
           onUploadFeedback={() => setShowUploadFeedback(true)}
           onAddManualFeedback={(clipName) => {
@@ -325,6 +455,7 @@ function App() {
             setShowAddManualFeedback(true);
           }}
           onOpenClipChat={(clipIndex) => setActiveClipChat({ clipIndex })}
+          onPreview={setPreview}
         />
 
         {projectData && chatClip && activeClipChat && (
@@ -339,6 +470,7 @@ function App() {
             onClose={() => setActiveClipChat(null)}
             onExecuteWorkflow={executeWorkflow}
             onOpenPromptDetails={openResultFromVersion}
+            onGenerateVideo={generateVideo}
             onPreview={setPreview}
           />
         )}
@@ -355,6 +487,14 @@ function App() {
 
       {preview && <PreviewModal preview={preview} onClose={() => setPreview(null)} />}
       {errorLog && <ErrorModal errorLog={errorLog} onClose={() => setErrorLog("")} />}
+      {pendingVideoRequest && (
+        <GenerateVideoOptionsModal
+          initialOptions={videoOptions}
+          onClose={closeVideoOptionsModal}
+          onGenerate={submitVideoOptions}
+          onRemember={rememberVideoOptions}
+        />
+      )}
       {showNewProject && (
         <NewProjectModal
           onClose={() => setShowNewProject(false)}

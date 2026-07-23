@@ -32,6 +32,24 @@ SEGMIND_DURATION_SECONDS = 5
 SEGMIND_UPLOAD_URL = "https://workflows-api.segmind.com/upload-asset"
 MAX_DURATION_SECONDS = 15
 MIN_DURATION_SECONDS = 4
+OUTPUT_DOWNLOAD_RETRY_SECONDS = 300
+
+
+class SeedanceGenerationRecoveryError(RuntimeError):
+    """Raised after a submitted Segmind job cannot be recovered locally."""
+
+    def __init__(self, message: str, *, request_id: str | None = None, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.request_id = request_id
+        self.status_code = status_code
+
+
+def _exception_status_code(exc: Exception) -> int | None:
+    status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status
+    match = re.search(r"status:\s*(\d+)", str(exc), flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
 
 
 def clamp_duration(duration: int | float | str | None, model: str | None = None) -> int:
@@ -874,10 +892,37 @@ def create_seedance_task(
         reference_audios=len(payload.get("reference_audios") or []),
         prompt_chars=len(str(payload.get("prompt") or "")),
     )
+    job = None
     try:
         job = client.submit_async(model_slug, **payload)
-        log_event("segmind.generation.submitted", model=model_slug, request_id=job.request_id)
-        result = job.wait(timeout=1800, interval=2.0)
+        request_id = getattr(job, "request_id", None)
+        log_event("segmind.generation.submitted", model=model_slug, request_id=request_id)
+        result = None
+        wait_errors: list[str] = []
+        for attempt in range(1, 4):
+            try:
+                result = job.wait(timeout=1800, interval=2.0)
+                break
+            except Exception as exc:
+                status_code = _exception_status_code(exc)
+                wait_errors.append(str(exc)[:500])
+                log_event(
+                    "segmind.generation.wait_error",
+                    model=model_slug,
+                    request_id=request_id,
+                    attempt=attempt,
+                    status_code=status_code,
+                    error_type=type(exc).__name__,
+                    error=str(exc)[:500],
+                )
+                if status_code != 404 or attempt >= 3:
+                    raise
+                time.sleep(30 * attempt)
+        if result is None:
+            raise SeedanceGenerationRecoveryError(
+                f"Segmind generation was submitted but no result was returned. Wait errors: {wait_errors}",
+                request_id=request_id,
+            )
     except InferenceTimeout as exc:
         log_event(
             "segmind.generation.timeout",
@@ -894,6 +939,19 @@ def create_seedance_task(
             error=str(exc.detail)[:500],
         )
         raise RuntimeError(f"Segmind generation failed: {exc.detail}") from exc
+    except Exception as exc:
+        request_id = getattr(job, "request_id", None) if job is not None else None
+        status_code = _exception_status_code(exc)
+        if request_id:
+            raise SeedanceGenerationRecoveryError(
+                (
+                    "Segmind generation was submitted, but the app could not retrieve the finished job. "
+                    f"Request id: {request_id}. Provider error: {exc}"
+                ),
+                request_id=request_id,
+                status_code=status_code,
+            ) from exc
+        raise
 
     output_url = _video_url_from_segmind_result(result)
     if not output_url:
@@ -906,17 +964,48 @@ def create_seedance_task(
         raise RuntimeError(f"Segmind response did not include an output video URL: {result}")
 
     http = session or requests.Session()
-    with http.get(output_url, stream=True, timeout=300) as response:
-        response.raise_for_status()
-        video_bytes = b"".join(chunk for chunk in response.iter_content(chunk_size=1024 * 1024) if chunk)
+    request_id = getattr(job, "request_id", None)
+    download_started = time.perf_counter()
+    last_download_error: Exception | None = None
+    while True:
+        try:
+            with http.get(output_url, stream=True, timeout=300) as response:
+                response.raise_for_status()
+                video_bytes = b"".join(chunk for chunk in response.iter_content(chunk_size=1024 * 1024) if chunk)
+                content_type = response.headers.get("content-type", "video/mp4")
+            break
+        except Exception as exc:
+            last_download_error = exc
+            elapsed = time.perf_counter() - download_started
+            status_code = _exception_status_code(exc)
+            log_event(
+                "segmind.generation.download_error",
+                model=model_slug,
+                request_id=request_id,
+                output_url=output_url,
+                elapsed_seconds=round(elapsed, 2),
+                status_code=status_code,
+                error_type=type(exc).__name__,
+                error=str(exc)[:500],
+            )
+            if elapsed >= OUTPUT_DOWNLOAD_RETRY_SECONDS or status_code not in {404, 409, 425, 429, 500, 502, 503, 504}:
+                raise SeedanceGenerationRecoveryError(
+                    (
+                        "Segmind generation completed, but the app could not download the output video. "
+                        f"Request id: {request_id}. Output URL: {output_url}. Provider error: {last_download_error}"
+                    ),
+                    request_id=request_id,
+                    status_code=status_code,
+                ) from exc
+            time.sleep(min(30, 5 + int(elapsed // 20) * 5))
     log_event(
         "segmind.generation.response",
         model=model_slug,
-        request_id=getattr(job, "request_id", None),
+        request_id=request_id,
         duration_ms=round((time.perf_counter() - generation_started) * 1000, 2),
         output_url=output_url,
         bytes=len(video_bytes),
-        content_type=response.headers.get("content-type", "video/mp4"),
+        content_type=content_type,
     )
 
     if output_path:
@@ -925,11 +1014,11 @@ def create_seedance_task(
         path.write_bytes(video_bytes)
 
     return {
-        "id": getattr(job, "request_id", None) or f"segmind-{int(time.time())}",
+        "id": request_id or f"segmind-{int(time.time())}",
         "status": "succeeded",
         "content": {
             "bytes": video_bytes,
-            "content_type": response.headers.get("content-type", "video/mp4"),
+            "content_type": content_type,
             "video_url": output_url,
         },
         "payload": payload,

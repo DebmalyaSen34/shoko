@@ -1,9 +1,13 @@
-import type { PreviewState, ResultState } from "../../types";
+import { useState } from "react";
+import type { GenerateVideoOptions, PreviewState, ResultState, VideoAspectRatio, VideoResolution } from "../../types";
 import type { ReactNode } from "react";
 import { staticUrl } from "../../lib/api";
 import { basename } from "../../lib/format";
 import { Icon } from "../Icon";
 import { FormattedPrompt } from "../FormattedPrompt";
+
+const RESOLUTION_OPTIONS: VideoResolution[] = ["480p", "720p", "1080p", "4k"];
+const ASPECT_RATIO_OPTIONS: VideoAspectRatio[] = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"];
 
 function getAssetUrl(path: string) {
   if (!path) return "";
@@ -45,17 +49,18 @@ function getReferenceUrl(path: string) {
 
 export function PreviewModal({ preview, onClose }: { preview: NonNullable<PreviewState>; onClose: () => void }) {
   const { file } = preview;
+  const isVideo = file.type === "video";
 
   return (
     <div className="modal active">
-      <div className="modal-content glass-card">
+      <div className={`modal-content glass-card ${isVideo ? "video-preview-content" : ""}`}>
         <div className="modal-header">
           <h3>{file.name}</h3>
           <button className="close-btn" onClick={onClose}>
             <Icon name="close" />
           </button>
         </div>
-        <div className="modal-body">
+        <div className={`modal-body ${isVideo ? "video-preview-body" : ""}`}>
           {file.type === "image" && <img src={staticUrl(file.url)} alt={file.name} />}
           {file.type === "video" && <video src={staticUrl(file.url)} controls autoPlay playsInline preload="auto" />}
           {file.type === "audio" && (
@@ -110,6 +115,7 @@ export function ErrorModal({ errorLog, onClose }: { errorLog: string; onClose: (
 
 export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<ResultState>; onClose: () => void; onCopy: () => void }) {
   const hasAudioReference = Boolean(result.audioTrim?.path || result.audioTrim?.error);
+  const generatedVideos = result.generatedVideos || [];
 
   return (
     <div className="modal active">
@@ -155,6 +161,24 @@ export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<R
                   </label>
                   <div className="initial-image-preview-wrapper" style={{ maxHeight: "200px", overflow: "hidden", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
                     <img src={result.initialImage} alt="Initial Frame" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                  </div>
+                </div>
+              )}
+              {generatedVideos.length > 0 && (
+                <div className="result-section">
+                  <label className="result-label">
+                    <Icon name="video" /> Generated Videos
+                  </label>
+                  <div className="result-generated-video-list">
+                    {generatedVideos.map((video) => (
+                      <div className="result-generated-video-card" key={`${video.path}-${video.version}`}>
+                        <video src={staticUrl(video.url || video.path)} controls playsInline preload="metadata" />
+                        <div>
+                          <strong>{video.label || `Generated video v${video.version}`}</strong>
+                          <span>{basename(video.path)}</span>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -238,6 +262,99 @@ export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<R
         <div className="modal-footer modal-actions">
           <button className="premium-btn" onClick={onClose}>
             <Icon name="check" /> Approve & Proceed
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function GenerateVideoOptionsModal({
+  initialOptions,
+  onClose,
+  onGenerate,
+  onRemember,
+}: {
+  initialOptions: GenerateVideoOptions;
+  onClose: () => void;
+  onGenerate: (options: GenerateVideoOptions) => void;
+  onRemember: (options: GenerateVideoOptions) => void;
+}) {
+  const [options, setOptions] = useState<GenerateVideoOptions>(initialOptions);
+  const [remembered, setRemembered] = useState(false);
+
+  function update<K extends keyof GenerateVideoOptions>(key: K, value: GenerateVideoOptions[K]) {
+    setRemembered(false);
+    setOptions((current) => ({ ...current, [key]: value }));
+  }
+
+  return (
+    <div className="modal active">
+      <div className="modal-content glass-card generate-video-modal">
+        <div className="modal-header">
+          <h3>
+            <Icon name="video" /> Generate Video
+          </h3>
+          <button className="close-btn" onClick={onClose}>
+            <Icon name="close" />
+          </button>
+        </div>
+        <div className="modal-body generate-video-options">
+          <label className="settings-field">
+            <span>Resolution</span>
+            <select value={options.resolution} onChange={(event) => update("resolution", event.target.value as VideoResolution)}>
+              {RESOLUTION_OPTIONS.map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="settings-field">
+            <span>Aspect Ratio</span>
+            <select value={options.aspect_ratio} onChange={(event) => update("aspect_ratio", event.target.value as VideoAspectRatio)}>
+              {ASPECT_RATIO_OPTIONS.map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="settings-field">
+            <span>Duration</span>
+            <input
+              type="number"
+              min={4}
+              max={15}
+              step={1}
+              value={options.duration}
+              onChange={(event) => update("duration", Math.max(4, Math.min(15, Number(event.target.value) || 5)))}
+            />
+          </label>
+
+          <label className="generate-audio-toggle">
+            <input
+              type="checkbox"
+              checked={options.generate_audio}
+              onChange={(event) => update("generate_audio", event.target.checked)}
+            />
+            <span>Generate audio</span>
+          </label>
+        </div>
+        <div className="modal-footer modal-actions">
+          <button
+            className="premium-btn secondary"
+            type="button"
+            onClick={() => {
+              onRemember(options);
+              setRemembered(true);
+            }}
+          >
+            <Icon name="check" /> {remembered ? "Remembered" : "Remember Choices"}
+          </button>
+          <button className="premium-btn secondary" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="premium-btn" type="button" onClick={() => onGenerate(options)}>
+            <Icon name="video" /> Generate
           </button>
         </div>
       </div>

@@ -38,6 +38,13 @@ from src.clustering import find_matching_clip_occurrence
 from src.utils import parse_timestamp_to_seconds
 from src.logging_utils import log_event
 from src.chat_memory import ChatMemoryStore
+from scripts.generate_seedance_video import (
+    SeedanceGenerationRecoveryError,
+    SupabaseAssetUrlCache,
+    build_segmind_payload,
+    create_seedance_task,
+    save_video_bytes,
+)
 
 APP_VERSION = os.environ.get("LOKA_APP_VERSION", "0.1.0")
 BACKEND_STARTED_AT = datetime.now(timezone.utc)
@@ -504,6 +511,16 @@ class ClipMemoryRequest(BaseModel):
     scope: Literal["clip", "project"] = "clip"
 
 
+class GenerateClipVideoRequest(BaseModel):
+    clip_index: int
+    prompt_version_index: Optional[int] = None
+    provider: str = "segmind"
+    resolution: Literal["480p", "720p", "1080p", "4k"] = "720p"
+    generate_audio: bool = False
+    aspect_ratio: Literal["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"] = "9:16"
+    duration: int = 5
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -695,6 +712,13 @@ def add_chat_media_item(
     })
 
 
+def generated_videos_for_version(version: Optional[dict]) -> list[dict]:
+    if not version:
+        return []
+    videos = version.get("generated_videos")
+    return videos if isinstance(videos, list) else []
+
+
 def wants_clip_media_gallery(text: str) -> bool:
     lower = text.lower()
     show_words = {"show", "display", "list", "view", "see", "open"}
@@ -732,6 +756,18 @@ def build_clip_media_gallery(context: dict) -> list[dict]:
             source="referenced_frames",
             path=ref_frame.get("frame_path"),
             media_type="image",
+        )
+
+    generated_videos = generated_videos_for_version(latest_version)
+    if not generated_videos:
+        generated_videos = generated_videos_for_version(context.get("prompt"))
+    for index, video in enumerate(generated_videos):
+        add_chat_media_item(
+            media,
+            label=video.get("label") or f"Generated video v{video.get('version') or index + 1}",
+            source="generated_videos",
+            path=video.get("path") or video.get("url"),
+            media_type="video",
         )
 
     return media
@@ -1114,6 +1150,7 @@ def compact_chat_context(context: dict) -> str:
             "feedback_items": feedback_items,
             "selected_assets": selected_assets,
             "latest_video_prompt": latest_version.get("video_model_prompt"),
+            "generated_videos": generated_videos_for_version(latest_version),
             "latest_prompt_explanation": latest_version.get("explanation"),
             "clip_context": context.get("clip_context"),
             "quality_report": latest_version.get("quality_report"),
@@ -1212,7 +1249,10 @@ def infer_action_suggestions(text: str, context: dict) -> list[dict]:
             action["autonomous"] = True
         suggestions.append(action)
     if any(word in lower for word in ["video", "generate", "seedance", "render"]) and latest_version.get("video_model_prompt"):
-        suggestions.append({"type": "prepare_video", "label": "Prepare Video"})
+        action = {"type": "generate_video", "label": "Generate Video"}
+        if "generate" in lower or "render" in lower or "seedance" in lower:
+            action["autonomous"] = True
+        suggestions.append(action)
     return suggestions
 
 
@@ -1243,7 +1283,7 @@ def dynamic_chat_suggestions(message: str, context: dict, explicit_actions: list
         })
 
     if latest_version.get("video_model_prompt"):
-        add_unique_action(actions, {"type": "prepare_video", "label": "Generate Video"})
+        add_unique_action(actions, {"type": "generate_video", "label": "Generate Video"})
 
     if context.get("clip_context") and wants_clip_summary_or_analysis(message):
         add_unique_action(actions, {
@@ -1310,7 +1350,7 @@ def fallback_chat_reply(message: str, context: dict) -> str:
         return "The existing workflow needs at least one feedback item for this clip."
     if "video" in lower or "generate" in lower:
         if latest_version.get("video_model_prompt"):
-            return "A generated prompt is ready. Use Prepare Video to open the prompt, references, audio trim, and quality report."
+            return "A generated prompt is ready. Use Generate Video to render a versioned clip from the latest prompt."
         return "No generated prompt exists yet. Run the feedback workflow first, then prepare video generation."
 
     return (
@@ -1602,6 +1642,10 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
         "audio_trim_duration_s",
         "audio_trim_source",
         "audio_trim_error",
+        "audio_transcript",
+        "dialogue_text",
+        "dialogue_language",
+        "dialogue_extraction_reasoning",
         "audio_used",
         "audio_path",
         "audio_url",
@@ -1859,6 +1903,244 @@ def prepare_continuity_reference_from_intent(project_name: str, feedback_index: 
     )
     return frame_path, note
 
+
+def prompt_versions_for_record(prompt: dict) -> list[dict]:
+    history = prompt.get("history")
+    if isinstance(history, list) and history:
+        return history
+    if prompt.get("video_model_prompt"):
+        return [prompt]
+    return []
+
+
+def _safe_video_stem(clip_name: str) -> str:
+    stem = Path(clip_name or "clip").stem
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-") or "clip"
+
+
+def _next_generated_video_path(project_name: str, clip_name: str, version_number: int) -> Path:
+    output_dir = project_assets_dir(project_name) / "generated_videos"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    base = f"{_safe_video_stem(clip_name)}_v{version_number:03d}.mp4"
+    candidate = output_dir / base
+    suffix = 2
+    while candidate.exists():
+        candidate = output_dir / f"{_safe_video_stem(clip_name)}_v{version_number:03d}_{suffix}.mp4"
+        suffix += 1
+    return candidate
+
+
+def _video_asset_url(path: Path) -> str:
+    rel = path.resolve().relative_to(ASSETS_DIR)
+    return f"/assets/{quote(rel.as_posix())}"
+
+
+def append_video_generation_attempt(
+    prompt_record: dict,
+    selected_version: dict,
+    attempt: dict,
+    *,
+    is_latest_version: bool,
+) -> None:
+    selected_version.setdefault("video_generation_attempts", []).append(attempt)
+    if selected_version is not prompt_record and is_latest_version:
+        prompt_record["video_generation_attempts"] = selected_version["video_generation_attempts"]
+    elif selected_version is prompt_record:
+        prompt_record["video_generation_attempts"] = selected_version["video_generation_attempts"]
+    prompt_record["latest_video_generation_attempt"] = attempt
+
+
+def generate_clip_video(
+    project_name: str,
+    clip_index: int,
+    prompt_version_index: Optional[int] = None,
+    *,
+    resolution: str = "720p",
+    generate_audio: bool = False,
+    aspect_ratio: str = "9:16",
+    duration: int = 5,
+) -> dict:
+    project_name = safe_project_name(project_name)
+    api_key = os.environ.get("SEGMIND_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="SEGMIND_API_KEY is not configured.")
+
+    project_data = get_project_data(project_name)
+    timeline = project_data.get("timeline", [])
+    if clip_index < 0 or clip_index >= len(timeline):
+        raise HTTPException(status_code=404, detail="Clip index not found")
+
+    clip = timeline[clip_index]
+    prompts_path = project_data_dir(project_name) / "video_prompts.json"
+    prompts_data = read_json_file(prompts_path, [])
+    if not isinstance(prompts_data, list):
+        raise HTTPException(status_code=404, detail="Prompt history was not found.")
+
+    prompt_record = matching_prompt({"prompts": prompts_data}, clip, clip_index)
+    if not prompt_record:
+        raise HTTPException(status_code=404, detail="No generated prompt exists for this clip.")
+
+    versions = prompt_versions_for_record(prompt_record)
+    if not versions:
+        raise HTTPException(status_code=400, detail="No usable prompt version exists for this clip.")
+
+    selected_index = prompt_version_index if prompt_version_index is not None else len(versions) - 1
+    if selected_index < 0 or selected_index >= len(versions):
+        raise HTTPException(status_code=400, detail="Prompt version index is out of range.")
+    selected_version = versions[selected_index]
+    if not selected_version.get("video_model_prompt"):
+        raise HTTPException(status_code=400, detail="Selected prompt version has no video prompt.")
+
+    existing_videos = generated_videos_for_version(selected_version)
+    next_version_number = len(existing_videos) + 1
+    output_path = _next_generated_video_path(project_name, clip.get("clip", "clip.mp4"), next_version_number)
+    is_latest_version = selected_index == len(versions) - 1
+
+    cache = SupabaseAssetUrlCache()
+    payload = None
+    try:
+        payload = build_segmind_payload(
+            item={**prompt_record, **selected_version},
+            api_key=api_key,
+            cache=cache,
+            use_local_initial_frame=True,
+            initial_image_url=None,
+        )
+        payload["resolution"] = resolution
+        payload["generate_audio"] = generate_audio
+        payload["aspect_ratio"] = aspect_ratio
+        payload["duration"] = max(4, min(15, int(duration or 5)))
+        result = create_seedance_task(api_key=api_key, payload=payload)
+        video_bytes = (result.get("content") or {}).get("bytes")
+        if not video_bytes:
+            raise RuntimeError(f"Segmind response did not include video bytes: {result}")
+        save_video_bytes(video_bytes, output_path)
+    except HTTPException:
+        raise
+    except SeedanceGenerationRecoveryError as exc:
+        failed_attempt = {
+            "timestamp": now_iso(),
+            "status": "recovery_failed",
+            "provider": "segmind",
+            "model": os.environ.get("SEEDANCE_MODEL", "seedance-2.0"),
+            "request_id": exc.request_id,
+            "clip_used": clip.get("clip"),
+            "clip_occurrence": clip_index,
+            "prompt_version_index": selected_index,
+            "prompt_timestamp": selected_version.get("timestamp"),
+            "error": str(exc),
+            "error_status_code": exc.status_code,
+            "duration": (payload or {}).get("duration"),
+            "resolution": (payload or {}).get("resolution"),
+            "generate_audio": (payload or {}).get("generate_audio"),
+            "ratio": (payload or {}).get("aspect_ratio"),
+            "recoverable": bool(exc.request_id),
+        }
+        append_video_generation_attempt(
+            prompt_record,
+            selected_version,
+            failed_attempt,
+            is_latest_version=is_latest_version,
+        )
+        write_json_file(prompts_path, prompts_data)
+        log_event(
+            "video_generation.recovery_failed",
+            project=project_name,
+            clip_index=clip_index,
+            prompt_version_index=selected_index,
+            request_id=exc.request_id,
+            status_code=exc.status_code,
+            error=str(exc)[:500],
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "Segmind charged/submitted the job, but the app could not retrieve the result.",
+                "request_id": exc.request_id,
+                "status_code": exc.status_code,
+                "recoverable": bool(exc.request_id),
+                "next_step": "Do not regenerate immediately. Use this request id with Segmind support or retry recovery when available.",
+            },
+        ) from exc
+    except Exception as exc:
+        log_event(
+            "video_generation.error",
+            project=project_name,
+            clip_index=clip_index,
+            prompt_version_index=selected_index,
+            error_type=type(exc).__name__,
+            error=str(exc)[:500],
+        )
+        raise HTTPException(status_code=500, detail=f"Video generation failed: {exc}") from exc
+
+    video_entry = {
+        "version": next_version_number,
+        "timestamp": now_iso(),
+        "provider": "segmind",
+        "model": os.environ.get("SEEDANCE_MODEL", "seedance-2.0"),
+        "request_id": result.get("id"),
+        "clip_used": clip.get("clip"),
+        "clip_occurrence": clip_index,
+        "prompt_version_index": selected_index,
+        "prompt_timestamp": selected_version.get("timestamp"),
+        "path": str(output_path.resolve()),
+        "url": _video_asset_url(output_path),
+        "label": f"Generated video v{next_version_number}",
+        "source_output_url": (result.get("content") or {}).get("video_url"),
+        "duration": payload.get("duration"),
+        "resolution": payload.get("resolution"),
+        "generate_audio": payload.get("generate_audio"),
+        "ratio": payload.get("aspect_ratio"),
+        "storage_root": str(ASSETS_DIR.resolve()),
+    }
+
+    successful_attempt = {
+        "timestamp": video_entry["timestamp"],
+        "status": "succeeded",
+        "provider": video_entry["provider"],
+        "model": video_entry["model"],
+        "request_id": video_entry["request_id"],
+        "clip_used": video_entry["clip_used"],
+        "clip_occurrence": video_entry["clip_occurrence"],
+        "prompt_version_index": selected_index,
+        "prompt_timestamp": video_entry["prompt_timestamp"],
+        "path": video_entry["path"],
+        "url": video_entry["url"],
+        "duration": video_entry["duration"],
+        "resolution": video_entry["resolution"],
+        "generate_audio": video_entry["generate_audio"],
+        "ratio": video_entry["ratio"],
+    }
+    append_video_generation_attempt(
+        prompt_record,
+        selected_version,
+        successful_attempt,
+        is_latest_version=is_latest_version,
+    )
+    selected_version.setdefault("generated_videos", []).append(video_entry)
+    if selected_version is not prompt_record and is_latest_version:
+        prompt_record["generated_videos"] = selected_version["generated_videos"]
+    elif selected_version is prompt_record:
+        prompt_record["generated_videos"] = selected_version["generated_videos"]
+    prompt_record["latest_generated_video"] = video_entry
+
+    write_json_file(prompts_path, prompts_data)
+    log_event(
+        "video_generation.success",
+        project=project_name,
+        clip_index=clip_index,
+        prompt_version_index=selected_index,
+        generated_video=video_entry["path"],
+    )
+    return {
+        "project_name": project_name,
+        "clip_index": clip_index,
+        "prompt_version_index": selected_index,
+        "video": video_entry,
+        "generated_videos": selected_version["generated_videos"],
+    }
+
+
 @app.get("/api/project/{project_name}")
 def get_project_data(project_name: str):
     project_dir = project_data_dir(project_name)
@@ -2066,6 +2348,19 @@ def add_clip_memory(project_name: str, request: ClipMemoryRequest):
     )
     updated_context = build_clip_chat_context(project_name, request.clip_index)
     return {"memory": updated_context["memory"], "item": item}
+
+
+@app.post("/api/projects/{project_name}/generate-video")
+def post_generate_clip_video(project_name: str, request: GenerateClipVideoRequest):
+    return generate_clip_video(
+        project_name,
+        request.clip_index,
+        request.prompt_version_index,
+        resolution=request.resolution,
+        generate_audio=request.generate_audio,
+        aspect_ratio=request.aspect_ratio,
+        duration=request.duration,
+    )
 
 @app.get("/api/run-workflow")
 async def run_workflow(project: str, index: int, provider: str = "openai"):

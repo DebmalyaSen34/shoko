@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import type { CSSProperties, Dispatch, RefObject, SetStateAction } from "react";
-import type { FeedbackGroup, ProjectData, PromptRecord, PromptVersion, TimelineClip } from "../../types";
-import { basename, getVersions, versionLabel } from "../../lib/format";
+import type { FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptRecord, PromptVersion, TimelineClip } from "../../types";
+import { basename, formatSeconds, formatTimecode, getVersions, versionLabel } from "../../lib/format";
 import { staticUrl } from "../../lib/api";
 import { EmptyState } from "../EmptyState";
 import { Icon } from "../Icon";
@@ -22,10 +22,13 @@ type TimelinePanelProps = {
   executeWorkflow: (feedbackIndex: number) => void;
   findPrompt: (clipName: string, clipOccurrence?: number) => PromptRecord | null;
   openResultFromVersion: (version: PromptVersion) => void;
+  generatingVideoKeys: Set<string>;
+  onGenerateVideo: (clipIndex: number, promptVersionIndex?: number) => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
   setZoom: Dispatch<SetStateAction<number>>;
   onUploadFeedback: () => void;
   onAddManualFeedback: (clipName: string) => void;
   onOpenClipChat: (clipIndex: number) => void;
+  onPreview: (preview: PreviewState) => void;
 };
 
 export function TimelinePanel({
@@ -43,10 +46,13 @@ export function TimelinePanel({
   executeWorkflow,
   findPrompt,
   openResultFromVersion,
+  generatingVideoKeys,
+  onGenerateVideo,
   setZoom,
   onUploadFeedback,
   onAddManualFeedback,
   onOpenClipChat,
+  onPreview,
 }: TimelinePanelProps) {
   return (
     <section className="center-panel">
@@ -112,8 +118,11 @@ export function TimelinePanel({
         runningIndexes={runningIndexes}
         executeWorkflow={executeWorkflow}
         openResultFromVersion={openResultFromVersion}
+        generatingVideoKeys={generatingVideoKeys}
+        onGenerateVideo={onGenerateVideo}
         onAddManualFeedback={onAddManualFeedback}
         onOpenClipChat={onOpenClipChat}
+        onPreview={onPreview}
       />
     </section>
   );
@@ -132,8 +141,11 @@ function Timeline({
   runningIndexes,
   executeWorkflow,
   openResultFromVersion,
+  generatingVideoKeys,
+  onGenerateVideo,
   onAddManualFeedback,
   onOpenClipChat,
+  onPreview,
 }: {
   refEl: RefObject<HTMLDivElement | null>;
   className: string;
@@ -147,8 +159,11 @@ function Timeline({
   runningIndexes: Set<number>;
   executeWorkflow: (feedbackIndex: number) => void;
   openResultFromVersion: (version: PromptVersion) => void;
+  generatingVideoKeys: Set<string>;
+  onGenerateVideo: (clipIndex: number, promptVersionIndex?: number) => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
   onAddManualFeedback: (clipName: string) => void;
   onOpenClipChat: (clipIndex: number) => void;
+  onPreview: (preview: PreviewState) => void;
 }) {
   const drag = useRef({ down: false, startX: 0, scrollLeft: 0 });
 
@@ -226,6 +241,7 @@ function Timeline({
         const clipKey = `${clip.clip}::${index}`;
         const selectedVersion = selectedVersions[clipKey] ?? Math.max(versions.length - 1, 0);
         const version = versions[selectedVersion] || prompt || undefined;
+        const generatingVideo = generatingVideoKeys.has(`${index}:${selectedVersion}`);
 
         return (
           <div className="timeline-node" key={`${clip.clip}-${index}`}>
@@ -244,10 +260,13 @@ function Timeline({
               }
               version={version}
               runningIndexes={runningIndexes}
+              generatingVideo={generatingVideo}
               executeWorkflow={executeWorkflow}
+              onGenerateVideo={() => onGenerateVideo(index, selectedVersion)}
               openResultFromVersion={openResultFromVersion}
               onAddManualFeedback={onAddManualFeedback}
               onOpenClipChat={onOpenClipChat}
+              onPreview={onPreview}
             />
             {index < projectData.timeline.length - 1 && <TimelineConnector />}
           </div>
@@ -267,10 +286,13 @@ function TimelineCard({
   setSelectedVersion,
   version,
   runningIndexes,
+  generatingVideo,
   executeWorkflow,
+  onGenerateVideo,
   openResultFromVersion,
   onAddManualFeedback,
   onOpenClipChat,
+  onPreview,
 }: {
   clip: TimelineClip;
   index: number;
@@ -281,10 +303,13 @@ function TimelineCard({
   setSelectedVersion: (versionIndex: number) => void;
   version?: PromptVersion;
   runningIndexes: Set<number>;
+  generatingVideo: boolean;
   executeWorkflow: (feedbackIndex: number) => void;
+  onGenerateVideo: () => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
   openResultFromVersion: (version: PromptVersion) => void;
   onAddManualFeedback: (clipName: string) => void;
   onOpenClipChat: (clipIndex: number) => void;
+  onPreview: (preview: PreviewState) => void;
 }) {
   const hasFeedback = Boolean(feedback?.feedback_items?.length);
   const latestError = prompt?.latest_error;
@@ -323,7 +348,7 @@ function TimelineCard({
               <div className="clip-title">{clip.clip}</div>
               <div className="clip-meta-subtitle">Sequence Position: #{index + 1}</div>
             </div>
-            <div className="duration-badge">{clip.duration_s.toFixed(2)}s</div>
+            <div className="duration-badge">{formatSeconds(clip.duration_s)}</div>
           </div>
 
           <div className="clip-card-actions">
@@ -333,9 +358,8 @@ function TimelineCard({
           </div>
 
           <div className="card-details">
-            <Detail label="Start Timecode" value={clip.start_tc} />
-            <Detail label="End Timecode" value={clip.end_tc} />
-            <Detail label="Track Bounds" value={`${clip.start_s.toFixed(2)}s - ${clip.end_s.toFixed(2)}s`} />
+            <Detail label="Timecode" value={`${formatTimecode(clip.start_tc)} – ${formatTimecode(clip.end_tc)}`} />
+            <Detail label="Bounds" value={`${formatSeconds(clip.start_s)} – ${formatSeconds(clip.end_s)}`} />
           </div>
 
           {hasFeedback ? (
@@ -368,7 +392,7 @@ function TimelineCard({
                   <div className="feedback-item-card" key={item.raw_index}>
                     <div className="feedback-item-header">
                       <span className={`tag tag-${item.category}`}>{item.category}</span>
-                      <span className="feedback-timestamp">{item.timestamp || "No Timecode"}</span>
+                      <span className="feedback-timestamp">{formatTimecode(item.timestamp)}</span>
                     </div>
                     <div className="feedback-remark">{item.remark}</div>
 
@@ -380,8 +404,11 @@ function TimelineCard({
                         version={version}
                         latestError={latestError}
                         running={runningIndexes.has(item.raw_index)}
+                        generatingVideo={generatingVideo}
                         onRun={() => executeWorkflow(item.raw_index)}
+                        onGenerateVideo={onGenerateVideo}
                         onDetails={() => openResultFromVersion(version)}
+                        onPreview={onPreview}
                       />
                     ) : !isVisualFeedback(item.category) ? (
                       <div className="workflow-btn-wrapper">
@@ -446,8 +473,11 @@ function GeneratedPlan({
   version,
   latestError,
   running,
+  generatingVideo,
   onRun,
+  onGenerateVideo,
   onDetails,
+  onPreview,
 }: {
   versions: PromptVersion[];
   selectedVersion: number;
@@ -455,10 +485,16 @@ function GeneratedPlan({
   version: PromptVersion;
   latestError?: string | null;
   running: boolean;
+  generatingVideo: boolean;
   onRun: () => void;
+  onGenerateVideo: () => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
   onDetails: () => void;
+  onPreview: (preview: PreviewState) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const videos = version.generated_videos || [];
+  const [selectedVideoIndex, setSelectedVideoIndex] = useState(Math.max(videos.length - 1, 0));
+  const selectedVideo = videos[Math.min(selectedVideoIndex, Math.max(videos.length - 1, 0))];
 
   return (
     <div className="generated-plan-box">
@@ -505,6 +541,55 @@ function GeneratedPlan({
         </>
       )}
 
+      {videos.length > 0 && (
+        <div className="generated-video-box">
+          <div className="generated-video-header">
+            <span>
+              <Icon name="video" /> Generated Clip
+            </span>
+            {videos.length > 1 && (
+              <select value={selectedVideoIndex} onChange={(event) => setSelectedVideoIndex(Number(event.target.value))}>
+                {videos.map((video, index) => (
+                  <option key={`${video.timestamp || "video"}-${index}`} value={index}>
+                    Video v{video.version || index + 1}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          {selectedVideo && (
+            <>
+              <video src={staticUrl(selectedVideo.url || selectedVideo.path)} controls playsInline preload="metadata" />
+              <div className="generated-video-footer">
+                <div>
+                  <strong>{selectedVideo.label || `Generated video v${selectedVideo.version}`}</strong>
+                  <span>
+                    {selectedVideo.resolution || "720p"} · {selectedVideo.ratio || "9:16"} · {selectedVideo.duration || 5}s
+                  </span>
+                </div>
+                <button
+                  className="premium-btn secondary"
+                  type="button"
+                  onClick={() =>
+                    onPreview({
+                      file: {
+                        name: basename(selectedVideo.path || selectedVideo.url),
+                        path: selectedVideo.path,
+                        url: selectedVideo.url || selectedVideo.path,
+                        type: "video",
+                        size: "",
+                      },
+                    })
+                  }
+                >
+                  <Icon name="expand" /> View Larger
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {latestError && <ErrorWarning error={latestError} />}
       
       <div className="generated-actions" style={{ marginTop: "8px" }}>
@@ -519,6 +604,9 @@ function GeneratedPlan({
         )}
         <button className="premium-btn" onClick={onDetails}>
           <Icon name="search" /> View Details
+        </button>
+        <button className="premium-btn" disabled={generatingVideo} onClick={() => void onGenerateVideo().catch(() => undefined)}>
+          <Icon name="video" /> {generatingVideo ? "Generating..." : videos.length ? "Generate New Video" : "Generate Video"}
         </button>
       </div>
     </div>

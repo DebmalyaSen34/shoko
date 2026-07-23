@@ -24,3 +24,51 @@ export function versionLabel(version: PromptVersion, index: number) {
   const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return `Version ${index + 1} (${(version.provider || "AI").toUpperCase()} - ${time})`;
 }
+
+export function formatSeconds(seconds?: number | null): string {
+  if (typeof seconds !== "number" || isNaN(seconds)) return "--";
+  if (seconds < 60) {
+    return `${Number(seconds.toFixed(1))}s`;
+  }
+  const mins = Math.floor(seconds / 60);
+  const remSecs = Number((seconds % 60).toFixed(1));
+  return `${mins}m ${remSecs}s`;
+}
+
+export function formatTimecode(tc?: string | null): string {
+  if (!tc) return "No Timecode";
+  const trimmed = tc.trim();
+  if (!trimmed) return "No Timecode";
+
+  if (trimmed.includes(" - ")) {
+    return trimmed.split(" - ").map((part) => formatTimecode(part.trim())).join(" – ");
+  }
+  if (trimmed.includes("->")) {
+    return trimmed.split("->").map((part) => formatTimecode(part.trim())).join(" – ");
+  }
+
+  const parts = trimmed.split(":");
+  if (parts.length >= 4) {
+    const h = parseInt(parts[0], 10) || 0;
+    const m = parts[1] || "00";
+    const s = parts[2] || "00";
+    if (h > 0) return `${h}:${m}:${s}`;
+    return `${m}:${s}`;
+  } else if (parts.length === 3) {
+    const h = parseInt(parts[0], 10) || 0;
+    const m = parts[1] || "00";
+    const s = parts[2] ? parts[2].split(".")[0] : "00";
+    if (h > 0) return `${h}:${m}:${s}`;
+    return `${m}:${s}`;
+  } else if (parts.length === 2) {
+    return trimmed;
+  }
+
+  const num = parseFloat(trimmed);
+  if (!isNaN(num) && /^\d+(\.\d+)?$/.test(trimmed)) {
+    return formatSeconds(num);
+  }
+
+  return trimmed;
+}
+

@@ -543,7 +543,7 @@ class BatchGeneratorTests(unittest.TestCase):
             "config"
         ].system_instruction
         self.assertIn(skill_marker, instruction)
-        self.assertIn("English output only", instruction)
+        self.assertIn("English output for all prompt instructions", instruction)
         self.assertIn("Never use timeline prompting", instruction)
         self.assertLess(instruction.index(skill_marker), instruction.index("PROJECT OVERRIDES"))
 

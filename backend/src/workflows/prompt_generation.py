@@ -27,6 +27,85 @@ class DialogueAssessmentResult(BaseModel):
     is_dialogue_active: bool = Field(..., description="True if there is active spoken dialogue/speech occurring in this clip segment.")
     reasoning: str = Field(..., description="Reasoning for whether dialogue is active or not.")
 
+
+class DialogueExtractionResult(BaseModel):
+    dialogue_text: str = Field(
+        default="",
+        description=(
+            "Only spoken character dialogue from the transcript, in Hindi and/or English. "
+            "Exclude narration, music cues, sound effects, descriptions, timestamps, speaker labels, and every other language."
+        ),
+    )
+    language: str = Field(default="none", description="english, hindi, mixed_hindi_english, or none.")
+    has_dialogue: bool = Field(default=False, description="True only when dialogue_text contains spoken dialogue.")
+    reasoning: str = Field(default="", description="Brief reason for what was kept or removed.")
+
+
+def transcribe_audio_dialogue(openai_client, audio_path: str) -> str:
+    """Transcribe a trimmed audio segment to text."""
+    with open(audio_path, "rb") as audio_file:
+        transcript = openai_client.audio.transcriptions.create(
+            model=os.environ.get("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe"),
+            file=audio_file,
+        )
+    return (getattr(transcript, "text", None) or "").strip()
+
+
+def extract_dialogue_only(
+    openai_client,
+    openai_model: str,
+    transcript_text: str,
+    remarks: List[str],
+) -> dict:
+    """Keep only spoken Hindi/English dialogue from an audio transcript."""
+    transcript_text = (transcript_text or "").strip()
+    if not transcript_text:
+        return {
+            "dialogue_text": "",
+            "language": "none",
+            "has_dialogue": False,
+            "reasoning": "Transcript is empty.",
+        }
+
+    prompt = (
+        "Extract only spoken character dialogue from this transcript for lip-sync prompting.\n"
+        "Rules:\n"
+        "- Keep only lines actually spoken by on-screen characters.\n"
+        "- Remove narration, voiceover narration, sound effects, music, background descriptions, timestamps, and editorial notes.\n"
+        "- Keep Hindi, English, or mixed Hindi-English/Hinglish dialogue only.\n"
+        "- Remove any dialogue in other languages. Do not translate other languages into Hindi or English.\n"
+        "- Preserve the original wording of kept Hindi/English dialogue. Do not invent new lines.\n"
+        "- If no Hindi/English character dialogue remains, return has_dialogue=false and an empty dialogue_text.\n\n"
+        f"Client feedback remarks for context: {json.dumps(remarks, ensure_ascii=False)}\n\n"
+        f"Transcript:\n{transcript_text}"
+    )
+    try:
+        result = generate_structured(
+            provider="openai",
+            client=openai_client,
+            model=openai_model,
+            contents=[prompt],
+            schema=DialogueExtractionResult,
+            system_instruction="You are a precise dialogue editor extracting only Hindi/English spoken dialogue for lip sync.",
+        )
+        if not any(key in result for key in ("dialogue_text", "has_dialogue", "language")):
+            raise ValueError("Dialogue extraction response did not match the expected schema.")
+        return {
+            "dialogue_text": (result.get("dialogue_text") or "").strip(),
+            "language": result.get("language") or "none",
+            "has_dialogue": bool(result.get("has_dialogue") and (result.get("dialogue_text") or "").strip()),
+            "reasoning": result.get("reasoning") or "",
+        }
+    except Exception as exc:
+        print(f"Warning: Dialogue-only extraction failed: {exc}")
+        return {
+            "dialogue_text": "",
+            "language": "unknown",
+            "has_dialogue": False,
+            "reasoning": f"Dialogue filtering failed; no unfiltered transcript was injected: {exc}",
+        }
+
+
 def assess_dialogue_activity(
     openai_client,
     openai_model: str,
@@ -537,13 +616,17 @@ def generate_video_prompts_from_plan(
         audio_url = None
         trimmed_audio_path = None
         audio_trim_error = None
+        audio_transcript = ""
+        dialogue_text = ""
+        dialogue_language = "none"
+        dialogue_extraction_reasoning = ""
         audio_trim_start_s = clip_start_s
         audio_trim_end_s = clip_end_s
         audio_trim_duration_s = max(0.0, clip_end_s - clip_start_s)
 
-        # Trim from the full sequence mix using timeline cut times. Do not
-        # transcribe or fall back to the full mix; the trimmed file is the
-        # source of truth for dialogue timing and cadence.
+        # Trim from the full sequence mix using timeline cut times. The trimmed
+        # file is the source of truth for dialogue timing and cadence; its
+        # transcript is filtered to Hindi/English dialogue before prompting.
         if audio_trim_duration_s > 0 and audio_path and os.path.exists(audio_path):
             clean_audio_identifier = os.path.basename((audio_name or audio_path or "audio").replace("\\", "/"))
             audio_stem = os.path.splitext(clean_audio_identifier)[0]
@@ -557,6 +640,17 @@ def generate_video_prompts_from_plan(
             )
             if success and os.path.exists(trimmed_audio_path):
                 audio_url = _file_data_url(trimmed_audio_path)
+                try:
+                    audio_transcript = transcribe_audio_dialogue(openai_client, trimmed_audio_path)
+                    dialogue_result = extract_dialogue_only(openai_client, openai_model, audio_transcript, remarks)
+                    dialogue_text = dialogue_result.get("dialogue_text", "")
+                    dialogue_language = dialogue_result.get("language", "none")
+                    dialogue_extraction_reasoning = dialogue_result.get("reasoning", "")
+                    if not dialogue_result.get("has_dialogue"):
+                        dialogue_text = ""
+                except Exception as exc:
+                    audio_trim_error = f"Audio transcription failed: {exc}"
+                    print(f"Warning: {audio_trim_error}")
             else:
                 audio_trim_error = (
                     f"Failed to trim audio from {audio_trim_start_s:.3f}s "
@@ -641,9 +735,21 @@ def generate_video_prompts_from_plan(
             prompt_instruction += (
                 "4. Dialogue/audio is active in this shot. The video model will receive a trimmed reference audio "
                 f"segment from timeline {audio_trim_start_s:.3f}s to {audio_trim_end_s:.3f}s. "
-                "In the final prompt, include one concise instruction that facial performance, lip movement, pauses, "
-                "and delivery synchronize to the supplied reference audio. Do not quote or invent transcript text.\n"
+                "In the final prompt, explicitly include the dialogue text below and instruct that facial performance, "
+                "mouth shapes, pauses, and delivery must lip-sync to both the supplied reference audio and this exact dialogue. "
+                "Use only this Hindi/English dialogue for lip sync. Do not add narration, translate other languages, or invent extra spoken lines.\n"
             )
+            if dialogue_text:
+                prompt_instruction += (
+                    f"   Dialogue language: {dialogue_language}.\n"
+                    f"   Dialogue to include for lip sync:\n"
+                    f"   \"{dialogue_text}\"\n"
+                )
+            else:
+                prompt_instruction += (
+                    "   No Hindi/English spoken dialogue was extracted from the audio. Do not invent dialogue; "
+                    "only synchronize visible mouth movement to the supplied reference audio if speech is audible.\n"
+                )
 
         prompt_instruction += (
             "\nGenerate a highly detailed cinematic text prompt for a video generation model (like Runway Gen-3, Sora, or Seedance 2.0) "
@@ -660,7 +766,8 @@ def generate_video_prompts_from_plan(
         system_instruction = (
             "You are a professional film director and AI video prompt engineer. "
             "You generate extremely detailed, consistent cinematic prompts for video generation models, "
-            "ensuring client edits are precisely followed and preproduction design assets are visually respected."
+            "ensuring client edits are precisely followed and preproduction design assets are visually respected. "
+            "When dialogue text is supplied, preserve it exactly for lip sync; never invent, translate, or alter spoken lines."
         )
 
         llm_response = generate_structured(
@@ -704,6 +811,10 @@ def generate_video_prompts_from_plan(
             "audio_trim_duration_s": audio_trim_duration_s if audio_url else None,
             "audio_trim_source": "sequence_timeline" if audio_url else None,
             "audio_trim_error": audio_trim_error,
+            "audio_transcript": audio_transcript,
+            "dialogue_text": dialogue_text,
+            "dialogue_language": dialogue_language,
+            "dialogue_extraction_reasoning": dialogue_extraction_reasoning,
             "is_dialogue_active": is_dialogue,
             "generate_audio": False,
             "has_reference_audio": bool(audio_url),

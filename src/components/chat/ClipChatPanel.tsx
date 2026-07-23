@@ -6,6 +6,7 @@ import type {
   ClipChatMedia,
   ClipChatMessage,
   ClipChatResponse,
+  GeneratedVideo,
   ClipChatSnapshot,
   FeedbackGroup,
   PromptRecord,
@@ -30,6 +31,7 @@ type ClipChatPanelProps = {
   onClose: () => void;
   onExecuteWorkflow: (feedbackIndex: number) => void;
   onOpenPromptDetails: (version: PromptVersion) => void;
+  onGenerateVideo: (clipIndex: number, promptVersionIndex?: number) => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
   onPreview: (preview: PreviewState) => void;
 };
 
@@ -60,12 +62,14 @@ export function ClipChatPanel({
   onClose,
   onExecuteWorkflow,
   onOpenPromptDetails,
+  onGenerateVideo,
   onPreview,
 }: ClipChatPanelProps) {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ClipChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [generatingVideo, setGeneratingVideo] = useState(false);
   const [error, setError] = useState("");
   const [panelWidth, setPanelWidth] = useState(() => {
     const saved = window.localStorage.getItem("loka15.clip-chat.width");
@@ -145,6 +149,12 @@ export function ClipChatPanel({
       if (autonomousWorkflow) {
         runWorkflowFromChat(autonomousWorkflow.feedback_index);
       }
+      const autonomousVideo = data.suggested_actions.find(
+        (action) => action.type === "generate_video" && action.autonomous,
+      );
+      if (autonomousVideo) {
+        void generateVideoFromChat();
+      }
     } catch (sendError) {
       const message = sendError instanceof Error ? sendError.message : "Failed to send message.";
       setError(message);
@@ -181,9 +191,49 @@ export function ClipChatPanel({
     ]);
   }
 
+  async function generateVideoFromChat() {
+    if (!latestVersion?.video_model_prompt) {
+      setMessages((current) => [
+        ...current,
+        localToolMessage("No generated prompt exists yet. Run the workflow first, then generate video."),
+      ]);
+      return;
+    }
+
+    const promptVersionIndex = Math.max(versions.length - 1, 0);
+    setGeneratingVideo(true);
+    setMessages((current) => [...current, localToolMessage("Choose video generation options to start the Segmind render.")]);
+    try {
+      const result = await onGenerateVideo(clipIndex, promptVersionIndex);
+      const video = result.video;
+      const videoMessage = localToolMessage(`Generated video v${video.version || result.generated_videos.length} is ready.`);
+      videoMessage.metadata = {
+        media: [
+          {
+            type: "video",
+            label: video.label || "Generated video",
+            source: "generated_videos",
+            name: video.path.split(/[/\\]/).pop() || "generated-video.mp4",
+            path: video.path,
+            url: video.url || video.path,
+          },
+        ],
+      };
+      setMessages((current) => [...current, videoMessage]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Video generation failed.";
+      if (message === "Video generation cancelled.") return;
+      setMessages((current) => [...current, localToolMessage(message)]);
+    } finally {
+      setGeneratingVideo(false);
+    }
+  }
+
   function handleAction(action: ClipChatAction) {
     if (action.type === "execute_workflow") {
       runWorkflowFromChat(action.feedback_index);
+    } else if (action.type === "generate_video" || (action.type === "prepare_video" && action.label.toLowerCase().includes("generate"))) {
+      void generateVideoFromChat();
     } else if (action.type === "prepare_video") {
       prepareVideoGeneration();
     } else if (action.type === "send_message" && action.prompt) {
@@ -193,7 +243,7 @@ export function ClipChatPanel({
 
   function actionIcon(action: ClipChatAction) {
     if (action.type === "execute_workflow") return "refresh";
-    if (action.type === "prepare_video") return "video";
+    if (action.type === "prepare_video" || action.type === "generate_video") return "video";
     return "chat";
   }
 
@@ -242,8 +292,8 @@ export function ClipChatPanel({
         <button className="premium-btn secondary" type="button" disabled={!runnableFeedback || running} onClick={() => runWorkflowFromChat()}>
           <Icon name="refresh" /> {running ? "Running..." : "Run Workflow"}
         </button>
-        <button className="premium-btn" type="button" onClick={prepareVideoGeneration}>
-          <Icon name="video" /> Prepare Video
+        <button className="premium-btn" type="button" disabled={generatingVideo} onClick={() => void generateVideoFromChat()}>
+          <Icon name="video" /> {generatingVideo ? "Generating..." : "Generate Video"}
         </button>
       </div>
 
@@ -270,6 +320,7 @@ export function ClipChatPanel({
           </div>
         ))}
         {sending && <div className="inline-runner-status"><Icon name="refresh" /> Thinking with {provider.toUpperCase()}...</div>}
+        {generatingVideo && <div className="inline-runner-status"><Icon name="refresh" /> Generating video...</div>}
       </div>
 
       {error && <div className="clip-chat-error"><Icon name="warning" /> {error}</div>}

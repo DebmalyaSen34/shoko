@@ -244,16 +244,26 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
         project_name = "test_prompt_project"
         mock_client = mock.MagicMock()
         mock_transcript = mock.MagicMock()
-        mock_transcript.text = "Kya hua?"
+        mock_transcript.text = "Narrator: The room falls silent. Mother says, Kya hua? Background music rises."
         mock_client.audio.transcriptions.create.return_value = mock_transcript
 
-        from src.workflows.prompt_generation import DialogueAssessmentResult, ContinuityVerificationResult
+        from src.workflows.prompt_generation import DialogueAssessmentResult, DialogueExtractionResult, ContinuityVerificationResult
         def mock_gen_side_effect(*args, **kwargs):
             schema = kwargs.get("schema")
             if schema == DialogueAssessmentResult:
                 return {
                     "is_dialogue_active": False,
                     "reasoning": "Should not be called"
+                }
+            elif schema == DialogueExtractionResult:
+                contents = kwargs.get("contents", [])
+                extraction_text = contents[0] if contents else ""
+                self.assertIn("Narrator: The room falls silent", extraction_text)
+                return {
+                    "dialogue_text": "Kya hua?",
+                    "language": "hindi",
+                    "has_dialogue": True,
+                    "reasoning": "Removed narrator and music cue."
                 }
             elif schema == ContinuityVerificationResult:
                 return {
@@ -264,7 +274,9 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
                 contents = kwargs.get("contents", [])
                 instruction_text = contents[-1] if contents else ""
                 self.assertIn("trimmed reference audio segment from timeline 10.000s to 15.000s", instruction_text)
-                self.assertIn("Do not quote or invent transcript text", instruction_text)
+                self.assertIn("Dialogue to include for lip sync", instruction_text)
+                self.assertIn("\"Kya hua?\"", instruction_text)
+                self.assertNotIn("Background music rises", instruction_text)
                 return {
                     "video_model_prompt": "Warm sunlit hall... Mother shouts 'Kya hua?'... mouth moving in sync.",
                     "explanation": "Addressed mother shouting."
@@ -288,6 +300,9 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
         self.assertFalse(prompts_data[1]["generate_audio"])
         self.assertTrue(prompts_data[1]["has_reference_audio"])
         self.assertEqual(prompts_data[1]["audio_url"], "data:audio/mp3;base64,dummy_audio")
+        self.assertEqual(prompts_data[1]["audio_transcript"], "Narrator: The room falls silent. Mother says, Kya hua? Background music rises.")
+        self.assertEqual(prompts_data[1]["dialogue_text"], "Kya hua?")
+        self.assertEqual(prompts_data[1]["dialogue_language"], "hindi")
         self.assertIn("REFERENCE IMAGE MAP:", prompts_data[1]["video_model_prompt"])
         self.assertTrue(
             prompts_data[1]["video_model_prompt"].endswith(

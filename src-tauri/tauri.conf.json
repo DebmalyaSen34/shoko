@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "loka15-studio",
+  "productName": "Shoko",
   "version": "0.1.0",
   "identifier": "com.debmalyasen.loka15-studio",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "loka15-studio",
+        "title": "Shoko",
         "width": 800,
         "height": 600
       }

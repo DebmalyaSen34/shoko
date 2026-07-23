@@ -20,7 +20,12 @@ from src.workflows.timeline_extraction import extract_timeline_from_project
 from src.workflows.feedback_parsing import parse_and_align_feedback
 from src.workflows.referenced_frames import analyze_and_extract_referenced_frames
 from src.workflows.generation_planner import plan_generation_workflow
-from src.workflows.prompt_generation import extract_audio_segment, generate_video_prompts_from_plan
+from src.workflows.prompt_generation import (
+    extract_audio_segment,
+    extract_dialogue_only,
+    generate_video_prompts_from_plan,
+    transcribe_audio_dialogue,
+)
 from src.workflows.clip_context import analyze_clip_context
 from src.workflows.project_setup import setup_project_workspace
 from scripts.generate_seedance_video import SupabaseAssetUrlCache, attach_prepared_segmind_payload
@@ -78,6 +83,12 @@ def _attach_legacy_audio_reference(
     assets_dir: str,
     output_json: str,
 ) -> dict:
+    if item.get("audio_reference_path") and item.get("trimmed_audio_path"):
+        item["has_reference_audio"] = True
+        item["is_dialogue_active"] = bool(item.get("dialogue_text") or item.get("audio_url"))
+        item.setdefault("generate_audio", False)
+        return item
+
     clip_start_s = item.get("clip_start_s")
     clip_end_s = item.get("clip_end_s")
     audio_segment = _matching_audio_segment(timeline_data, clip_start_s)
@@ -126,6 +137,106 @@ def _attach_legacy_audio_reference(
             f"Failed to trim audio from {trim_start_s:.3f}s to {trim_end_s:.3f}s for {item.get('clip_used')}."
         )
     return item
+
+
+def _prepare_legacy_dialogue_context(
+    cluster: dict,
+    *,
+    timeline_data: dict,
+    assets_dir: str,
+    output_json: str,
+    openai_client: Optional[OpenAI],
+    openai_model: str,
+) -> dict:
+    clip = cluster.get("matched_clip") or {}
+    clip_name = clip.get("clip")
+    clip_start_s = clip.get("start_s")
+    clip_end_s = clip.get("end_s")
+    audio_segment = _matching_audio_segment(timeline_data, clip_start_s)
+    audio_name = audio_segment.get("clip")
+    audio_path = _resolve_audio_path(assets_dir, audio_name)
+
+    context = {
+        "audio_used": audio_name,
+        "audio_path": audio_path,
+        "audio_transcript": "",
+        "dialogue_text": "",
+        "dialogue_language": "none",
+        "dialogue_extraction_reasoning": "",
+        "is_dialogue_active": False,
+        "has_reference_audio": False,
+    }
+    if clip_start_s is None or clip_end_s is None:
+        context["audio_trim_error"] = "Clip timeline bounds are missing; audio reference was not prepared."
+        cluster["dialogue_context"] = context
+        return context
+    if not audio_path:
+        context["audio_trim_error"] = f"Audio source file not found for {audio_name or 'timeline audio'}."
+        cluster["dialogue_context"] = context
+        return context
+
+    trim_start_s = float(clip_start_s)
+    trim_end_s = float(clip_end_s)
+    trim_duration_s = max(0.0, trim_end_s - trim_start_s)
+    if trim_duration_s <= 0:
+        context["audio_trim_error"] = "Clip audio trim duration is zero."
+        cluster["dialogue_context"] = context
+        return context
+
+    clip_slug = os.path.splitext(os.path.basename(str(clip_name or "clip")))[0]
+    safe_clip_slug = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in clip_slug).strip("._-")
+    audio_dir = os.path.join(os.path.dirname(output_json), "audio_references", safe_clip_slug or "clip")
+    os.makedirs(audio_dir, exist_ok=True)
+    trimmed_audio_path = os.path.abspath(
+        os.path.join(audio_dir, f"trimmed_{os.path.splitext(os.path.basename(audio_name or 'audio'))[0]}.mp3")
+    )
+
+    if not extract_audio_segment(audio_path, trimmed_audio_path, trim_start_s, trim_end_s):
+        context["audio_trim_error"] = (
+            f"Failed to trim audio from {trim_start_s:.3f}s to {trim_end_s:.3f}s for {clip_name}."
+        )
+        cluster["dialogue_context"] = context
+        return context
+
+    context.update(
+        {
+            "audio_reference_path": trimmed_audio_path,
+            "trimmed_audio_path": trimmed_audio_path,
+            "audio_trim_start_s": trim_start_s,
+            "audio_trim_end_s": trim_end_s,
+            "audio_trim_duration_s": trim_duration_s,
+            "audio_trim_source": "sequence_timeline",
+            "audio_trim_error": None,
+            "has_reference_audio": True,
+        }
+    )
+    if openai_client is None:
+        context["audio_trim_error"] = "OPENAI_API_KEY is required to transcribe dialogue for lip sync."
+        cluster["dialogue_context"] = context
+        return context
+
+    try:
+        audio_transcript = transcribe_audio_dialogue(openai_client, trimmed_audio_path)
+        dialogue_result = extract_dialogue_only(
+            openai_client,
+            openai_model,
+            audio_transcript,
+            [item.get("remark", "") for item in cluster.get("feedback_items", [])],
+        )
+        context.update(
+            {
+                "audio_transcript": audio_transcript,
+                "dialogue_text": dialogue_result.get("dialogue_text", "") if dialogue_result.get("has_dialogue") else "",
+                "dialogue_language": dialogue_result.get("language", "none"),
+                "dialogue_extraction_reasoning": dialogue_result.get("reasoning", ""),
+                "is_dialogue_active": bool(dialogue_result.get("has_dialogue")),
+            }
+        )
+    except Exception as exc:
+        context["audio_trim_error"] = f"Audio transcription failed: {exc}"
+
+    cluster["dialogue_context"] = context
+    return context
 
 
 def _feedback_lanes(category: str) -> set[str]:
@@ -370,6 +481,9 @@ def run_pipeline(
         client = OpenAI(api_key=api_key)
     else:
         client = genai.Client(api_key=api_key)
+    transcription_client = client if provider == "openai" else None
+    if transcription_client is None and os.environ.get("OPENAI_API_KEY"):
+        transcription_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
     # Verify file existence
     for filepath in [feedback_path, timeline_path]:
@@ -428,6 +542,14 @@ def run_pipeline(
             cluster["continuity_reference_note"] = continuity_note or (
                 "Use this previous clip last frame as the continuity reference and first-frame anchor."
             )
+        _prepare_legacy_dialogue_context(
+            cluster,
+            timeline_data=timeline_data,
+            assets_dir=assets_dir,
+            output_json=output_json,
+            openai_client=transcription_client,
+            openai_model=OPENAI_REASONING_MODEL,
+        )
     planned_requests = (
         (len(video_clusters) + batch_size - 1) // batch_size
         if video_clusters
@@ -497,6 +619,24 @@ def run_pipeline(
             "quality_warning": generated.get("quality_warning"),
             "quality_report": generated.get("quality_report"),
         }
+        dialogue_context = cluster.get("dialogue_context") or {}
+        result_item.update({
+            "audio_used": dialogue_context.get("audio_used"),
+            "audio_path": dialogue_context.get("audio_path"),
+            "audio_reference_path": dialogue_context.get("audio_reference_path"),
+            "trimmed_audio_path": dialogue_context.get("trimmed_audio_path"),
+            "audio_trim_start_s": dialogue_context.get("audio_trim_start_s"),
+            "audio_trim_end_s": dialogue_context.get("audio_trim_end_s"),
+            "audio_trim_duration_s": dialogue_context.get("audio_trim_duration_s"),
+            "audio_trim_source": dialogue_context.get("audio_trim_source"),
+            "audio_trim_error": dialogue_context.get("audio_trim_error"),
+            "audio_transcript": dialogue_context.get("audio_transcript", ""),
+            "dialogue_text": dialogue_context.get("dialogue_text", ""),
+            "dialogue_language": dialogue_context.get("dialogue_language", "none"),
+            "dialogue_extraction_reasoning": dialogue_context.get("dialogue_extraction_reasoning", ""),
+            "is_dialogue_active": bool(dialogue_context.get("is_dialogue_active")),
+            "has_reference_audio": bool(dialogue_context.get("has_reference_audio")),
+        })
         result_item = _attach_legacy_audio_reference(
             result_item,
             timeline_data=timeline_data,

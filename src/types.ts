@@ -69,10 +69,18 @@ export type PromptVersion = {
   audio_trim_duration_s?: number | null;
   audio_trim_source?: string | null;
   audio_trim_error?: string | null;
+  audio_transcript?: string;
+  dialogue_text?: string;
+  dialogue_language?: string;
+  dialogue_extraction_reasoning?: string;
   is_dialogue_active?: boolean;
   generate_audio?: boolean;
   ratio?: string;
   duration?: number;
+  generated_videos?: GeneratedVideo[];
+  video_generation_attempts?: VideoGenerationAttempt[];
+  latest_video_generation_attempt?: VideoGenerationAttempt;
+  latest_generated_video?: GeneratedVideo;
 };
 
 export type PromptRecord = PromptVersion & {
@@ -81,6 +89,58 @@ export type PromptRecord = PromptVersion & {
   matched_clip?: string | null;
   latest_error?: string | null;
   history?: PromptVersion[];
+};
+
+export type GeneratedVideo = {
+  version: number;
+  timestamp?: string;
+  provider?: string;
+  model?: string;
+  request_id?: string | null;
+  clip_used?: string | null;
+  clip_occurrence?: number | null;
+  prompt_version_index?: number;
+  prompt_timestamp?: string;
+  path: string;
+  url: string;
+  label?: string;
+  source_output_url?: string | null;
+  duration?: number;
+  resolution?: VideoResolution;
+  generate_audio?: boolean;
+  ratio?: string;
+  storage_root?: string;
+};
+
+export type VideoGenerationAttempt = {
+  timestamp?: string;
+  status: "succeeded" | "recovery_failed" | string;
+  provider?: string;
+  model?: string;
+  request_id?: string | null;
+  clip_used?: string | null;
+  clip_occurrence?: number | null;
+  prompt_version_index?: number;
+  prompt_timestamp?: string;
+  path?: string;
+  url?: string;
+  error?: string;
+  error_status_code?: number | null;
+  recoverable?: boolean;
+  duration?: number;
+  resolution?: VideoResolution;
+  generate_audio?: boolean;
+  ratio?: string;
+};
+
+export type VideoResolution = "480p" | "720p" | "1080p" | "4k";
+export type VideoAspectRatio = "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9" | "adaptive";
+
+export type GenerateVideoOptions = {
+  resolution: VideoResolution;
+  generate_audio: boolean;
+  aspect_ratio: VideoAspectRatio;
+  duration: number;
 };
 
 export type ProjectData = {
@@ -119,6 +179,7 @@ export type ResultState = {
     path?: string | null;
     error?: string | null;
   };
+  generatedVideos?: GeneratedVideo[];
 } | null;
 
 export type Toast = {
@@ -150,7 +211,7 @@ export type ActiveClipChat = {
 } | null;
 
 export type ClipChatAction = {
-  type: "execute_workflow" | "prepare_video" | "send_message";
+  type: "execute_workflow" | "prepare_video" | "generate_video" | "send_message";
   label: string;
   feedback_index?: number;
   autonomous?: boolean;

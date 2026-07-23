@@ -13,9 +13,9 @@ DEFAULT_PROJECT_OVERRIDES = """
 
 These rules override every conflicting instruction in the skill above:
 
-- English output only. Never produce Chinese, ZH, bilingual output, or translations.
+- English output for all prompt instructions and descriptions, except preserve supplied Hindi/English dialogue text exactly when `DIALOGUE_FOR_LIP_SYNC` is present. Never produce Chinese, ZH, unrelated bilingual output, or translations.
 - Never use timeline prompting, timestamp brackets, time-labelled beats, shot maps, or timed tables.
-- Process visual feedback only. Do not invent or modify dialogue, voice, music, sound effects, or audio direction.
+- Process visual feedback only. Do not invent or modify dialogue, voice, music, sound effects, or audio direction. When exact Hindi/English dialogue is supplied for lip sync, include it unchanged only as dialogue to be spoken/lip-synced.
 - Generate one detailed, scene-specific Seedance 2.0 prompt per cluster, at least 150 English words.
 - Choose `plain_text`, `json`, or `production_prompt` using the skill's scene routing, but remove timeline structures from every format.
 - Preserve every client feedback instruction and all observable continuity from the original clip.
@@ -85,6 +85,25 @@ def _cluster_prompt_context(cluster_id: int, cluster: Dict[str, Any]) -> str:
             ]
         }
         context_text = f"CLIP_UNDERSTANDING_CONTEXT:\n{context_fields}\n"
+    dialogue_context = cluster.get("dialogue_context") or {}
+    dialogue_text = (dialogue_context.get("dialogue_text") or "").strip()
+    dialogue_prompt_text = ""
+    if dialogue_context.get("has_reference_audio"):
+        if dialogue_text:
+            dialogue_prompt_text = (
+                "DIALOGUE_FOR_LIP_SYNC:\n"
+                f"- Language: {dialogue_context.get('dialogue_language') or 'unknown'}\n"
+                f"- Spoken dialogue only: \"{dialogue_text}\"\n"
+                "- Use this exact Hindi/English dialogue for mouth shapes, pauses, and delivery. "
+                "Lip-sync to the supplied reference audio and this dialogue text. Do not add narration, "
+                "translate other languages, or invent extra spoken lines.\n"
+            )
+        else:
+            dialogue_prompt_text = (
+                "DIALOGUE_FOR_LIP_SYNC:\n"
+                "- No Hindi/English spoken character dialogue was extracted from the matching audio segment. "
+                "Do not invent dialogue or use narration as spoken lines.\n"
+            )
     return (
         f"CLUSTER_ID: {cluster_id}\n"
         f"CLIP: {clip_name or 'unknown'}\n"
@@ -92,6 +111,7 @@ def _cluster_prompt_context(cluster_id: int, cluster: Dict[str, Any]) -> str:
         f"FRAME_SIZE: {frame_size}\n"
         f"ASPECT_RATIO: {aspect_ratio}\n"
         f"{context_text}"
+        f"{dialogue_prompt_text}"
         f"VIDEO_FEEDBACK:\n{feedback}\n"
         "The original video for this cluster follows when available."
     )

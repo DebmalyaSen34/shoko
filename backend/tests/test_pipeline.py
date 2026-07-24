@@ -115,6 +115,99 @@ class ClusteredPipelineTests(unittest.TestCase):
                 )
             )
 
+    def test_legacy_pipeline_invokes_complex_feedback_enrichment_when_enabled(self):
+        feedback = [
+            {
+                "timestamp": "00:01",
+                "category": "video",
+                "remark": "Use Vir's smile expression from 00:15 in this shot.",
+            }
+        ]
+        timeline = {
+            "video_timeline": [
+                {
+                    "clip": "clip1.mp4",
+                    "start_s": 0.0,
+                    "end_s": 10.0,
+                    "duration_s": 10.0,
+                },
+                {
+                    "clip": "clip2.mp4",
+                    "start_s": 10.0,
+                    "end_s": 20.0,
+                    "duration_s": 10.0,
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            feedback_path = os.path.join(temp_dir, "feedback.json")
+            timeline_path = os.path.join(temp_dir, "timeline.json")
+            output_json = os.path.join(temp_dir, "project-a", "output.json")
+            output_report = os.path.join(temp_dir, "project-a", "report.md")
+            with open(feedback_path, "w", encoding="utf-8") as file:
+                json.dump(feedback, file)
+            with open(timeline_path, "w", encoding="utf-8") as file:
+                json.dump(timeline, file)
+
+            enriched_feedback = [
+                {
+                    **feedback[0],
+                    "referenced_frames": [
+                        {
+                            "timestamp": "00:15",
+                            "frame_path": os.path.join(temp_dir, "ref.jpg"),
+                            "clip_used": "clip2.mp4",
+                            "usage": "expression_anchor",
+                        }
+                    ],
+                }
+            ]
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "OPENAI_API_KEY": "test-key",
+                        "LOKA_USE_COMPLEX_FEEDBACK_AGENT": "1",
+                    },
+                ),
+                mock.patch("main.OpenAI", return_value=object()),
+                mock.patch("main.scan_visual_reference_assets", return_value=[]),
+                mock.patch(
+                    "main.enrich_feedback_items_with_complex_references",
+                    return_value=(enriched_feedback, True, "agent"),
+                ) as enrich_refs,
+                mock.patch(
+                    "main.generate_video_prompts_batch",
+                    return_value=[
+                        {
+                            "cluster_id": 0,
+                            "selected_assets": [],
+                            "prompt_format": "plain_text",
+                            "reference_legend": "",
+                            "video_model_prompt": "video result",
+                            "explanation": "video",
+                            "status": "success",
+                        }
+                    ],
+                ) as batch_generator,
+                mock.patch("main.write_markdown_report"),
+            ):
+                main.run_pipeline(
+                    feedback_path=feedback_path,
+                    timeline_path=timeline_path,
+                    assets_dir=os.path.join(temp_dir, "assets", "project-a"),
+                    output_json=output_json,
+                    output_report=output_report,
+                    provider="openai",
+                )
+
+            enrich_refs.assert_called_once()
+            self.assertEqual("openai", enrich_refs.call_args.kwargs["provider"])
+            passed_cluster = batch_generator.call_args.kwargs["clusters"][0]
+            self.assertEqual("expression_anchor", passed_cluster["feedback_items"][0]["referenced_frames"][0]["usage"])
+
     def test_audio_only_feedback_makes_no_batch_generation_call(self):
         feedback = [
             {"timestamp": "00:01", "category": "audio", "remark": "audio only"},

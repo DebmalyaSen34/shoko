@@ -345,6 +345,17 @@ def test_chat_summarizes_saved_clip_context(tmp_path, monkeypatch):
     assert "Gaze: toward camera" in reply
 
 
+def test_normalize_chat_reply_markdown_unwraps_prompt_code_fence():
+    reply = server.normalize_chat_reply_markdown(
+        "Here is the latest prompt:\n\n```text\nVideo Model Prompt:\nMother smiles gently.\n```"
+    )
+
+    assert "```" not in reply
+    assert "Here is the latest prompt:" in reply
+    assert "Video Model Prompt:" in reply
+    assert "Mother smiles gently." in reply
+
+
 def test_chat_summary_request_runs_clip_context_analysis_when_missing(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     assets_dir = tmp_path / "assets"

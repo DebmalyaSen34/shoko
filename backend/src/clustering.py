@@ -95,6 +95,10 @@ def cluster_feedback_by_clip(feedback_list: list, video_timeline: list) -> list:
             "timestamp": timestamp,
             "remark": item.get("remark", ""),
         }
+        if item.get("referenced_frames"):
+            feedback_item["referenced_frames"] = item.get("referenced_frames")
+        if item.get("complex_reference_plan"):
+            feedback_item["complex_reference_plan"] = item.get("complex_reference_plan")
         for lane in _feedback_lanes(item.get("category", "video")):
             key = occurrence, lane
             if key not in clusters:

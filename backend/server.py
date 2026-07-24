@@ -1180,6 +1180,32 @@ def extract_memory_notes(message: str, assistant_text: str) -> list[str]:
     return notes
 
 
+def normalize_chat_reply_markdown(text: str) -> str:
+    """Remove accidental code fences around prompt prose before saving chat replies."""
+    if not text:
+        return text
+
+    normalized = text.strip()
+    full_fence = re.match(r"^```[\w-]*\s*\n([\s\S]*?)\n```$", normalized)
+    if full_fence:
+        return full_fence.group(1).strip()
+
+    prompt_fence = re.compile(
+        r"(^|\n)([^\n`]*(?:prompt|seedance|video model prompt)[^\n`]*:\s*)?\n?```(?:text|markdown|md)?\s*\n([\s\S]*?)\n```",
+        re.IGNORECASE,
+    )
+
+    def replace_prompt_fence(match: re.Match) -> str:
+        prefix = match.group(1) or ""
+        label = (match.group(2) or "").strip()
+        body = match.group(3).strip()
+        if label:
+            return f"{prefix}{label}\n{body}"
+        return f"{prefix}{body}"
+
+    return prompt_fence.sub(replace_prompt_fence, normalized).strip()
+
+
 def wants_previous_last_frame_continuity(text: str) -> bool:
     lower = text.lower()
     has_previous_clip = "previous clip" in lower or "prior clip" in lower or "last clip" in lower
@@ -1465,7 +1491,8 @@ async def generate_chat_reply_with_tools(provider: str, message: str, context: d
         "Answer as a practical editor-facing collaborator. Use only the supplied context. "
         "You can discuss timeline, clip details, feedback, assets, prior prompt generations, quality reports, memory, workflow execution, and video-generation handoff. "
         "You can call extract_reference_frame when the user clearly asks to extract/grab/capture/save/add/attach a frame or still at an explicit timestamp as a reference for this clip. "
-        "Format replies as normal Markdown, but never wrap the whole reply in a Markdown code fence or indent prompt text as a code block. "
+        "Format replies as normal Markdown. When showing prompt text, write it as plain paragraphs or bullets under a short heading; do not use ```text, ```markdown, or any Markdown code fence for prompts. "
+        "Never wrap the whole reply in a Markdown code fence or indent prompt text as a code block. "
         "If the user asks to save a durable preference, include a final line starting with 'Memory:' followed by the exact note. "
         "Do not claim that you executed actions unless a tool result says the action completed."
     )
@@ -1522,13 +1549,13 @@ async def generate_chat_reply_with_tools(provider: str, message: str, context: d
                 )
                 reply_text = _response_text(followup)
                 if reply_text:
-                    return reply_text, tool_results
+                    return normalize_chat_reply_markdown(reply_text), tool_results
                 successful = [result for result in tool_results if result.get("status") == "ok"]
                 if successful:
-                    return successful[-1].get("message", "Reference frame extracted."), tool_results
-                return tool_results[-1].get("message", "Reference frame extraction failed."), tool_results
+                    return normalize_chat_reply_markdown(successful[-1].get("message", "Reference frame extracted.")), tool_results
+                return normalize_chat_reply_markdown(tool_results[-1].get("message", "Reference frame extraction failed.")), tool_results
             reply_text = _response_text(response)
-            return (reply_text or fallback_chat_reply(message, context)), []
+            return normalize_chat_reply_markdown(reply_text or fallback_chat_reply(message, context)), []
 
         if provider == "gemini" and os.environ.get("GEMINI_API_KEY"):
             from google import genai
@@ -1542,7 +1569,7 @@ async def generate_chat_reply_with_tools(provider: str, message: str, context: d
                 model=os.environ.get("GEMINI_CHAT_MODEL", LITE_MODEL),
                 contents=prompt,
             )
-            return (response.text or "").strip(), []
+            return normalize_chat_reply_markdown((response.text or "").strip()), []
     except Exception as exc:
         log_event(
             "clip_chat.llm_error",
@@ -1553,7 +1580,7 @@ async def generate_chat_reply_with_tools(provider: str, message: str, context: d
             error=str(exc)[:500],
         )
 
-    return fallback_chat_reply(message, context), []
+    return normalize_chat_reply_markdown(fallback_chat_reply(message, context)), []
 
 
 async def generate_chat_reply(provider: str, message: str, context: dict, messages: list[dict]) -> str:

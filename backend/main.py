@@ -18,6 +18,12 @@ from config.settings import DEFAULT_FEEDBACK_JSON_PATH, DEFAULT_ASSETS_DIR, DEFA
 # Workflows for the full agentic loop
 from src.workflows.timeline_extraction import extract_timeline_from_project
 from src.workflows.feedback_parsing import parse_and_align_feedback
+from src.workflows.complex_feedback_agent import (
+    complex_feedback_agent_available,
+    complex_feedback_mode_from_env,
+    enrich_feedback_items_with_complex_references,
+    investigate_complex_feedback_references,
+)
 from src.workflows.referenced_frames import analyze_and_extract_referenced_frames
 from src.workflows.generation_planner import plan_generation_workflow
 from src.workflows.prompt_generation import (
@@ -498,6 +504,26 @@ def run_pipeline(
         timeline_data = json.load(f)
         
     video_timeline = timeline_data.get("video_timeline", [])
+    inferred_project_name = os.path.basename(os.path.dirname(output_json)) or "project"
+    inferred_output_base_dir = os.path.dirname(os.path.dirname(output_json)) or "data"
+    complex_feedback_mode = complex_feedback_mode_from_env()
+    try:
+        feedback_list, complex_refs_changed, resolved_complex_mode = enrich_feedback_items_with_complex_references(
+            feedback_list,
+            timeline_data,
+            project_name=inferred_project_name,
+            assets_dir=os.path.dirname(assets_dir),
+            provider=provider,
+            model=OPENAI_REASONING_MODEL,
+            output_base_dir=inferred_output_base_dir,
+            mode=complex_feedback_mode,
+        )
+        if complex_refs_changed:
+            print(f"[Step 2/6] Complex feedback references enriched via mode: {resolved_complex_mode}")
+    except Exception as exc:
+        if complex_feedback_mode == "agent":
+            raise
+        print(f"[Step 2/6] Complex feedback enrichment skipped: {exc}")
     print("Done")
 
     # 1. Scan visual references without spending a model request
@@ -805,6 +831,26 @@ def run_agentic_loop(
                 raise FileNotFoundError(f"Feedback JSON not found at: {feedback_json_path}")
             if not _artifact_ready(manifest, "timeline", timeline_json_path):
                 raise FileNotFoundError(f"Timeline JSON not found at: {timeline_json_path}")
+            complex_feedback_mode = complex_feedback_mode_from_env()
+            if (
+                complex_feedback_mode != "off"
+                and os.path.exists(feedback_json_path)
+                and os.path.exists(timeline_json_path)
+            ):
+                print("[Loop references] Investigating complex cross-timeframe feedback...")
+                use_complex_feedback_agent = complex_feedback_mode == "agent" or (
+                    complex_feedback_mode == "auto" and complex_feedback_agent_available()
+                )
+                feedback_json_path = investigate_complex_feedback_references(
+                    feedback_json_path=feedback_json_path,
+                    timeline_json_path=timeline_json_path,
+                    project_name=project_name,
+                    assets_dir=assets_dir,
+                    provider=provider,
+                    model=model,
+                    output_base_dir=output_base_dir,
+                    use_agents_sdk=use_complex_feedback_agent,
+                )
             print("[Loop references] Checking cross-referenced timestamps and extracting frames...")
             feedback_json_path = analyze_and_extract_referenced_frames(
                 feedback_json_path=feedback_json_path,

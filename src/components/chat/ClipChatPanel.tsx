@@ -549,13 +549,25 @@ function MarkdownMessage({ text }: { text: string }) {
 }
 
 function normalizeChatMarkdown(text: string) {
-  return dedentAccidentalPromptBlock(unwrapMarkdownFence(text));
+  return dedentAccidentalPromptBlock(unwrapPromptCodeFences(unwrapMarkdownFence(text)));
 }
 
 function unwrapMarkdownFence(text: string) {
   const trimmed = text.trim();
   const match = trimmed.match(/^```[\w-]*\s*\n([\s\S]*?)\n```$/i);
   return match ? match[1].trim() : text;
+}
+
+function unwrapPromptCodeFences(text: string) {
+  return text.replace(
+    /(^|\n)([^\n`]*(?:prompt|seedance|video model prompt)[^\n`]*:\s*)?\n?```(?:text|markdown|md)?\s*\n([\s\S]*?)\n```/gi,
+    (_match, prefix: string, label: string | undefined, body: string) => {
+      const cleanPrefix = prefix || "";
+      const cleanLabel = (label || "").trim();
+      const cleanBody = body.trim();
+      return cleanLabel ? `${cleanPrefix}${cleanLabel}\n${cleanBody}` : `${cleanPrefix}${cleanBody}`;
+    },
+  );
 }
 
 function dedentAccidentalPromptBlock(text: string) {

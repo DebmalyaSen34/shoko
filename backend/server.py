@@ -1465,6 +1465,7 @@ async def generate_chat_reply_with_tools(provider: str, message: str, context: d
         "Answer as a practical editor-facing collaborator. Use only the supplied context. "
         "You can discuss timeline, clip details, feedback, assets, prior prompt generations, quality reports, memory, workflow execution, and video-generation handoff. "
         "You can call extract_reference_frame when the user clearly asks to extract/grab/capture/save/add/attach a frame or still at an explicit timestamp as a reference for this clip. "
+        "Format replies as normal Markdown, but never wrap the whole reply in a Markdown code fence or indent prompt text as a code block. "
         "If the user asks to save a durable preference, include a final line starting with 'Memory:' followed by the exact note. "
         "Do not claim that you executed actions unless a tool result says the action completed."
     )

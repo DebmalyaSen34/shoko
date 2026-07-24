@@ -170,7 +170,9 @@ function Timeline({
   if (loading) {
     return (
       <div className="timeline-flow">
-        <EmptyState icon="refresh" title="Loading Timeline..." text="Fetching media clips, coordinates, and feedback." />
+        <div className="timeline-loading-state">
+          <LoadingPulse label="Loading timeline..." description="Fetching media clips, coordinates, and feedback." />
+        </div>
       </div>
     );
   }
@@ -421,9 +423,7 @@ function TimelineCard({
                         {latestError && <ErrorWarning error={latestError} />}
                         <div className="workflow-btn-wrapper">
                           {runningIndexes.has(item.raw_index) ? (
-                            <div className="inline-runner-status">
-                              <Icon name="refresh" /> Running workflow...
-                            </div>
+                            <InlineLoader label="Running workflow..." />
                           ) : (
                             <button className="premium-btn" onClick={() => executeWorkflow(item.raw_index)}>
                               <Icon name="play" /> Execute Feedback Workflow
@@ -594,9 +594,7 @@ function GeneratedPlan({
       
       <div className="generated-actions" style={{ marginTop: "8px" }}>
         {running ? (
-          <div className="inline-runner-status">
-            <Icon name="refresh" /> Running workflow...
-          </div>
+          <InlineLoader label="Running workflow..." />
         ) : (
           <button className="premium-btn secondary" onClick={onRun}>
             <Icon name="refresh" /> Generate Again
@@ -606,8 +604,37 @@ function GeneratedPlan({
           <Icon name="search" /> View Details
         </button>
         <button className="premium-btn" disabled={generatingVideo} onClick={() => void onGenerateVideo().catch(() => undefined)}>
-          <Icon name="video" /> {generatingVideo ? "Generating..." : videos.length ? "Generate New Video" : "Generate Video"}
+          {generatingVideo ? <InlineLoader label="Generating video..." tone="on-button" /> : <><Icon name="video" /> {videos.length ? "Generate New Video" : "Generate Video"}</>}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function InlineLoader({ label, tone = "default" }: { label: string; tone?: "default" | "on-button" }) {
+  return (
+    <span className={`inline-loader ${tone === "on-button" ? "on-button" : ""}`} role="status" aria-live="polite">
+      <span className="loader-orbit" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+      <span>{label}</span>
+    </span>
+  );
+}
+
+function LoadingPulse({ label, description }: { label: string; description: string }) {
+  return (
+    <div className="loading-pulse" role="status" aria-live="polite">
+      <span className="loader-orbit large" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+      <div>
+        <strong>{label}</strong>
+        <p>{description}</p>
       </div>
     </div>
   );

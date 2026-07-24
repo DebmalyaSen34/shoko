@@ -143,7 +143,7 @@ def test_dynamic_chat_suggestions_include_contextual_next_steps():
     actions = server.dynamic_chat_suggestions("What should I do next?", context, [])
 
     assert {"type": "execute_workflow", "label": "Run Workflow Again", "feedback_index": 2} in actions
-    assert {"type": "prepare_video", "label": "Generate Video"} in actions
+    assert {"type": "generate_video", "label": "Generate Video"} in actions
     assert {
         "type": "send_message",
         "label": "Show Feedback",

@@ -30,6 +30,7 @@ hf-xet
 hpack
 httpcore
 httpx
+httpx2
 huggingface-hub
 hyperframe
 idna

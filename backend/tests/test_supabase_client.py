@@ -1,51 +1,43 @@
-from supabase import create_client, Client
-import tempfile
 import os
 
+import pytest
 from dotenv import load_dotenv
+from supabase import create_client
 
-load_dotenv()
 
-# Replace these with your credentials
-SUPABASE_URL = os.getenv("SUPABASE_URL")  # e.g., "https://xyzcompany.supabase.co"
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")  # e.g., "your-anon-or-service-role-key"
+pytestmark = pytest.mark.skipif(
+    os.getenv("RUN_SUPABASE_INTEGRATION_TESTS") != "1",
+    reason="Supabase integration test is opt-in. Set RUN_SUPABASE_INTEGRATION_TESTS=1 to enable.",
+)
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in the environment variables.")
 
-BUCKET = "seedance-audio"  # Change to your bucket name
+def test_supabase_storage_bucket_is_reachable(tmp_path):
+    load_dotenv()
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = (
+        os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        or os.getenv("SUPABASE_KEY")
+        or os.getenv("SUPABASE_ANON_KEY")
+    )
+    bucket = os.getenv("SUPABASE_AUDIO_BUCKET", "seedance-audio")
 
-print(supabase.storage.from_(BUCKET).list())
+    if not supabase_url or not supabase_key:
+        pytest.skip("SUPABASE_URL and a Supabase key are required for this integration test.")
 
-# Create a temporary test file
-with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
-    f.write(b"Supabase Storage Test")
-    file_path = f.name
+    client = create_client(supabase_url, supabase_key)
+    payload = tmp_path / "supabase-test.txt"
+    payload.write_text("Supabase Storage Test", encoding="utf-8")
+    storage_path = "test/supabase-test.txt"
 
-storage_path = "test/supabase-test.txt"
-
-try:
-    # Upload
-    with open(file_path, "rb") as f:
-        result = supabase.storage.from_(BUCKET).upload(
+    with payload.open("rb") as file:
+        result = client.storage.from_(bucket).upload(
             storage_path,
-            f,
-            {"content-type": "text/plain"}
+            file,
+            {"content-type": "text/plain", "upsert": "true"},
         )
 
-    print("✅ Upload successful")
-    print(result)
+    public_url = client.storage.from_(bucket).get_public_url(storage_path)
 
-    # Get public URL
-    public_url = supabase.storage.from_(BUCKET).get_public_url(storage_path)
-    print("\nPublic URL:")
-    print(public_url)
-
-except Exception as e:
-    print("❌ Error:")
-    print(e)
-
-finally:
-    os.remove(file_path)
+    assert result is not None
+    assert storage_path in public_url

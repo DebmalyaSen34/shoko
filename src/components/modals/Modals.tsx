@@ -49,18 +49,20 @@ function getReferenceUrl(path: string) {
 
 export function PreviewModal({ preview, onClose }: { preview: NonNullable<PreviewState>; onClose: () => void }) {
   const { file } = preview;
+  const isImage = file.type === "image";
   const isVideo = file.type === "video";
+  const isPortraitAsset = isImage || isVideo;
 
   return (
     <div className="modal active">
-      <div className={`modal-content glass-card ${isVideo ? "video-preview-content" : ""}`}>
+      <div className={`modal-content glass-card ${isPortraitAsset ? "portrait-preview-content" : ""} ${isVideo ? "video-preview-content" : ""}`}>
         <div className="modal-header">
           <h3>{file.name}</h3>
           <button className="close-btn" onClick={onClose}>
             <Icon name="close" />
           </button>
         </div>
-        <div className={`modal-body ${isVideo ? "video-preview-body" : ""}`}>
+        <div className={`modal-body ${isPortraitAsset ? "portrait-preview-body" : ""} ${isVideo ? "video-preview-body" : ""}`}>
           {file.type === "image" && <img src={staticUrl(file.url)} alt={file.name} />}
           {file.type === "video" && <video src={staticUrl(file.url)} controls autoPlay playsInline preload="auto" />}
           {file.type === "audio" && (

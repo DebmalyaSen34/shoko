@@ -167,6 +167,273 @@ def test_dynamic_chat_suggestions_include_regenerate_summary_when_summary_shown(
     } in actions
 
 
+def test_agent_run_planner_structures_autonomous_workflow_plan():
+    context = {
+        "clip_index": 1,
+        "clip_key": "current.mp4::1",
+        "feedback": {
+            "feedback_items": [
+                {"raw_index": 4, "category": "video", "remark": "Continue the shot."}
+            ]
+        },
+        "latest_version": {},
+        "clip_context": None,
+    }
+    explicit_actions = server.infer_action_suggestions(
+        "use the last frame from the previous clip as a continuity reference and execute the workflow",
+        context,
+    )
+    actions = server.dynamic_chat_suggestions("execute the workflow", context, explicit_actions)
+
+    run = server.plan_chat_agent_run(
+        "use the last frame from the previous clip as a continuity reference and execute the workflow",
+        context,
+        explicit_actions,
+        actions,
+    )
+
+    assert run["intent"] == "continuity_workflow"
+    assert run["autonomy_level"] == "full_autopilot"
+    assert run["approval_required"] is False
+    assert run["required_actions"][0]["type"] == "execute_workflow"
+    assert run["plan_steps"][0]["tool"] == "execute_workflow"
+
+
+def test_agent_run_planner_marks_risky_suggestions_for_approval():
+    context = {
+        "clip_index": 0,
+        "clip_key": "clip.mp4::0",
+        "feedback": {
+            "feedback_items": [
+                {"raw_index": 2, "category": "video", "remark": "Make the action clearer."}
+            ]
+        },
+        "latest_version": {},
+    }
+    explicit_actions = server.infer_action_suggestions("can you run the workflow?", context)
+    actions = server.dynamic_chat_suggestions("can you run the workflow?", context, explicit_actions)
+
+    run = server.plan_chat_agent_run("can you run the workflow?", context, explicit_actions, actions)
+
+    assert run["intent"] == "workflow_execution"
+    assert run["autonomy_level"] == "approval_required"
+    assert run["approval_required"] is True
+    assert run["status"] == "awaiting_approval"
+    assert run["plan_steps"][0]["requires_approval"] is True
+
+
+def test_agent_run_persistence_round_trips_project_json(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    project_dir = data_dir / "project-a"
+    project_dir.mkdir(parents=True)
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+
+    run = server.create_chat_agent_run(
+        "project-a",
+        {
+            "goal": "Run the workflow",
+            "clip_index": 0,
+            "clip_key": "clip.mp4::0",
+            "status": "planned",
+            "intent": "workflow_execution",
+            "confidence": 0.8,
+            "autonomy_level": "suggest",
+            "approval_required": False,
+            "plan_steps": [],
+            "required_actions": [],
+            "available_actions": [],
+            "suggested_actions": [],
+            "tool_results": [],
+            "errors": [],
+        },
+    )
+
+    saved = json.loads((project_dir / "chat_agent_runs.json").read_text(encoding="utf-8"))
+    recent = server.recent_agent_runs_for_clip("project-a", "clip.mp4::0")
+
+    assert saved["schema_version"] == 1
+    assert saved["runs"][0]["id"] == run["id"]
+    assert recent[0]["goal"] == "Run the workflow"
+
+
+def test_safe_agent_executor_searches_assets_and_completes_step():
+    context = {
+        "assets": {
+            "01_characters": [
+                {"name": "vir-red-shirt.png", "path": "01_characters/vir-red-shirt.png", "url": "/assets/project/vir.png", "type": "image"},
+                {"name": "blue-prop.png", "path": "02_props/blue-prop.png", "url": "/assets/project/blue.png", "type": "image"},
+            ]
+        }
+    }
+    run = {
+        "status": "planned",
+        "tool_results": [],
+        "errors": [],
+        "plan_steps": [
+            {
+                "id": "step-1",
+                "label": "Search attached clip assets and project media.",
+                "status": "pending",
+                "tool": "search_assets",
+                "requires_approval": False,
+            }
+        ],
+    }
+
+    updated = server.execute_safe_agent_run_tools("project-a", run, context, "show Vir assets", [])
+
+    assert updated["status"] == "completed"
+    assert updated["plan_steps"][0]["status"] == "completed"
+    assert updated["tool_results"][0]["tool"] == "search_assets"
+    assert updated["tool_results"][0]["matches"][0]["name"] == "vir-red-shirt.png"
+
+
+def test_safe_agent_executor_blocks_missing_prompt_evaluation():
+    run = {
+        "status": "planned",
+        "tool_results": [],
+        "errors": [],
+        "plan_steps": [
+            {
+                "id": "step-1",
+                "label": "Evaluate the latest prompt.",
+                "status": "pending",
+                "tool": "evaluate_prompt",
+                "requires_approval": False,
+            }
+        ],
+    }
+
+    updated = server.execute_safe_agent_run_tools("project-a", run, {"latest_version": {}, "feedback": {"feedback_items": []}}, "evaluate prompt", [])
+
+    assert updated["status"] == "completed"
+    assert updated["plan_steps"][0]["status"] == "blocked"
+    assert updated["tool_results"][0]["status"] == "missing"
+
+
+def test_safe_agent_executor_records_saved_memory_result():
+    run = {
+        "status": "planned",
+        "tool_results": [],
+        "errors": [],
+        "plan_steps": [
+            {
+                "id": "step-1",
+                "label": "Persist memory.",
+                "status": "pending",
+                "tool": "add_memory",
+                "requires_approval": False,
+            }
+        ],
+    }
+
+    updated = server.execute_safe_agent_run_tools(
+        "project-a",
+        run,
+        {},
+        "remember that the client likes soft light",
+        [{"id": "mem-1", "text": "Client likes soft light.", "scope": "clip"}],
+    )
+
+    assert updated["status"] == "completed"
+    assert updated["tool_results"][0]["memory_ids"] == ["mem-1"]
+
+
+def test_chat_endpoint_persists_agent_run_and_keeps_suggestions(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    assets_dir = tmp_path / "assets"
+    project_dir = data_dir / "project-a"
+    project_dir.mkdir(parents=True)
+    (project_dir / "timeline.json").write_text(
+        json.dumps({
+            "video_timeline": [
+                {
+                    "clip": "clip.mp4",
+                    "start_tc": "00:00",
+                    "end_tc": "00:01",
+                    "start_s": 0,
+                    "end_s": 1,
+                    "duration_s": 1,
+                }
+            ],
+            "sequence_name": "Draft",
+            "total_duration_tc": "00:01",
+            "total_duration_s": 1,
+        }),
+        encoding="utf-8",
+    )
+    (project_dir / "feedback.json").write_text(
+        json.dumps([
+            {
+                "clip_used": "clip.mp4",
+                "clip_occurrence": 0,
+                "feedback_items": [
+                    {"timestamp": "00:00", "category": "video", "remark": "Make the action clearer."}
+                ],
+            }
+        ]),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    client = TestClient(server.app)
+
+    response = client.post(
+        "/api/projects/project-a/chat/clip",
+        json={"clip_index": 0, "message": "Can you run the workflow?", "provider": "openai"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["agent_run"]["intent"] == "workflow_execution"
+    assert body["agent_run"]["approval_required"] is True
+    assert body["assistant_message"]["metadata"]["agent_run"]["id"] == body["agent_run"]["id"]
+    assert {"type": "execute_workflow", "label": "Run Workflow", "feedback_index": 0} in body["suggested_actions"]
+    assert (project_dir / "chat_agent_runs.json").exists()
+
+
+def test_chat_endpoint_executes_asset_review_agent_tool(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    assets_dir = tmp_path / "assets"
+    project_dir = data_dir / "project-a"
+    asset_path = assets_dir / "project-a" / "01_characters" / "vir-red-shirt.png"
+    project_dir.mkdir(parents=True)
+    asset_path.parent.mkdir(parents=True)
+    asset_path.write_bytes(b"image")
+    (project_dir / "timeline.json").write_text(
+        json.dumps({
+            "video_timeline": [
+                {
+                    "clip": "clip.mp4",
+                    "start_tc": "00:00",
+                    "end_tc": "00:01",
+                    "start_s": 0,
+                    "end_s": 1,
+                    "duration_s": 1,
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    client = TestClient(server.app)
+
+    response = client.post(
+        "/api/projects/project-a/chat/clip",
+        json={"clip_index": 0, "message": "Show Vir assets", "provider": "openai"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["agent_run"]["intent"] == "asset_review"
+    assert body["agent_run"]["status"] == "completed"
+    assert body["agent_run"]["tool_results"][0]["tool"] == "search_assets"
+    assert body["agent_run"]["tool_results"][0]["matches"][0]["name"] == "vir-red-shirt.png"
+
+
 def test_prepare_continuity_reference_prefers_previous_final_clip(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     assets_dir = tmp_path / "assets"

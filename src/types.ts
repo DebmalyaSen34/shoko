@@ -219,6 +219,35 @@ export type ClipChatAction = {
   prompt?: string;
 };
 
+export type ClipAgentRunStep = {
+  id: string;
+  label: string;
+  status: "pending" | "completed" | "awaiting_approval" | "dispatch_ready" | "blocked" | "failed" | string;
+  tool?: string;
+  requires_approval?: boolean;
+  action?: ClipChatAction | null;
+};
+
+export type ClipAgentRun = {
+  id: string;
+  goal: string;
+  clip_index: number;
+  clip_key: string;
+  status: "planned" | "ready" | "awaiting_approval" | "failed" | "completed" | string;
+  intent: string;
+  confidence: number;
+  autonomy_level: "manual" | "suggest" | "approval_required" | "full_autopilot" | string;
+  approval_required: boolean;
+  plan_steps: ClipAgentRunStep[];
+  required_actions: ClipChatAction[];
+  available_actions: ClipChatAction[];
+  suggested_actions: ClipChatAction[];
+  tool_results?: Record<string, unknown>[];
+  errors?: string[];
+  created_at: string;
+  updated_at: string;
+};
+
 export type ClipChatMedia = {
   type: "image" | "video" | "audio" | "other";
   label: string;
@@ -241,6 +270,7 @@ export type ClipChatMessage = {
     media?: ClipChatMedia[];
     saved_memory_ids?: string[];
     tool_results?: Record<string, unknown>[];
+    agent_run?: ClipAgentRun;
     kind?: string;
   };
 };
@@ -273,6 +303,7 @@ export type ClipChatSnapshot = {
   clip_key: string;
   messages: ClipChatMessage[];
   memory: ClipChatMemory;
+  agent_runs: ClipAgentRun[];
   context: {
     project: {
       name: string;
@@ -300,4 +331,5 @@ export type ClipChatResponse = {
   assistant_message: ClipChatMessage;
   memory: ClipChatMemory;
   suggested_actions: ClipChatAction[];
+  agent_run: ClipAgentRun;
 };

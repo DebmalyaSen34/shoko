@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
   ClipChatAction,
+  ClipAgentRun,
   ClipChatMedia,
   ClipChatMessage,
   ClipChatResponse,
@@ -401,6 +402,7 @@ export function ClipChatPanel({
             {Boolean(message.metadata?.media?.length) && (
               <ChatMediaGallery media={message.metadata?.media || []} onPreview={onPreview} />
             )}
+            {message.metadata?.agent_run && <AgentRunSummary run={message.metadata.agent_run} />}
             {Boolean(message.metadata?.actions?.length) && (
               <div className="chat-action-row">
                 {message.metadata?.actions?.map((action) => (
@@ -456,6 +458,56 @@ export function ClipChatPanel({
       </form>
     </aside>
   );
+}
+
+function formatAgentRunStatus(value: string) {
+  return value.replace(/_/g, " ");
+}
+
+function AgentRunSummary({ run }: { run: ClipAgentRun }) {
+  const steps = run.plan_steps || [];
+  const results = run.tool_results || [];
+  return (
+    <div className="agent-run-summary">
+      <div className="agent-run-header">
+        <div>
+          <span>Agent Plan</span>
+          <strong>{formatAgentRunStatus(run.intent)}</strong>
+        </div>
+        <em className={`agent-run-status ${run.status}`}>{formatAgentRunStatus(run.status)}</em>
+      </div>
+      <div className="agent-run-meta">
+        <span>{formatAgentRunStatus(run.autonomy_level)}</span>
+        <span>{Math.round((run.confidence || 0) * 100)}% confidence</span>
+        {run.approval_required && <span>approval needed</span>}
+      </div>
+      {steps.length > 0 && (
+        <ol className="agent-run-steps">
+          {steps.slice(0, 4).map((step) => (
+            <li key={step.id} className={step.status}>
+              <span>{step.label}</span>
+              <em>{formatAgentRunStatus(step.status)}</em>
+            </li>
+          ))}
+        </ol>
+      )}
+      {results.length > 0 && (
+        <div className="agent-run-results">
+          {results.slice(0, 3).map((result, index) => (
+            <span key={`${run.id}-result-${index}`}>
+              {formatToolResult(result)}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatToolResult(result: Record<string, unknown>) {
+  const tool = typeof result.tool === "string" ? formatAgentRunStatus(result.tool) : "tool";
+  const message = typeof result.message === "string" ? result.message : "";
+  return message ? `${tool}: ${message}` : tool;
 }
 
 function ChatMediaGallery({ media, onPreview }: { media: ClipChatMedia[]; onPreview: (preview: PreviewState) => void }) {

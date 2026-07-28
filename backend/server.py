@@ -557,6 +557,10 @@ def chat_workflow_intents_path(project_name: str) -> Path:
     return project_data_dir(project_name) / "chat_workflow_intents.json"
 
 
+def chat_agent_runs_path(project_name: str) -> Path:
+    return project_data_dir(project_name) / "chat_agent_runs.json"
+
+
 def load_chat_history(project_name: str) -> dict:
     data = read_json_file(chat_history_path(project_name), {"clips": {}})
     if not isinstance(data, dict):
@@ -1118,6 +1122,7 @@ def build_clip_chat_context(project_name: str, clip_index: int, query: str = "")
         "clip_context": clip_context,
         "assets": project_data.get("assets", {}),
         "memory": store.for_clip(key, query=query),
+        "agent_runs": recent_agent_runs_for_clip(project_name, key),
     }
 
 
@@ -1158,6 +1163,18 @@ def compact_chat_context(context: dict) -> str:
             "project_memory": project_memory,
             "clip_memory": clip_memory,
             "relevant_memory": relevant_memory,
+            "recent_agent_runs": [
+                {
+                    "id": run.get("id"),
+                    "goal": run.get("goal"),
+                    "status": run.get("status"),
+                    "intent": run.get("intent"),
+                    "autonomy_level": run.get("autonomy_level"),
+                    "approval_required": run.get("approval_required"),
+                    "updated_at": run.get("updated_at"),
+                }
+                for run in context.get("agent_runs", [])[:3]
+            ],
         },
         ensure_ascii=False,
         indent=2,
@@ -1257,6 +1274,61 @@ def save_pending_workflow_intents(project_name: str, actions: list[dict], messag
     save_chat_workflow_intents(project_name, intents)
 
 
+def load_chat_agent_runs(project_name: str) -> dict:
+    data = read_json_file(chat_agent_runs_path(project_name), {"schema_version": 1, "runs": []})
+    if not isinstance(data, dict):
+        return {"schema_version": 1, "runs": []}
+    runs = data.get("runs")
+    if not isinstance(runs, list):
+        runs = []
+    return {"schema_version": 1, "runs": runs}
+
+
+def save_chat_agent_runs(project_name: str, data: dict) -> None:
+    data.setdefault("schema_version", 1)
+    data.setdefault("runs", [])
+    write_json_file(chat_agent_runs_path(project_name), data)
+
+
+def recent_agent_runs_for_clip(project_name: str, clip_key: str, limit: int = 5) -> list[dict]:
+    data = load_chat_agent_runs(project_name)
+    runs = [
+        run for run in data.get("runs", [])
+        if run.get("clip_key") == clip_key
+    ]
+    runs.sort(key=lambda run: run.get("updated_at", ""), reverse=True)
+    return runs[:limit]
+
+
+def create_chat_agent_run(project_name: str, run: dict) -> dict:
+    data = load_chat_agent_runs(project_name)
+    now = now_iso()
+    persisted = {
+        "id": str(uuid.uuid4()),
+        "created_at": now,
+        "updated_at": now,
+        **run,
+    }
+    data.setdefault("runs", []).append(persisted)
+    save_chat_agent_runs(project_name, data)
+    return persisted
+
+
+def update_chat_agent_run(project_name: str, run_id: str, updates: dict) -> dict:
+    data = load_chat_agent_runs(project_name)
+    now = now_iso()
+    updated_run = {}
+    for run in data.get("runs", []):
+        if run.get("id") == run_id:
+            run.update(updates)
+            run["updated_at"] = now
+            updated_run = run
+            break
+    if updated_run:
+        save_chat_agent_runs(project_name, data)
+    return updated_run
+
+
 def infer_action_suggestions(text: str, context: dict) -> list[dict]:
     lower = text.lower()
     suggestions = []
@@ -1335,6 +1407,342 @@ def dynamic_chat_suggestions(message: str, context: dict, explicit_actions: list
     if len(actions) > 5:
         return actions[:5]
     return actions
+
+
+def _action_goal(action: dict) -> str:
+    if action.get("type") == "execute_workflow":
+        return "Run the feedback workflow for this clip."
+    if action.get("type") == "generate_video":
+        return "Generate a video from the latest prompt."
+    if action.get("type") == "prepare_video":
+        return "Prepare the latest prompt and references for video generation."
+    if action.get("type") == "send_message":
+        return action.get("prompt") or "Ask a contextual follow-up question."
+    return action.get("label") or "Continue the clip chat."
+
+
+def _step_for_action(index: int, action: dict, autonomy_level: str) -> dict:
+    action_type = action.get("type") or "send_message"
+    risky = action_type in {"execute_workflow", "generate_video"}
+    if risky and autonomy_level == "approval_required":
+        status = "awaiting_approval"
+    elif risky and autonomy_level == "full_autopilot":
+        status = "dispatch_ready"
+    else:
+        status = "pending"
+    return {
+        "id": f"step-{index}",
+        "label": action.get("label") or _action_goal(action),
+        "status": status,
+        "tool": action_type,
+        "requires_approval": risky,
+        "action": action,
+    }
+
+
+def _asks_for_permission_or_advice(text: str) -> bool:
+    lower = text.strip().lower()
+    return lower.startswith(("can you", "could you", "should i", "should we", "can i", "could i", "would you"))
+
+
+def plan_chat_agent_run(message: str, context: dict, explicit_actions: list[dict], available_actions: list[dict]) -> dict:
+    lower = message.lower()
+    feedback_items = (context.get("feedback") or {}).get("feedback_items", [])
+    latest_version = context.get("latest_version") or {}
+
+    if wants_previous_last_frame_continuity(message):
+        intent = "continuity_workflow"
+        confidence = 0.92
+    elif any(action.get("type") == "execute_workflow" for action in explicit_actions):
+        intent = "workflow_execution"
+        confidence = 0.88
+    elif any(action.get("type") == "generate_video" for action in explicit_actions):
+        intent = "video_generation"
+        confidence = 0.86
+    elif wants_clip_summary_or_analysis(message):
+        intent = "clip_analysis"
+        confidence = 0.82
+    elif "memory" in lower or "remember" in lower or "save to memory" in lower:
+        intent = "memory_update"
+        confidence = 0.78
+    elif wants_clip_media_gallery(message):
+        intent = "asset_review"
+        confidence = 0.76
+    elif any(word in lower for word in ["evaluate", "quality", "check prompt", "review prompt", "audit prompt"]):
+        intent = "prompt_evaluation"
+        confidence = 0.75
+    elif "feedback" in lower:
+        intent = "feedback_review"
+        confidence = 0.74
+    else:
+        intent = "general_chat"
+        confidence = 0.55
+
+    risky_actions = [
+        action for action in explicit_actions
+        if action.get("type") in {"execute_workflow", "generate_video"}
+    ]
+    direct_execution = not _asks_for_permission_or_advice(message) and (
+        wants_autonomous_execution(message)
+        or any(word in lower for word in ["generate", "render", "seedance"])
+    )
+    if risky_actions and direct_execution:
+        autonomy_level = "full_autopilot"
+        approval_required = False
+        status = "ready"
+    elif risky_actions:
+        autonomy_level = "approval_required"
+        approval_required = True
+        status = "awaiting_approval"
+    elif available_actions:
+        autonomy_level = "suggest"
+        approval_required = False
+        status = "planned"
+    else:
+        autonomy_level = "manual"
+        approval_required = False
+        status = "planned"
+
+    required_actions = [dict(action) for action in explicit_actions]
+    action_plan = required_actions or [
+        action for action in available_actions
+        if action.get("type") in {"execute_workflow", "generate_video", "prepare_video"}
+    ][:2]
+
+    steps = []
+    if intent in {"general_chat", "feedback_review"}:
+        steps.append({
+            "id": "step-1",
+            "label": "Answer from current clip context and saved project state.",
+            "status": "completed",
+            "tool": "chat_reply",
+            "requires_approval": False,
+            "action": None,
+        })
+
+    safe_step_by_intent = {
+        "clip_analysis": ("inspect_clip_context", "Inspect saved clip context and analysis status."),
+        "asset_review": ("search_assets", "Search attached clip assets and project media."),
+        "memory_update": ("add_memory", "Persist any durable preference captured from chat."),
+        "prompt_evaluation": ("evaluate_prompt", "Evaluate the latest prompt against feedback and available context."),
+    }
+    if intent in safe_step_by_intent:
+        tool, label = safe_step_by_intent[intent]
+        steps.append({
+            "id": f"step-{len(steps) + 1}",
+            "label": label,
+            "status": "pending",
+            "tool": tool,
+            "requires_approval": False,
+            "action": None,
+        })
+
+    for index, action in enumerate(action_plan, start=len(steps) + 1):
+        steps.append(_step_for_action(index, action, autonomy_level))
+
+    if not steps and feedback_items:
+        steps.append({
+            "id": "step-1",
+            "label": "Keep the workflow action available for this feedback item.",
+            "status": "pending",
+            "tool": "execute_workflow",
+            "requires_approval": True,
+            "action": {
+                "type": "execute_workflow",
+                "label": "Run Workflow",
+                "feedback_index": feedback_items[0].get("raw_index"),
+            },
+        })
+
+    goal = message.strip()
+    if not goal:
+        goal = _action_goal(required_actions[0]) if required_actions else "Continue the clip chat."
+
+    return {
+        "goal": goal,
+        "clip_index": context.get("clip_index"),
+        "clip_key": context.get("clip_key"),
+        "status": status,
+        "intent": intent,
+        "confidence": confidence,
+        "autonomy_level": autonomy_level,
+        "approval_required": approval_required,
+        "plan_steps": steps,
+        "required_actions": required_actions,
+        "available_actions": available_actions,
+        "suggested_actions": available_actions,
+        "tool_results": [],
+        "errors": [],
+        "context_summary": {
+            "feedback_count": len(feedback_items),
+            "prompt_ready": bool(latest_version.get("video_model_prompt")),
+            "clip_context_ready": bool(context.get("clip_context")),
+        },
+    }
+
+
+def apply_agent_run_action_policy(actions: list[dict], agent_run: dict) -> list[dict]:
+    if not agent_run.get("approval_required"):
+        return actions
+    gated_actions = []
+    for action in actions:
+        next_action = dict(action)
+        if next_action.get("type") in {"execute_workflow", "generate_video"}:
+            next_action.pop("autonomous", None)
+        gated_actions.append(next_action)
+    return gated_actions
+
+
+def search_assets_for_agent(context: dict, query: str, limit: int = 8) -> dict:
+    query_tokens = {
+        token for token in re.findall(r"[a-zA-Z0-9_'-]{2,}", query.lower())
+        if token not in {"show", "list", "view", "see", "open", "asset", "assets", "media", "reference", "references"}
+    }
+    matches = []
+    for category, assets in (context.get("assets") or {}).items():
+        for asset in assets:
+            haystack = f"{category} {asset.get('name', '')} {asset.get('path', '')} {asset.get('type', '')}".lower()
+            score = sum(1 for token in query_tokens if token in haystack)
+            if score or not query_tokens:
+                matches.append({
+                    "category": category,
+                    "name": asset.get("name"),
+                    "path": asset.get("path"),
+                    "url": asset.get("url"),
+                    "type": asset.get("type"),
+                    "score": score,
+                })
+    matches.sort(key=lambda item: (item.get("score", 0), item.get("name") or ""), reverse=True)
+    return {
+        "status": "ok",
+        "tool": "search_assets",
+        "message": f"Found {len(matches[:limit])} matching asset(s).",
+        "matches": matches[:limit],
+    }
+
+
+def inspect_clip_context_for_agent(context: dict) -> dict:
+    clip_context = context.get("clip_context")
+    if not clip_context:
+        return {
+            "status": "missing",
+            "tool": "inspect_clip_context",
+            "message": "No saved clip analysis exists yet.",
+        }
+    return {
+        "status": "ok",
+        "tool": "inspect_clip_context",
+        "message": "Loaded saved clip analysis.",
+        "summary": summarize_clip_context(clip_context),
+        "clip_context_path": clip_context.get("clip_context_path"),
+        "analysis_status": clip_context.get("status"),
+    }
+
+
+def memory_update_result_for_agent(saved_memories: list[dict]) -> dict:
+    if not saved_memories:
+        return {
+            "status": "missing",
+            "tool": "add_memory",
+            "message": "No durable memory note was detected in this turn.",
+        }
+    return {
+        "status": "ok",
+        "tool": "add_memory",
+        "message": f"Saved {len(saved_memories)} memory note(s).",
+        "memory_ids": [item.get("id") for item in saved_memories],
+        "memories": [{"id": item.get("id"), "text": item.get("text"), "scope": item.get("scope")} for item in saved_memories],
+    }
+
+
+def evaluate_prompt_for_agent(context: dict) -> dict:
+    latest_version = context.get("latest_version") or {}
+    prompt_text = str(latest_version.get("video_model_prompt") or "").strip()
+    feedback_items = (context.get("feedback") or {}).get("feedback_items", [])
+    if not prompt_text:
+        return {
+            "status": "missing",
+            "tool": "evaluate_prompt",
+            "message": "No generated prompt exists yet for this clip.",
+        }
+
+    prompt_lower = prompt_text.lower()
+    missed_feedback = []
+    for item in feedback_items:
+        remark = str(item.get("remark") or "").strip()
+        tokens = [
+            token for token in re.findall(r"[a-zA-Z0-9_'-]{4,}", remark.lower())
+            if token not in {"make", "this", "that", "with", "from", "should", "clip", "shot", "video"}
+        ]
+        if tokens and not any(token in prompt_lower for token in tokens[:8]):
+            missed_feedback.append(remark)
+
+    quality_report = latest_version.get("quality_report") or {}
+    suggestions = list(quality_report.get("suggestions") or [])
+    if missed_feedback:
+        suggestions.append("Review whether the prompt explicitly addresses every feedback remark.")
+    if not latest_version.get("selected_assets"):
+        suggestions.append("No selected assets are attached to this prompt version.")
+
+    return {
+        "status": "ok",
+        "tool": "evaluate_prompt",
+        "message": "Evaluated the latest prompt against feedback and handoff metadata.",
+        "prompt_ready": True,
+        "feedback_count": len(feedback_items),
+        "missed_feedback": missed_feedback[:5],
+        "quality_passed": quality_report.get("passed"),
+        "suggestions": suggestions[:6],
+    }
+
+
+def execute_safe_agent_run_tools(project_name: str, run: dict, context: dict, message: str, saved_memories: list[dict]) -> dict:
+    tool_results = list(run.get("tool_results") or [])
+    errors = list(run.get("errors") or [])
+    changed = False
+
+    for step in run.get("plan_steps", []):
+        if step.get("status") != "pending":
+            continue
+        tool = step.get("tool")
+        try:
+            if tool == "search_assets":
+                result = search_assets_for_agent(context, message)
+            elif tool == "inspect_clip_context":
+                result = inspect_clip_context_for_agent(context)
+            elif tool == "add_memory":
+                result = memory_update_result_for_agent(saved_memories)
+            elif tool == "evaluate_prompt":
+                result = evaluate_prompt_for_agent(context)
+            elif tool in {"chat_reply", "send_message"}:
+                result = {"status": "ok", "tool": tool, "message": "Chat reply completed."}
+            else:
+                continue
+        except Exception as exc:
+            result = {"status": "error", "tool": tool, "message": str(exc)}
+
+        tool_results.append(result)
+        if result.get("status") == "error":
+            step["status"] = "failed"
+            errors.append(str(result.get("message") or result))
+        elif result.get("status") == "missing":
+            step["status"] = "blocked"
+        else:
+            step["status"] = "completed"
+        changed = True
+
+    if changed:
+        run["tool_results"] = tool_results
+        run["errors"] = errors
+        if errors:
+            run["status"] = "failed"
+        elif any(step.get("status") == "awaiting_approval" for step in run.get("plan_steps", [])):
+            run["status"] = "awaiting_approval"
+        elif any(step.get("status") == "dispatch_ready" for step in run.get("plan_steps", [])):
+            run["status"] = "ready"
+        elif all(step.get("status") in {"completed", "blocked"} for step in run.get("plan_steps", [])):
+            run["status"] = "completed"
+    return run
 
 
 def fallback_chat_reply(message: str, context: dict) -> str:
@@ -2271,6 +2679,7 @@ def get_clip_chat(project_name: str, clip_index: int):
         "clip_key": context["clip_key"],
         "messages": messages,
         "memory": context["memory"],
+        "agent_runs": context["agent_runs"],
         "context": {
             "project": context["project"],
             "clip": context["clip"],
@@ -2331,6 +2740,20 @@ async def post_clip_chat(project_name: str, request: ClipChatRequest):
 
     explicit_actions = infer_action_suggestions(message_text, context)
     actions = dynamic_chat_suggestions(message_text, context, explicit_actions)
+    agent_run = plan_chat_agent_run(message_text, context, explicit_actions, actions)
+    actions = apply_agent_run_action_policy(actions, agent_run)
+    agent_run["available_actions"] = actions
+    agent_run["suggested_actions"] = actions
+    agent_run["tool_results"] = tool_results
+    agent_run = execute_safe_agent_run_tools(project_name, agent_run, context, message_text, saved_memories)
+    if any(result.get("status") == "error" for result in tool_results if isinstance(result, dict)):
+        agent_run["status"] = "failed"
+        agent_run["errors"] = [
+            str(result.get("message") or result)
+            for result in tool_results
+            if isinstance(result, dict) and result.get("status") == "error"
+        ]
+    agent_run = create_chat_agent_run(project_name, agent_run)
     save_pending_workflow_intents(project_name, actions, message_text, context)
     media = build_clip_media_gallery(context) if (wants_clip_media_gallery(message_text) or tool_results or analysis_requested) else []
     assistant_message = make_chat_message(
@@ -2342,6 +2765,7 @@ async def post_clip_chat(project_name: str, request: ClipChatRequest):
             "media": media,
             "saved_memory_ids": [item["id"] for item in saved_memories],
             "tool_results": tool_results,
+            "agent_run": agent_run,
         },
     )
     clip_messages.append(assistant_message)
@@ -2355,6 +2779,7 @@ async def post_clip_chat(project_name: str, request: ClipChatRequest):
         "assistant_message": assistant_message,
         "memory": context["memory"],
         "suggested_actions": actions,
+        "agent_run": agent_run,
     }
 
 

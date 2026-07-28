@@ -1226,6 +1226,115 @@ button {
   text-underline-offset: 2px;
 }
 
+.agent-run-summary {
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.agent-run-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-run-header div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.agent-run-header span,
+.agent-run-meta,
+.agent-run-steps em {
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.agent-run-header strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+  text-transform: capitalize;
+}
+
+.agent-run-status {
+  flex: 0 0 auto;
+  border: 1px solid rgba(220, 174, 96, 0.2);
+  border-radius: 999px;
+  padding: 2px 6px;
+  color: var(--accent-secondary);
+  background: rgba(220, 174, 96, 0.08);
+  text-transform: capitalize;
+}
+
+.agent-run-status.failed {
+  color: var(--error);
+  border-color: rgba(224, 90, 101, 0.22);
+  background: rgba(224, 90, 101, 0.08);
+}
+
+.agent-run-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.agent-run-meta span {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.agent-run-steps {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.agent-run-steps li {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.agent-run-steps li::marker {
+  color: var(--text-muted);
+}
+
+.agent-run-steps span {
+  overflow-wrap: anywhere;
+}
+
+.agent-run-steps em {
+  display: block;
+  margin-top: 1px;
+  font-style: normal;
+  text-transform: capitalize;
+}
+
+.agent-run-results {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.agent-run-results span {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .chat-media-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));

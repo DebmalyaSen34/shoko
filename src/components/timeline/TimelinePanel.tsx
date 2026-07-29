@@ -37,11 +37,24 @@ type ClipLayout = {
   index: number;
   left: number;
   width: number;
+  scaledWidth: number;
+  compact: boolean;
+};
+
+type TimelineMarker = {
+  feedback: FeedbackGroup;
+  item: FeedbackGroup["feedback_items"][number];
+  left: number;
+  clipIndex: number;
 };
 
 const TRACK_COLORS = ["#7c4dff", "#d99a38", "#bf3d76", "#2d6ad5", "#2f8a5b", "#6341d4"];
 const WAVEFORM_PATTERN = [16, 29, 42, 55, 26, 39, 52, 23, 36, 49, 20, 33, 46, 17, 30, 43, 56, 27, 40, 53];
 const REFERENCE_SELECTED_CLIP_INDEX = 2;
+const TIMELINE_GUTTER = 56;
+const TIMELINE_END_PADDING = 48;
+const BASE_PX_PER_SECOND = 18;
+const MIN_SEGMENT_WIDTH = 28;
 
 function preferredClipIndex(clipCount: number) {
   return Math.min(REFERENCE_SELECTED_CLIP_INDEX, Math.max(clipCount - 1, 0));
@@ -172,17 +185,29 @@ function CompactTimeline({
   const drag = useRef({ down: false, startX: 0, scrollLeft: 0 });
   const [selectedClipIndex, setSelectedClipIndex] = useState(REFERENCE_SELECTED_CLIP_INDEX);
 
-  const { layouts, contentWidth } = useMemo(() => {
+  const { layouts, contentWidth, pxPerSecond, totalSeconds } = useMemo(() => {
     const clips = projectData?.timeline || [];
-    let cursor = 36;
-    const gap = 70 * zoom;
+    const sequenceSeconds = Math.max(projectData?.total_duration_s || 0, ...clips.map((clip) => clip.end_s || 0));
+    const nextPxPerSecond = BASE_PX_PER_SECOND * zoom;
     const nextLayouts: ClipLayout[] = clips.map((clip, index) => {
-      const width = Math.max(122, Math.min(154, clip.duration_s * 3.4 * zoom + 92));
-      const layout = { clip, index, left: cursor, width };
-      cursor += width + gap;
-      return layout;
+      const duration = Math.max(clip.duration_s || clip.end_s - clip.start_s || 0, 0.1);
+      const scaledWidth = duration * nextPxPerSecond;
+      const width = Math.max(scaledWidth, MIN_SEGMENT_WIDTH);
+      return {
+        clip,
+        index,
+        left: TIMELINE_GUTTER + Math.max(0, clip.start_s || 0) * nextPxPerSecond,
+        width,
+        scaledWidth,
+        compact: width < 84,
+      };
     });
-    return { layouts: nextLayouts, contentWidth: Math.max(1320, cursor + 36) };
+    return {
+      layouts: nextLayouts,
+      contentWidth: Math.max(1320, TIMELINE_GUTTER + sequenceSeconds * nextPxPerSecond + TIMELINE_END_PADDING),
+      pxPerSecond: nextPxPerSecond,
+      totalSeconds: sequenceSeconds,
+    };
   }, [projectData, zoom]);
 
   useEffect(() => {
@@ -238,7 +263,8 @@ function CompactTimeline({
   const clipKey = `${selectedClip.clip}::${clampedSelectedClipIndex}`;
   const selectedVersionIndex = selectedVersions[clipKey] ?? Math.max(selectedVersionsForClip.length - 1, 0);
   const selectedVersion = selectedVersionsForClip[selectedVersionIndex] || selectedPrompt || undefined;
-  const playheadLeft = selectedLayout.left + selectedLayout.width / 2;
+  const playheadLeft = TIMELINE_GUTTER + Math.max(0, selectedClip.start_s || 0) * pxPerSecond;
+  const markers = buildTimelineMarkers(projectData, layouts, pxPerSecond);
 
   return (
     <div className="compact-timeline-workspace">
@@ -272,13 +298,23 @@ function CompactTimeline({
         }}
       >
         <div className="compact-timeline-stage" style={{ width: contentWidth }}>
-          <TimelineRuler width={contentWidth} totalSeconds={projectData.total_duration_s} />
+          <TimelineRuler width={contentWidth} totalSeconds={totalSeconds} pxPerSecond={pxPerSecond} />
+          <div
+            className="timeline-selected-range"
+            style={{
+              left: selectedLayout.left,
+              width: Math.max(selectedLayout.scaledWidth, 2),
+            }}
+          />
           <div className="timeline-playhead" style={{ left: playheadLeft }}>
             <span>{formatTimecode(selectedClip.start_tc)}</span>
             <i />
           </div>
 
           <div className="compact-clip-row">
+            <div className="timeline-lane-label">
+              <span>V1</span>
+            </div>
             {layouts.map((layout) => {
               return (
                 <CompactClipCard
@@ -293,8 +329,9 @@ function CompactTimeline({
             })}
           </div>
 
+          <FeedbackMarkers markers={markers} onSelectClip={setSelectedClipIndex} />
           <VideoTrack layouts={layouts} />
-          <MockWaveform width={contentWidth} />
+          <MockWaveform width={contentWidth} pxPerSecond={pxPerSecond} totalSeconds={totalSeconds} />
         </div>
       </div>
 
@@ -325,30 +362,33 @@ function CompactTimeline({
   );
 }
 
-function TimelineRuler({ width, totalSeconds }: { width: number; totalSeconds: number }) {
-  const majorStepSeconds = 30;
+function TimelineRuler({ width, totalSeconds, pxPerSecond }: { width: number; totalSeconds: number; pxPerSecond: number }) {
+  const majorStepSeconds = rulerStepForScale(pxPerSecond, totalSeconds);
   const labelSeconds = new Set<number>();
-  for (let second = 0; second < totalSeconds; second += majorStepSeconds) {
-    labelSeconds.add(second);
+  for (let second = 0; second <= totalSeconds; second += majorStepSeconds) {
+    labelSeconds.add(Number(second.toFixed(3)));
   }
-  labelSeconds.add(Math.max(0, Math.floor(totalSeconds)));
+  const lastMajor = Math.floor(totalSeconds / majorStepSeconds) * majorStepSeconds;
+  if (totalSeconds - lastMajor >= Math.min(majorStepSeconds * 0.55, 8)) {
+    labelSeconds.add(Math.max(0, totalSeconds));
+  }
   const ticks = Array.from(labelSeconds).map((second) => {
-    const ratio = totalSeconds > 0 ? second / totalSeconds : 0;
     return {
-      left: 36 + (width - 72) * ratio,
+      left: TIMELINE_GUTTER + second * pxPerSecond,
       label: secondsToTimecode(second),
     };
   });
+  const minorTickWidth = Math.max(8, pxPerSecond * Math.max(1, majorStepSeconds / 5));
 
   return (
-    <div className="timeline-ruler">
+    <div className="timeline-ruler" style={{ width }}>
       {ticks.map((tick) => (
         <div className="ruler-tick" style={{ left: tick.left }} key={tick.label}>
           <span>{tick.label}</span>
           <i />
         </div>
       ))}
-      <div className="minor-ticks" />
+      <div className="minor-ticks" style={{ left: TIMELINE_GUTTER, right: TIMELINE_END_PADDING, backgroundSize: `${minorTickWidth}px 12px` }} />
     </div>
   );
 }
@@ -367,22 +407,31 @@ function CompactClipCard({
   onPreview: (preview: PreviewState) => void;
 }) {
   const clip = layout.clip;
+  const canShowThumbnail = layout.width >= 112;
+  const canShowName = layout.width >= 84;
+  const canShowDuration = layout.width >= 104;
+  const canShowCompactIndex = layout.width >= 18;
 
   return (
-    <article className={`compact-clip-card ${selected ? "selected" : ""}`} style={{ left: layout.left, width: layout.width }}>
-      <button className="clip-thumb-button" type="button" onClick={onSelect}>
-        <div className="compact-thumb">
-          {clip.clip_url ? <video src={`${staticUrl(clip.clip_url)}#t=0.5`} preload="metadata" muted playsInline /> : <Icon name="video" />}
-          <span className="compact-play-mark">
-            <Icon name="play" />
-          </span>
-        </div>
-        <div className="compact-clip-meta">
-          <strong title={clip.clip}>{basename(clip.clip)}</strong>
-          <span>{formatSeconds(clip.duration_s)}</span>
-        </div>
+    <article className={`compact-clip-card ${selected ? "selected" : ""} ${layout.compact ? "compact" : ""}`} style={{ left: layout.left, width: layout.width }}>
+      <button className="clip-thumb-button" type="button" aria-label={`Select ${basename(clip.clip)}`} onClick={onSelect}>
+        {canShowThumbnail && (
+          <div className="compact-thumb">
+            {clip.clip_url ? <video src={`${staticUrl(clip.clip_url)}#t=0.5`} preload="metadata" muted playsInline /> : <Icon name="video" />}
+            <span className="compact-play-mark">
+              <Icon name="play" />
+            </span>
+          </div>
+        )}
+        {canShowName && (
+          <div className="compact-clip-meta">
+            <strong title={clip.clip}>{basename(clip.clip)}</strong>
+            {canShowDuration && <span>{formatSeconds(clip.duration_s)}</span>}
+          </div>
+        )}
+        {!canShowName && canShowCompactIndex && <span className="compact-clip-index">{layout.index + 1}</span>}
       </button>
-      <div className="compact-clip-actions">
+      {!layout.compact && <div className="compact-clip-actions">
         <button type="button" title="Chat" onClick={onOpenChat}>
           <Icon name="chat" />
         </button>
@@ -405,7 +454,7 @@ function CompactClipCard({
             <Icon name="expand" />
           </button>
         )}
-      </div>
+      </div>}
     </article>
   );
 }
@@ -417,17 +466,14 @@ function VideoTrack({ layouts }: { layouts: ClipLayout[] }) {
         <Icon name="video" />
       </div>
       <div className="track-content">
-        {layouts.map((layout, trackIndex) => {
-          const left = Math.max(0, layout.left - 38);
-          const nextLayout = layouts[trackIndex + 1];
-          const nextLeft = nextLayout ? Math.max(0, nextLayout.left - 38) : left + layout.width;
+        {layouts.map((layout) => {
           return (
             <div
               className="track-block"
               key={`${layout.clip.clip}-track`}
               style={{
-                left,
-                width: Math.max(18, nextLeft - left - 3),
+                left: layout.left,
+                width: Math.max(layout.scaledWidth, 2),
                 background: TRACK_COLORS[layout.index % TRACK_COLORS.length],
               }}
             />
@@ -438,8 +484,30 @@ function VideoTrack({ layouts }: { layouts: ClipLayout[] }) {
   );
 }
 
-function MockWaveform({ width }: { width: number }) {
-  const count = Math.max(180, Math.floor(width / 3));
+function FeedbackMarkers({ markers, onSelectClip }: { markers: TimelineMarker[]; onSelectClip: (clipIndex: number) => void }) {
+  if (markers.length === 0) return null;
+
+  return (
+    <div className="timeline-feedback-markers" aria-label="Feedback markers">
+      {markers.map((marker) => (
+        <button
+          className="timeline-feedback-marker"
+          key={`${marker.feedback.clip_used}-${marker.item.raw_index}`}
+          style={{ left: marker.left }}
+          type="button"
+          title={`${formatTimecode(marker.item.timestamp)}: ${marker.item.remark}`}
+          onClick={() => onSelectClip(marker.clipIndex)}
+        >
+          <Icon name="comments" />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function MockWaveform({ width, pxPerSecond, totalSeconds }: { width: number; pxPerSecond: number; totalSeconds: number }) {
+  const timelineWidth = Math.max(0, totalSeconds * pxPerSecond);
+  const count = Math.max(80, Math.floor(timelineWidth / 3));
   const bars = Array.from({ length: count }, (_item, index) => WAVEFORM_PATTERN[index % WAVEFORM_PATTERN.length]);
 
   return (
@@ -447,7 +515,7 @@ function MockWaveform({ width }: { width: number }) {
       <div className="track-label" aria-label="Audio track">
         <Icon name="audio" />
       </div>
-      <div className="waveform" aria-hidden="true">
+      <div className="waveform" aria-hidden="true" style={{ width, paddingLeft: TIMELINE_GUTTER, paddingRight: TIMELINE_END_PADDING }}>
         {bars.map((height, index) => (
           <i key={index} style={{ height: Math.max(8, Math.round(height * 0.52)) }} />
         ))}
@@ -646,6 +714,65 @@ function findFeedback(projectData: ProjectData, clip: TimelineClip, index: numbe
       item.clip_used === clip.clip &&
       (typeof item.clip_occurrence !== "number" || item.clip_occurrence === index),
   );
+}
+
+function buildTimelineMarkers(projectData: ProjectData, layouts: ClipLayout[], pxPerSecond: number): TimelineMarker[] {
+  return projectData.feedback.flatMap((feedback) => {
+    const clipIndex = findFeedbackClipIndex(projectData, feedback);
+    const layout = layouts.find((item) => item.index === clipIndex);
+    if (!layout) return [];
+
+    return feedback.feedback_items.map((item) => {
+      const timestampSeconds = parseTimestampSeconds(item.timestamp, projectData.fps || 25);
+      const markerSeconds =
+        typeof timestampSeconds === "number"
+          ? Math.min(Math.max(timestampSeconds, layout.clip.start_s), layout.clip.end_s)
+          : layout.clip.start_s;
+
+      return {
+        feedback,
+        item,
+        clipIndex: layout.index,
+        left: TIMELINE_GUTTER + markerSeconds * pxPerSecond,
+      };
+    });
+  });
+}
+
+function findFeedbackClipIndex(projectData: ProjectData, feedback: FeedbackGroup) {
+  const occurrence = typeof feedback.clip_occurrence === "number" ? feedback.clip_occurrence : undefined;
+  const exactIndex = projectData.timeline.findIndex((clip, index) => clip.clip === feedback.clip_used && (occurrence === undefined || occurrence === index));
+  if (exactIndex !== -1) return exactIndex;
+  return Math.max(0, projectData.timeline.findIndex((clip) => clip.clip === feedback.clip_used));
+}
+
+function parseTimestampSeconds(timestamp?: string | null, fps = 25) {
+  if (!timestamp) return undefined;
+  const trimmed = timestamp.trim();
+  if (!trimmed) return undefined;
+  if (/^\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
+
+  const parts = trimmed.split(":").map((part) => Number(part));
+  if (parts.some((part) => Number.isNaN(part))) return undefined;
+  if (parts.length >= 4) {
+    const [hours, minutes, seconds, frames] = parts;
+    return hours * 3600 + minutes * 60 + seconds + frames / fps;
+  }
+  if (parts.length === 3) {
+    const [hours, minutes, seconds] = parts;
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+  if (parts.length === 2) {
+    const [minutes, seconds] = parts;
+    return minutes * 60 + seconds;
+  }
+  return undefined;
+}
+
+function rulerStepForScale(pxPerSecond: number, totalSeconds: number) {
+  const targetLabelSpacing = 150;
+  const candidates = totalSeconds <= 90 ? [1, 2, 5, 10, 15, 30] : [5, 10, 15, 30, 60, 120, 300, 600];
+  return candidates.find((step) => step * pxPerSecond >= targetLabelSpacing) || candidates[candidates.length - 1];
 }
 
 function secondsToTimecode(seconds?: number | null) {

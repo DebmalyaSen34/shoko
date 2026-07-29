@@ -166,6 +166,8 @@ export type ProjectData = {
   sequence_name: string;
   total_duration_tc: string;
   total_duration_s: number;
+  fps?: number;
+  frame_size?: string;
 };
 
 export type ProjectImportResult = {

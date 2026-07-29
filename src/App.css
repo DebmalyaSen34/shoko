@@ -1400,17 +1400,10 @@ button {
 
 .minor-ticks {
   position: absolute;
-  left: 36px;
-  right: 36px;
   bottom: 8px;
   height: 12px;
-  background-image: repeating-linear-gradient(
-    to right,
-    rgba(89, 113, 133, 0.28) 0,
-    rgba(89, 113, 133, 0.28) 1px,
-    transparent 1px,
-    transparent 14px
-  );
+  background-image: linear-gradient(to right, rgba(89, 113, 133, 0.32) 1px, transparent 1px);
+  background-repeat: repeat-x;
 }
 
 .timeline-playhead {
@@ -1454,37 +1447,109 @@ button {
   position: absolute;
   left: 0;
   right: 0;
-  top: 64px;
-  height: 270px;
+  top: 86px;
+  height: 170px;
+}
+
+.timeline-lane-label {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  width: 34px;
+  height: 32px;
+  transform: translateY(-50%);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: rgba(8, 17, 26, 0.9);
+  color: var(--text-secondary);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 800;
+  z-index: 3;
+}
+
+.timeline-selected-range {
+  position: absolute;
+  top: 118px;
+  height: 58px;
+  border-radius: 7px;
+  background: rgba(139, 92, 246, 0.1);
+  border: 1px solid rgba(139, 92, 246, 0.34);
+  pointer-events: none;
+  z-index: 1;
 }
 
 .compact-clip-card {
   position: absolute;
-  top: 0;
-  height: auto;
+  top: 64px;
+  min-height: 48px;
   border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: rgba(9, 19, 29, 0.9);
+  border-radius: 5px;
+  background: linear-gradient(180deg, rgba(13, 27, 39, 0.95), rgba(8, 17, 26, 0.92));
   overflow: hidden;
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22);
+  box-shadow: none;
+  z-index: 4;
+  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.compact-clip-card::before,
+.compact-clip-card::after {
+  content: "";
+  position: absolute;
+  top: -18px;
+  bottom: -18px;
+  width: 1px;
+  background: rgba(179, 190, 202, 0.34);
+}
+
+.compact-clip-card::before {
+  left: 0;
+}
+
+.compact-clip-card::after {
+  right: 0;
+}
+
+.compact-clip-card.compact {
+  min-height: 48px;
+  top: 64px;
+  background: linear-gradient(180deg, rgba(13, 27, 39, 0.98), rgba(10, 22, 32, 0.95));
 }
 
 .compact-clip-card.selected {
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 1px var(--accent-primary), 0 20px 48px var(--accent-primary-glow);
+  box-shadow: 0 0 0 1px var(--accent-primary), 0 10px 24px rgba(139, 92, 246, 0.16);
+  z-index: 8;
+}
+
+.compact-clip-card:hover {
+  border-color: rgba(178, 140, 255, 0.58);
+  background: linear-gradient(180deg, rgba(17, 34, 48, 0.98), rgba(10, 22, 32, 0.96));
 }
 
 .clip-thumb-button {
   width: 100%;
+  min-height: inherit;
+  height: 100%;
   border: 0;
   background: transparent;
   color: inherit;
   padding: 0;
   text-align: left;
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.compact-clip-card.compact .clip-thumb-button {
+  align-items: center;
+  justify-content: center;
 }
 
 .compact-thumb {
-  height: 180px;
+  height: 76px;
   background: #05080c;
   position: relative;
   overflow: hidden;
@@ -1530,12 +1595,12 @@ button {
 }
 
 .compact-clip-meta {
-  min-height: 46px;
+  min-height: 38px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  padding: 0 9px;
+  gap: 8px;
+  padding: 0 8px;
 }
 
 .compact-clip-meta strong {
@@ -1543,26 +1608,52 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .compact-clip-meta span {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+.compact-clip-index {
+  width: 100%;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.76;
+}
+
+.compact-clip-card.compact:hover .compact-clip-index,
+.compact-clip-card.compact.selected .compact-clip-index {
+  color: var(--text-primary);
+  opacity: 1;
 }
 
 .compact-clip-actions {
   position: absolute;
-  right: 6px;
-  top: 6px;
+  right: 5px;
+  top: 5px;
   display: flex;
   gap: 4px;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+.compact-clip-card:hover .compact-clip-actions,
+.compact-clip-card.selected .compact-clip-actions {
+  opacity: 1;
 }
 
 .compact-clip-actions button {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 5px;
   color: var(--text-primary);
@@ -1576,23 +1667,25 @@ button {
   position: absolute;
   left: 0;
   right: 0;
-  display: grid;
-  grid-template-columns: 46px 1fr;
-  gap: 8px;
+  display: block;
 }
 
 .compact-video-track {
-  top: 310px;
+  top: 278px;
   height: 34px;
 }
 
 .compact-audio-track {
-  top: 348px;
-  height: 34px;
+  top: 318px;
+  height: 44px;
 }
 
 .track-label {
-  margin-left: 12px;
+  position: absolute;
+  left: 12px;
+  top: 0;
+  width: 34px;
+  height: 30px;
   border: 1px solid var(--border-color);
   border-radius: 6px;
   background: rgba(8, 17, 26, 0.88);
@@ -1608,15 +1701,16 @@ button {
 
 .track-content,
 .waveform {
-  position: relative;
+  position: absolute;
+  inset: 0;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .track-block {
   position: absolute;
-  top: 6px;
-  height: 18px;
+  top: 7px;
+  height: 20px;
   border-radius: 3px;
   outline: 1px solid rgba(4, 9, 15, 0.55);
   outline-offset: -1px;
@@ -1628,8 +1722,8 @@ button {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding-left: 0;
-  padding-right: 22px;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .waveform i {
@@ -1638,6 +1732,35 @@ button {
   background: var(--audio-accent);
   opacity: 0.72;
   flex: 0 0 auto;
+}
+
+.timeline-feedback-markers {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 248px;
+  height: 28px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.timeline-feedback-marker {
+  position: absolute;
+  top: 8px;
+  width: 10px;
+  height: 10px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(178, 140, 255, 0.7);
+  border-radius: 999px;
+  background: var(--accent-secondary);
+  color: var(--accent-secondary);
+  display: block;
+  pointer-events: auto;
+  box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.12);
+}
+
+.timeline-feedback-marker .icon {
+  display: none;
 }
 
 .lower-context-panels {

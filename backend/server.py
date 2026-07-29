@@ -4436,7 +4436,9 @@ def get_project_data(project_name: str):
         "summary": timeline_data.get("summary", {}),
         "sequence_name": timeline_data.get("sequence_name", ""),
         "total_duration_tc": timeline_data.get("total_duration_tc", ""),
-        "total_duration_s": timeline_data.get("total_duration_s", 0)
+        "total_duration_s": timeline_data.get("total_duration_s", 0),
+        "fps": timeline_data.get("fps"),
+        "frame_size": timeline_data.get("frame_size"),
     }
 
 

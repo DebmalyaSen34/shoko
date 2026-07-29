@@ -3641,7 +3641,10 @@ def _decode_waveform_samples(audio_path: Path, start_s: float, duration: float) 
         "s16le",
         "pipe:1",
     ]
-    completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    try:
+        completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=12)
+    except subprocess.TimeoutExpired:
+        return b""
     if completed.returncode != 0:
         return b""
     return completed.stdout
@@ -3698,6 +3701,64 @@ def waveform_for_audio_segment(project_name: str, segment: dict, bin_count: int)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     write_json_file(cache_path, {"peaks": peaks})
     return {**base, "peaks": peaks}
+
+
+def _segment_duration(segment: dict) -> float:
+    return max(
+        float(segment.get("duration_s") or 0.0),
+        float(segment.get("end_s") or 0.0) - float(segment.get("start_s") or 0.0),
+        0.0,
+    )
+
+
+def select_master_audio_segments(project_name: str, segments: list[dict], total_duration: float) -> list[dict]:
+    if not segments:
+        return []
+
+    grouped: dict[str, list[tuple[int, dict]]] = {}
+    for index, segment in enumerate(segments):
+        clip_name = str(segment.get("clip") or "")
+        if not clip_name:
+            continue
+        grouped.setdefault(clip_name, []).append((index, segment))
+
+    candidates = []
+    for clip_name, items in grouped.items():
+        starts = [float(segment.get("start_s") or 0.0) for _index, segment in items]
+        ends = [float(segment.get("end_s") or 0.0) for _index, segment in items]
+        first_index = min(index for index, _segment in items)
+        first_segment = min((segment for _index, segment in items), key=lambda item: float(item.get("start_s") or 0.0))
+        start_s = min(starts) if starts else 0.0
+        end_s = max(ends) if ends else start_s
+        span = max(0.0, end_s - start_s)
+        total_placed_duration = sum(_segment_duration(segment) for _index, segment in items)
+        has_file = resolve_timeline_audio_path(project_name, clip_name) is not None
+        name_score = 1 if re.search(r"\b(mix|master|final)\b", clip_name, re.IGNORECASE) else 0
+        starts_at_head = 1 if start_s <= 1.0 else 0
+        coverage = span / max(total_duration, 0.1)
+        candidates.append({
+            **first_segment,
+            "audio_index": first_index,
+            "start_s": start_s,
+            "end_s": end_s,
+            "duration_s": span,
+            "master_group": True,
+            "master_segment_count": len(items),
+            "_score": (
+                2 if has_file else 0,
+                starts_at_head,
+                name_score,
+                min(coverage, 1.5),
+                total_placed_duration,
+                span,
+            ),
+        })
+
+    candidates.sort(key=lambda item: item["_score"], reverse=True)
+    selected = candidates[:1]
+    for item in selected:
+        item.pop("_score", None)
+    return selected
 
 def save_output_to_prompts(project: str, provider: str = "unknown"):
     import datetime
@@ -4645,7 +4706,7 @@ def get_clip_filmstrip(project_name: str, clip_index: int, frames: int = 4):
 
 
 @app.get("/api/projects/{project_name}/audio-waveform")
-def get_project_audio_waveform(project_name: str, bins: int = 1200):
+def get_project_audio_waveform(project_name: str, bins: int = 600, mode: str = "master"):
     project_name = safe_project_name(project_name)
     project_dir = project_data_dir(project_name)
     timeline_path = project_dir / "timeline.json"
@@ -4656,20 +4717,24 @@ def get_project_audio_waveform(project_name: str, bins: int = 1200):
     timeline_data = read_json_file(timeline_path, {})
     segments = (timeline_data.get("audio_timeline") or {}).get("dedicated_audio_tracks") or []
     total_duration = max(float(timeline_data.get("total_duration_s") or 0.0), 0.1)
-    total_bins = max(120, min(int(bins or 1200), 2400))
+    waveform_mode = "all" if str(mode).lower() == "all" else "master"
+    if waveform_mode == "master":
+        segments = select_master_audio_segments(project_name, segments, total_duration)
+    total_bins = max(120, min(int(bins or 600), 900 if waveform_mode == "master" else 1800))
     waveform_segments = []
 
     for index, segment in enumerate(segments):
         duration = max(float(segment.get("duration_s") or 0.0), float(segment.get("end_s") or 0.0) - float(segment.get("start_s") or 0.0), 0.0)
         segment_bins = max(12, min(total_bins, round((duration / total_duration) * total_bins)))
         waveform_segments.append({
-            **waveform_for_audio_segment(project_name, {**segment, "audio_index": index}, segment_bins),
-            "audio_index": index,
+            **waveform_for_audio_segment(project_name, {**segment, "audio_index": segment.get("audio_index", index)}, segment_bins),
+            "audio_index": segment.get("audio_index", index),
         })
 
     return {
         "project_name": project_name,
         "bins": total_bins,
+        "mode": waveform_mode,
         "segments": waveform_segments,
     }
 

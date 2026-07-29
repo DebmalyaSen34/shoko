@@ -246,7 +246,7 @@ function CompactTimeline({
     if (!projectData?.project_name) return;
     const controller = new AbortController();
     setWaveform({ status: "loading", segments: [] });
-    fetch(apiUrl(`/api/projects/${encodeURIComponent(projectData.project_name)}/audio-waveform?bins=1200`), {
+    fetch(apiUrl(`/api/projects/${encodeURIComponent(projectData.project_name)}/audio-waveform?bins=600&mode=master`), {
       signal: controller.signal,
     })
       .then((response) => {
@@ -686,7 +686,8 @@ function AudioWaveformTrack({ waveform, width, pxPerSecond }: { waveform: Wavefo
         {waveform.segments.map((segment) => {
           const left = TIMELINE_GUTTER + Math.max(0, segment.start_s || 0) * pxPerSecond;
           const segmentWidth = Math.max(2, Math.max(0, (segment.end_s || 0) - (segment.start_s || 0)) * pxPerSecond);
-          const peaks = segment.peaks.length ? segment.peaks : placeholderPeaks;
+          const displayStep = Math.max(1, Math.ceil(segment.peaks.length / Math.max(80, Math.floor(segmentWidth / 3))));
+          const peaks = segment.peaks.length ? segment.peaks.filter((_peak, index) => index % displayStep === 0) : placeholderPeaks;
           return (
             <div className={`waveform-segment ${segment.peaks.length ? "" : "empty"}`} key={`${segment.clip}-${segment.audio_index}-${segment.start_s}`} style={{ left, width: segmentWidth }} title={segment.clip}>
               {peaks.map((peak, index) => (

@@ -39,6 +39,11 @@ export type TimelineClip = {
   clip_url?: string | null;
 };
 
+export type TimelineFilmstripFrame = {
+  offset_s: number;
+  url: string;
+};
+
 export type QualityReport = {
   passed?: boolean;
   feedback_adherence?: string;

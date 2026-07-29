@@ -8,10 +8,12 @@ import { Icon } from "../Icon";
 type ClipPreviewPanelProps = {
   clip: TimelineClip;
   onPreview: (preview: PreviewState) => void;
+  playheadOffsetSeconds?: number;
 };
 
-export function ClipPreviewPanel({ clip, onPreview }: ClipPreviewPanelProps) {
+export function ClipPreviewPanel({ clip, onPreview, playheadOffsetSeconds }: ClipPreviewPanelProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const lastSyncedPlayhead = useRef<number | undefined>(undefined);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(clip.duration_s || 0);
@@ -30,7 +32,19 @@ export function ClipPreviewPanel({ clip, onPreview }: ClipPreviewPanelProps) {
     setCurrentTime(0);
     setDuration(clip.duration_s || 0);
     setLoadFailed(false);
+    lastSyncedPlayhead.current = undefined;
   }, [clip.clip_url, clip.duration_s]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || playheadOffsetSeconds === undefined || !Number.isFinite(playheadOffsetSeconds)) return;
+    const availableDuration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : duration || clip.duration_s || 0;
+    const nextTime = Math.max(0, Math.min(playheadOffsetSeconds, availableDuration));
+    if (lastSyncedPlayhead.current === nextTime || Math.abs(video.currentTime - nextTime) < 0.08) return;
+    video.currentTime = nextTime;
+    setCurrentTime(nextTime);
+    lastSyncedPlayhead.current = nextTime;
+  }, [clip.duration_s, duration, playheadOffsetSeconds]);
 
   const togglePlayback = async () => {
     const video = videoRef.current;

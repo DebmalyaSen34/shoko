@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, Dispatch, RefObject, SetStateAction } from "react";
-import type { FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptRecord, PromptVersion, TimelineClip } from "../../types";
+import type { CSSProperties, Dispatch, MouseEvent, RefObject, SetStateAction } from "react";
+import type { FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptRecord, PromptVersion, TimelineClip, TimelineFilmstripFrame } from "../../types";
 import { basename, formatSeconds, formatTimecode, getVersions, versionLabel } from "../../lib/format";
-import { staticUrl } from "../../lib/api";
+import { apiUrl, staticUrl } from "../../lib/api";
 import { EmptyState } from "../EmptyState";
 import { Icon } from "../Icon";
 import { ClipInspectorPanel } from "./ClipInspectorPanel";
@@ -46,6 +46,11 @@ type TimelineMarker = {
   item: FeedbackGroup["feedback_items"][number];
   left: number;
   clipIndex: number;
+};
+
+type FilmstripLoadState = {
+  status: "loading" | "ready" | "failed";
+  frames: TimelineFilmstripFrame[];
 };
 
 const TRACK_COLORS = ["#7c4dff", "#d99a38", "#bf3d76", "#2d6ad5", "#2f8a5b", "#6341d4"];
@@ -182,8 +187,11 @@ function CompactTimeline({
   onOpenClipChat: (clipIndex: number) => void;
   onPreview: (preview: PreviewState) => void;
 }) {
-  const drag = useRef({ down: false, startX: 0, scrollLeft: 0 });
+  const drag = useRef({ down: false, mode: "pan" as "pan" | "scrub", startX: 0, scrollLeft: 0 });
+  const requestedFilmstrips = useRef<Set<string>>(new Set());
   const [selectedClipIndex, setSelectedClipIndex] = useState(REFERENCE_SELECTED_CLIP_INDEX);
+  const [playheadSeconds, setPlayheadSeconds] = useState(0);
+  const [filmstrips, setFilmstrips] = useState<Record<number, FilmstripLoadState>>({});
 
   const { layouts, contentWidth, pxPerSecond, totalSeconds } = useMemo(() => {
     const clips = projectData?.timeline || [];
@@ -213,7 +221,9 @@ function CompactTimeline({
   useEffect(() => {
     const clipCount = projectData?.timeline.length || 0;
     if (clipCount === 0) return;
-    setSelectedClipIndex(preferredClipIndex(clipCount));
+    const nextIndex = preferredClipIndex(clipCount);
+    setSelectedClipIndex(nextIndex);
+    setPlayheadSeconds(projectData?.timeline[nextIndex]?.start_s || 0);
   }, [projectData?.project_name]);
 
   useEffect(() => {
@@ -221,6 +231,51 @@ function CompactTimeline({
     if (clipCount === 0) return;
     setSelectedClipIndex((current) => Math.min(Math.max(current, 0), clipCount - 1));
   }, [projectData?.timeline.length]);
+
+  useEffect(() => {
+    requestedFilmstrips.current.clear();
+    setFilmstrips({});
+  }, [projectData?.project_name]);
+
+  useEffect(() => {
+    if (!projectData?.project_name || layouts.length === 0) return;
+    const projectName = projectData.project_name;
+    const controllers: AbortController[] = [];
+
+    layouts.forEach((layout) => {
+      const requestKey = `${projectName}:${layout.index}`;
+      if (requestedFilmstrips.current.has(requestKey) || !layout.clip.clip_url) return;
+      requestedFilmstrips.current.add(requestKey);
+      const controller = new AbortController();
+      controllers.push(controller);
+      setFilmstrips((current) => ({
+        ...current,
+        [layout.index]: { status: "loading", frames: [] },
+      }));
+      fetch(apiUrl(`/api/projects/${encodeURIComponent(projectName)}/clips/${layout.index}/filmstrip?frames=4`), {
+        signal: controller.signal,
+      })
+        .then((response) => {
+          if (!response.ok) throw new Error("Failed to load filmstrip");
+          return response.json() as Promise<{ frames?: TimelineFilmstripFrame[] }>;
+        })
+        .then((data) => {
+          setFilmstrips((current) => ({
+            ...current,
+            [layout.index]: { status: "ready", frames: data.frames || [] },
+          }));
+        })
+        .catch((error) => {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+          setFilmstrips((current) => ({
+            ...current,
+            [layout.index]: { status: "failed", frames: [] },
+          }));
+        });
+    });
+
+    return () => controllers.forEach((controller) => controller.abort());
+  }, [layouts, projectData?.project_name]);
 
   if (loading) {
     return (
@@ -263,36 +318,110 @@ function CompactTimeline({
   const clipKey = `${selectedClip.clip}::${clampedSelectedClipIndex}`;
   const selectedVersionIndex = selectedVersions[clipKey] ?? Math.max(selectedVersionsForClip.length - 1, 0);
   const selectedVersion = selectedVersionsForClip[selectedVersionIndex] || selectedPrompt || undefined;
-  const playheadLeft = TIMELINE_GUTTER + Math.max(0, selectedClip.start_s || 0) * pxPerSecond;
+  const clampedPlayheadSeconds = Math.min(Math.max(playheadSeconds, 0), totalSeconds);
+  const playheadLeft = TIMELINE_GUTTER + clampedPlayheadSeconds * pxPerSecond;
   const markers = buildTimelineMarkers(projectData, layouts, pxPerSecond);
+  const playheadOffsetForSelectedClip =
+    clampedPlayheadSeconds >= selectedClip.start_s && clampedPlayheadSeconds <= selectedClip.end_s
+      ? Math.max(0, clampedPlayheadSeconds - selectedClip.start_s)
+      : undefined;
+
+  const clipIndexForSeconds = (seconds: number) => {
+    const exact = layouts.find((layout) => seconds >= layout.clip.start_s && seconds < layout.clip.end_s);
+    if (exact) return exact.index;
+    if (layouts.length > 0 && seconds === layouts[layouts.length - 1].clip.end_s) return layouts[layouts.length - 1].index;
+    let nearest = layouts[0];
+    for (const layout of layouts) {
+      const currentDistance = Math.min(Math.abs(seconds - layout.clip.start_s), Math.abs(seconds - layout.clip.end_s));
+      const nearestDistance = Math.min(Math.abs(seconds - nearest.clip.start_s), Math.abs(seconds - nearest.clip.end_s));
+      if (currentDistance < nearestDistance) nearest = layout;
+    }
+    return nearest.index;
+  };
+
+  const setTimelinePlayhead = (seconds: number) => {
+    const nextSeconds = Math.min(Math.max(seconds, 0), totalSeconds);
+    setPlayheadSeconds(nextSeconds);
+    setSelectedClipIndex(clipIndexForSeconds(nextSeconds));
+  };
+
+  const secondsFromPointer = (clientX: number) => {
+    const stage = refEl.current?.querySelector<HTMLElement>(".compact-timeline-stage");
+    if (!stage) return clampedPlayheadSeconds;
+    const rect = stage.getBoundingClientRect();
+    return (clientX - rect.left - TIMELINE_GUTTER) / pxPerSecond;
+  };
+
+  const scrubFromPointer = (clientX: number) => {
+    setTimelinePlayhead(secondsFromPointer(clientX));
+  };
+
+  const seekClipFromClick = (event: MouseEvent<HTMLElement>, layout: ClipLayout) => {
+    const target = event.target as HTMLElement;
+    if (target.closest(".compact-clip-actions")) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    setTimelinePlayhead(layout.clip.start_s + ratio * Math.max(layout.clip.duration_s, 0.1));
+  };
+
+  const seekMarker = (marker: TimelineMarker) => {
+    const markerSeconds = (marker.left - TIMELINE_GUTTER) / pxPerSecond;
+    setTimelinePlayhead(markerSeconds);
+  };
 
   return (
     <div className="compact-timeline-workspace">
       <div
         ref={refEl}
         className="compact-timeline-scroll"
-        onMouseDown={(event) => {
+        onPointerDown={(event) => {
           const target = event.target as HTMLElement;
+          if (target.closest(".timeline-playhead-grab")) {
+            if (!refEl.current) return;
+            drag.current = { down: true, mode: "scrub", startX: event.pageX - refEl.current.offsetLeft, scrollLeft: refEl.current.scrollLeft };
+            refEl.current.classList.add("scrubbing");
+            scrubFromPointer(event.clientX);
+            event.currentTarget.setPointerCapture(event.pointerId);
+            return;
+          }
           if (target.closest("button, select, input, video")) return;
           if (!refEl.current) return;
+          const scrubTarget = target.closest(".timeline-ruler, .compact-video-track, .compact-audio-track, .timeline-playhead-grab");
+          if (scrubTarget) {
+            drag.current = { down: true, mode: "scrub", startX: event.pageX - refEl.current.offsetLeft, scrollLeft: refEl.current.scrollLeft };
+            refEl.current.classList.add("scrubbing");
+            scrubFromPointer(event.clientX);
+            event.currentTarget.setPointerCapture(event.pointerId);
+            return;
+          }
           drag.current = {
             down: true,
+            mode: "pan",
             startX: event.pageX - refEl.current.offsetLeft,
             scrollLeft: refEl.current.scrollLeft,
           };
           refEl.current.classList.add("grabbing");
         }}
-        onMouseUp={() => {
+        onPointerUp={(event) => {
           drag.current.down = false;
           refEl.current?.classList.remove("grabbing");
+          refEl.current?.classList.remove("scrubbing");
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
         }}
-        onMouseLeave={() => {
+        onPointerLeave={() => {
           drag.current.down = false;
           refEl.current?.classList.remove("grabbing");
+          refEl.current?.classList.remove("scrubbing");
         }}
-        onMouseMove={(event) => {
+        onPointerMove={(event) => {
           if (!drag.current.down || !refEl.current) return;
           event.preventDefault();
+          if (drag.current.mode === "scrub") {
+            scrubFromPointer(event.clientX);
+            return;
+          }
           const x = event.pageX - refEl.current.offsetLeft;
           refEl.current.scrollLeft = drag.current.scrollLeft - (x - drag.current.startX) * 1.25;
         }}
@@ -307,7 +436,8 @@ function CompactTimeline({
             }}
           />
           <div className="timeline-playhead" style={{ left: playheadLeft }}>
-            <span>{formatTimecode(selectedClip.start_tc)}</span>
+            <span>{secondsToTimecode(clampedPlayheadSeconds)}</span>
+            <button className="timeline-playhead-grab" type="button" aria-label="Drag playhead" />
             <i />
           </div>
 
@@ -321,7 +451,8 @@ function CompactTimeline({
                   key={`${layout.clip.clip}-${layout.index}`}
                   layout={layout}
                   selected={clampedSelectedClipIndex === layout.index}
-                  onSelect={() => setSelectedClipIndex(layout.index)}
+                  filmstrip={filmstrips[layout.index]}
+                  onSeek={(event) => seekClipFromClick(event, layout)}
                   onOpenChat={() => onOpenClipChat(layout.index)}
                   onPreview={onPreview}
                 />
@@ -329,7 +460,7 @@ function CompactTimeline({
             })}
           </div>
 
-          <FeedbackMarkers markers={markers} onSelectClip={setSelectedClipIndex} />
+          <FeedbackMarkers markers={markers} onSeek={seekMarker} />
           <VideoTrack layouts={layouts} />
           <MockWaveform width={contentWidth} pxPerSecond={pxPerSecond} totalSeconds={totalSeconds} />
         </div>
@@ -357,6 +488,7 @@ function CompactTimeline({
         onOpenChat={() => onOpenClipChat(clampedSelectedClipIndex)}
         onOpenDetails={openResultFromVersion}
         onPreview={onPreview}
+        playheadOffsetSeconds={playheadOffsetForSelectedClip}
       />
     </div>
   );
@@ -396,13 +528,15 @@ function TimelineRuler({ width, totalSeconds, pxPerSecond }: { width: number; to
 function CompactClipCard({
   layout,
   selected,
-  onSelect,
+  filmstrip,
+  onSeek,
   onOpenChat,
   onPreview,
 }: {
   layout: ClipLayout;
   selected: boolean;
-  onSelect: () => void;
+  filmstrip?: FilmstripLoadState;
+  onSeek: (event: MouseEvent<HTMLElement>) => void;
   onOpenChat: () => void;
   onPreview: (preview: PreviewState) => void;
 }) {
@@ -414,14 +548,9 @@ function CompactClipCard({
 
   return (
     <article className={`compact-clip-card ${selected ? "selected" : ""} ${layout.compact ? "compact" : ""}`} style={{ left: layout.left, width: layout.width }}>
-      <button className="clip-thumb-button" type="button" aria-label={`Select ${basename(clip.clip)}`} onClick={onSelect}>
+      <button className="clip-thumb-button" type="button" aria-label={`Seek ${basename(clip.clip)}`} onClick={onSeek}>
         {canShowThumbnail && (
-          <div className="compact-thumb">
-            {clip.clip_url ? <video src={`${staticUrl(clip.clip_url)}#t=0.5`} preload="metadata" muted playsInline /> : <Icon name="video" />}
-            <span className="compact-play-mark">
-              <Icon name="play" />
-            </span>
-          </div>
+          <TimelineFilmstrip filmstrip={filmstrip} clip={clip} />
         )}
         {canShowName && (
           <div className="compact-clip-meta">
@@ -459,6 +588,43 @@ function CompactClipCard({
   );
 }
 
+function TimelineFilmstrip({ filmstrip, clip }: { filmstrip?: FilmstripLoadState; clip: TimelineClip }) {
+  if (filmstrip?.status === "ready" && filmstrip.frames.length > 0) {
+    return (
+      <div className="compact-thumb filmstrip-thumb">
+        {filmstrip.frames.map((frame, index) => (
+          <img src={staticUrl(frame.url)} alt="" aria-hidden="true" key={`${frame.url}-${index}`} />
+        ))}
+        <span className="compact-play-mark">
+          <Icon name="play" />
+        </span>
+      </div>
+    );
+  }
+
+  if (filmstrip?.status === "loading") {
+    return (
+      <div className="compact-thumb filmstrip-loading" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+        <span className="compact-play-mark">
+          <Icon name="play" />
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="compact-thumb filmstrip-fallback">
+      {clip.clip_url ? <video src={`${staticUrl(clip.clip_url)}#t=0.5`} preload="metadata" muted playsInline /> : <Icon name="video" />}
+      <span className="compact-play-mark">
+        <Icon name="play" />
+      </span>
+    </div>
+  );
+}
+
 function VideoTrack({ layouts }: { layouts: ClipLayout[] }) {
   return (
     <div className="compact-video-track">
@@ -484,7 +650,7 @@ function VideoTrack({ layouts }: { layouts: ClipLayout[] }) {
   );
 }
 
-function FeedbackMarkers({ markers, onSelectClip }: { markers: TimelineMarker[]; onSelectClip: (clipIndex: number) => void }) {
+function FeedbackMarkers({ markers, onSeek }: { markers: TimelineMarker[]; onSeek: (marker: TimelineMarker) => void }) {
   if (markers.length === 0) return null;
 
   return (
@@ -496,7 +662,7 @@ function FeedbackMarkers({ markers, onSelectClip }: { markers: TimelineMarker[];
           style={{ left: marker.left }}
           type="button"
           title={`${formatTimecode(marker.item.timestamp)}: ${marker.item.remark}`}
-          onClick={() => onSelectClip(marker.clipIndex)}
+          onClick={() => onSeek(marker)}
         >
           <Icon name="comments" />
         </button>
@@ -541,6 +707,7 @@ function SelectedClipDock({
   onOpenChat,
   onOpenDetails,
   onPreview,
+  playheadOffsetSeconds,
 }: {
   projectData: ProjectData;
   clip: TimelineClip;
@@ -558,6 +725,7 @@ function SelectedClipDock({
   onOpenChat: () => void;
   onOpenDetails: (version: PromptVersion) => void;
   onPreview: (preview: PreviewState) => void;
+  playheadOffsetSeconds?: number;
 }) {
   const feedbackItems = feedback?.feedback_items || [];
   const runnableFeedback = feedbackItems[0];
@@ -566,7 +734,7 @@ function SelectedClipDock({
 
   return (
     <aside className="lower-context-panels">
-      <ClipPreviewPanel clip={clip} onPreview={onPreview} />
+      <ClipPreviewPanel clip={clip} onPreview={onPreview} playheadOffsetSeconds={playheadOffsetSeconds} />
       <ClipInspectorPanel
         activeTab={activeTab}
         clip={clip}

@@ -12,7 +12,6 @@ import type {
   ClipChatSnapshot,
   FeedbackGroup,
   ProjectEvent,
-  ProjectJob,
   PromptRecord,
   PromptVersion,
   PreviewState,
@@ -111,6 +110,17 @@ export function ClipChatPanel({
   const selectedAssets = clipState?.asset_state.selected_assets || [];
   const staleRuns = clipState?.agent_state.recent_runs.filter((run) => run.freshness?.is_stale) || [];
   const selfEvaluation = clipState?.agent_state.recent_runs.find((run) => run.self_evaluation)?.self_evaluation;
+  const promptStatus = activePrompt?.prompt_ready ? `Prompt v${(activePrompt.version_index ?? 0) + 1}` : "Prompt missing";
+  const videoStatus = activeVideo ? activeVideo.label || `Video v${activeVideo.version}` : "Video missing";
+  const assetStatus = `${selectedAssets.length} asset${selectedAssets.length === 1 ? "" : "s"}`;
+  const jobStatus = activeJobs.length ? `${activeJobs.length} active job${activeJobs.length === 1 ? "" : "s"}` : recentJobs[0]?.status || "Idle";
+  const staleStatus = clipState && (clipState.freshness.stale_reasons.length > 0 || staleRuns.length > 0)
+    ? clipState.freshness.stale_reasons.length > 0
+      ? `Stale: ${clipState.freshness.stale_reasons.join(", ")}`
+      : `${staleRuns.length} stale run${staleRuns.length === 1 ? "" : "s"}`
+    : null;
+  const eventStatus = events.length ? `#${events[events.length - 1].sequence} ${events[events.length - 1].type.replace(/_/g, " ")}` : "No events";
+  const selfEvaluationStatus = selfEvaluation ? formatSelfEvaluation(selfEvaluation) : "";
   const clearStorageKey = useMemo(
     () => `loka15.clip-chat.cleared-at:${projectData.project_name}:${clipIndex}`,
     [clipIndex, projectData.project_name],
@@ -426,18 +436,6 @@ export function ClipChatPanel({
     }
   }
 
-  async function cancelJob(job: ProjectJob) {
-    try {
-      const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectData.project_name)}/jobs/${encodeURIComponent(job.id)}/cancel`), {
-        method: "POST",
-      });
-      if (!response.ok) throw new Error(await response.text());
-      await refreshClipState();
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Failed to cancel job.");
-    }
-  }
-
   function actionIcon(action: ClipChatAction) {
     if (action.type === "execute_workflow") return "refresh";
     if (action.type === "prepare_video" || action.type === "generate_video") return "video";
@@ -492,13 +490,15 @@ export function ClipChatPanel({
         />
       )}
       
-      {/*TODO: Remove the header later to give more space to actual chat*/}
       <div className="clip-chat-header">
-        <div>
-          <div className="clip-chat-kicker">Clip Chat</div>
-          {/*Commented the below header and spanner to get more space to actual chat agent text area*/}
-          {/*<h3>{clip.clip}</h3>*/}
-          {/*<span>{projectData.sequence_name || projectData.project_name}</span>*/}
+        <div className="clip-chat-meta-row" aria-label="Clip agent state">
+          <span className={!activePrompt?.prompt_ready ? "warning" : ""} title={activePrompt?.version_id || undefined}>{promptStatus}</span>
+          <span className={!activeVideo ? "warning" : ""} title={activeVideo?.path || activeVideo?.url || undefined}>{videoStatus}</span>
+          <span title={selectedAssets.map((asset) => `${asset.role || "asset"}: ${asset.name}`).join("\n") || undefined}>{assetStatus}</span>
+          <span title={recentJobs[0]?.logs?.[recentJobs[0].logs.length - 1]?.message || undefined}>{jobStatus}</span>
+          {staleStatus && <span className="warning" title={staleStatus}>{staleStatus}</span>}
+          {selfEvaluationStatus && <span title={selfEvaluationStatus}>Self-evaluated</span>}
+          <span title={events.slice(-3).map((event) => `#${event.sequence} ${event.type.replace(/_/g, " ")}`).join("\n") || undefined}>{eventStatus}</span>
         </div>
         {onClose && (
           <button className="icon-btn" type="button" title="Close Chat" onClick={onClose}>
@@ -515,114 +515,6 @@ export function ClipChatPanel({
           <Icon name="video" /> {videoBusy ? "Generating..." : "Generate Video"}
         </button>
       </div>
-
-      {clipState && (
-        <div className="clip-agent-state">
-          {(clipState.freshness.stale_reasons.length > 0 || staleRuns.length > 0) && (
-            <div className="agent-state-alert">
-              <Icon name="warning" />
-              <span>
-                {clipState.freshness.stale_reasons.length > 0
-                  ? `State warning: ${clipState.freshness.stale_reasons.join(", ")}`
-                  : `${staleRuns.length} prior agent run${staleRuns.length === 1 ? "" : "s"} stale`}
-              </span>
-            </div>
-          )}
-
-          <div className="agent-state-grid">
-            <div>
-              <span>Prompt</span>
-              <strong>{activePrompt?.prompt_ready ? `v${(activePrompt.version_index ?? 0) + 1}` : "Missing"}</strong>
-            </div>
-            <div>
-              <span>Video</span>
-              <strong>{activeVideo ? activeVideo.label || `v${activeVideo.version}` : "Missing"}</strong>
-            </div>
-            <div>
-              <span>Assets</span>
-              <strong>{selectedAssets.length}</strong>
-            </div>
-            <div>
-              <span>Jobs</span>
-              <strong>{activeJobs.length ? `${activeJobs.length} active` : recentJobs[0]?.status || "Idle"}</strong>
-            </div>
-          </div>
-
-          {versions.length > 1 && (
-            <div className="agent-state-row">
-              <span>Active prompt</span>
-              <div className="agent-chip-row">
-                {versions.map((version, index) => (
-                  <button
-                    type="button"
-                    className={`agent-chip ${activePrompt?.version_id === version.prompt_version_id ? "active" : ""}`}
-                    key={version.prompt_version_id || index}
-                    onClick={() => void setActivePromptVersion(version)}
-                  >
-                    v{(version.version_index ?? index) + 1}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {selectedAssets.length > 0 && (
-            <div className="agent-state-row">
-              <span>Structured assets</span>
-              <div className="agent-chip-row">
-                {selectedAssets.slice(0, 4).map((asset) => (
-                  <button
-                    type="button"
-                    className={`agent-chip ${asset.missing ? "warning" : ""}`}
-                    key={asset.asset_id || asset.path}
-                    title={asset.reason || asset.selected_path || asset.path}
-                    onClick={() => void detachAsset(asset.selected_path || asset.path, asset.asset_id)}
-                  >
-                    {asset.role || "asset"} · {asset.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {recentJobs.length > 0 && (
-            <div className="agent-state-row">
-              <span>Jobs</span>
-              <div className="agent-job-list">
-                {recentJobs.slice(0, 3).map((job) => {
-                  const latestLog = job.logs?.[job.logs.length - 1]?.message;
-                  const cancellable = job.status === "queued" || job.status === "running" || job.status === "cancelling";
-                  return (
-                  <div className="agent-job-row" key={job.id}>
-                    <strong>{job.type.replace(/_/g, " ")}</strong>
-                    <em>{job.status}</em>
-                    {cancellable ? <button type="button" onClick={() => void cancelJob(job)}>Cancel</button> : <span />}
-                    {latestLog && <small>{latestLog}</small>}
-                  </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {selfEvaluation && (
-            <div className="agent-state-alert muted">
-              <Icon name="check" />
-              <span>{formatSelfEvaluation(selfEvaluation)}</span>
-            </div>
-          )}
-
-          {events.length > 0 && (
-            <div className="agent-event-strip">
-              {events.slice(-3).map((event) => (
-                <span key={event.id} title={event.event_hash}>
-                  #{event.sequence} {event.type.replace(/_/g, " ")}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
       <div className="clip-chat-log" ref={listRef}>
         {loading && <div className="inline-loader"><span className="loader-orbit" aria-hidden="true"><span /><span /><span /></span>Loading chat...</div>}

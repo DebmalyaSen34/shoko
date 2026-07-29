@@ -3278,7 +3278,7 @@ button {
 }
 
 .dock-chat-panel .clip-chat-header {
-  padding: 12px 14px 10px;
+  padding: 8px 10px;
 }
 
 .dock-chat-panel .clip-chat-header h3 {
@@ -3358,36 +3358,41 @@ button {
 }
 
 .clip-chat-header {
-  padding: 18px 18px 14px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--border-color);
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
+  align-items: center;
+  gap: 8px;
 }
 
-.clip-chat-kicker {
-  font-size: 10px;
+.clip-chat-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.clip-chat-meta-row span {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 140px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: var(--bg-tertiary);
   color: var(--text-muted);
+  font-size: 9px;
   font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 5px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.clip-chat-header h3 {
-  color: var(--text-primary);
-  font-size: 14px;
-  line-height: 1.25;
-  margin: 0;
-  word-break: break-word;
-}
-
-.clip-chat-header span {
-  display: block;
-  color: var(--text-muted);
-  font-size: 11px;
-  margin-top: 6px;
+.clip-chat-meta-row span.warning {
+  color: var(--warning);
 }
 
 .clip-chat-actions {
@@ -3401,167 +3406,6 @@ button {
 .clip-chat-actions .premium-btn {
   min-height: 36px;
   padding-inline: 10px;
-}
-
-.clip-agent-state {
-  display: grid;
-  gap: 8px;
-  padding: 10px 16px 12px;
-  border-bottom: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.018);
-}
-
-.agent-state-alert {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  color: var(--warning);
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.agent-state-alert.muted {
-  color: var(--text-secondary);
-}
-
-.agent-state-alert .icon {
-  flex: 0 0 auto;
-}
-
-.agent-state-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.agent-state-grid > div {
-  min-width: 0;
-  border: 1px solid rgba(255, 255, 255, 0.075);
-  border-radius: 6px;
-  padding: 6px 7px;
-  background: rgba(255, 255, 255, 0.025);
-}
-
-.agent-state-grid span,
-.agent-state-row > span {
-  display: block;
-  color: var(--text-muted);
-  font-size: 8px;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.agent-state-grid strong {
-  display: block;
-  margin-top: 2px;
-  color: var(--text-primary);
-  font-size: 10px;
-  font-family: var(--font-mono);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.agent-state-row {
-  display: grid;
-  gap: 5px;
-}
-
-.agent-chip-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.agent-chip {
-  max-width: 100%;
-  min-height: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 999px;
-  padding: 3px 8px;
-  background: rgba(255, 255, 255, 0.025);
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-weight: 700;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.agent-chip.active {
-  color: var(--accent-secondary);
-  border-color: var(--accent-secondary);
-  background: var(--accent-secondary-glow);
-}
-
-.agent-chip.warning {
-  color: var(--warning);
-}
-
-.agent-job-list {
-  display: grid;
-  gap: 5px;
-}
-
-.agent-job-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 7px;
-  color: var(--text-secondary);
-  font-size: 10px;
-}
-
-.agent-job-row small {
-  grid-column: 1 / -1;
-  min-width: 0;
-  color: var(--text-muted);
-  font-size: 9px;
-  line-height: 1.3;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-job-row strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-transform: capitalize;
-}
-
-.agent-job-row em {
-  color: var(--text-muted);
-  font-style: normal;
-  text-transform: capitalize;
-}
-
-.agent-job-row button {
-  border: 1px solid var(--border-color);
-  border-radius: 5px;
-  padding: 3px 6px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.agent-event-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.agent-event-strip span {
-  max-width: 100%;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 5px;
-  padding: 3px 6px;
-  color: var(--text-muted);
-  font-size: 9px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .clip-chat-tabs {

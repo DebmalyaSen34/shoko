@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import "./App.css";
 import { AppShell } from "./components/shell/AppShell";
 import type { RailItemId } from "./components/shell/LeftRail";
@@ -10,11 +9,10 @@ import { UploadFeedbackModal } from "./components/modals/UploadFeedbackModal";
 import { AddManualFeedbackModal } from "./components/modals/AddManualFeedbackModal";
 import { SettingsModal } from "./components/modals/SettingsModal";
 import { TimelineWorkspace } from "./components/timeline/TimelineWorkspace";
-import { ClipChatPanel } from "./components/chat/ClipChatPanel";
 import { ToastStack } from "./components/ToastStack";
 import { apiUrl, API_BASE, initializeApiBase, staticUrl } from "./lib/api";
 import { clipBasename } from "./lib/format";
-import type { ActiveClipChat, GenerateVideoOptions, GeneratedVideo, PreviewState, ProjectData, PromptRecord, PromptVersion, Provider, ResultState, Toast } from "./types";
+import type { GenerateVideoOptions, GeneratedVideo, PreviewState, ProjectData, PromptRecord, PromptVersion, Provider, ResultState, Toast } from "./types";
 
 const DEFAULT_VIDEO_OPTIONS: GenerateVideoOptions = {
   resolution: "720p",
@@ -70,8 +68,6 @@ function App() {
   const [generatingVideoKeys, setGeneratingVideoKeys] = useState<Set<string>>(new Set());
   const [videoOptions, setVideoOptions] = useState<GenerateVideoOptions>(() => loadRememberedVideoOptions());
   const [pendingVideoRequest, setPendingVideoRequest] = useState<PendingVideoRequest | null>(null);
-  const [selectedVersions, setSelectedVersions] = useState<Record<string, number>>({});
-  const [activeClipChat, setActiveClipChat] = useState<ActiveClipChat>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const eventSourcesRef = useRef<Record<number, EventSource>>({});
 
@@ -375,22 +371,6 @@ function App() {
     }
   }, [notify, result]);
 
-  const timelineStyle = {
-    "--card-width": `${640 * zoom}px`,
-    "--thumbnail-height": `${320 * zoom}px`,
-  } as CSSProperties;
-
-  const zoomClass = zoom < 0.75 ? "font-small" : zoom > 1.25 ? "font-large" : "";
-  const chatClip = activeClipChat && projectData ? projectData.timeline[activeClipChat.clipIndex] : null;
-  const chatFeedback =
-    activeClipChat && chatClip && projectData
-      ? projectData.feedback.find(
-          (item) =>
-            item.clip_used === chatClip.clip &&
-            (typeof item.clip_occurrence !== "number" || item.clip_occurrence === activeClipChat.clipIndex),
-        )
-      : undefined;
-  const chatPrompt = activeClipChat && chatClip ? findPrompt(chatClip.clip, activeClipChat.clipIndex) : null;
   const timelineOpen = activeRailItem === "timeline";
   const projectLabel = projectData?.sequence_name || activeProject || "No Project";
   const runFirstAvailableWorkflow = useCallback(() => {
@@ -480,13 +460,10 @@ function App() {
               error={loadError}
               loading={loadingProject}
               projectData={projectData}
+              provider={provider}
               refEl={timelineRef}
               runningIndexes={runningIndexes}
-              selectedVersions={selectedVersions}
-              setSelectedVersions={setSelectedVersions}
-              timelineStyle={timelineStyle}
               zoom={zoom}
-              zoomClass={zoomClass}
               executeWorkflow={executeWorkflow}
               findPrompt={findPrompt}
               openResultFromVersion={openResultFromVersion}
@@ -498,26 +475,8 @@ function App() {
                 setActiveClipForManualFeedback(clipName);
                 setShowAddManualFeedback(true);
               }}
-              onOpenClipChat={(clipIndex) => setActiveClipChat({ clipIndex })}
               onPreview={setPreview}
             />
-
-            {projectData && chatClip && activeClipChat && (
-              <ClipChatPanel
-                clip={chatClip}
-                clipIndex={activeClipChat.clipIndex}
-                feedback={chatFeedback}
-                prompt={chatPrompt}
-                projectData={projectData}
-                provider={provider}
-                runningIndexes={runningIndexes}
-                onClose={() => setActiveClipChat(null)}
-                onExecuteWorkflow={executeWorkflow}
-                onOpenPromptDetails={openResultFromVersion}
-                onGenerateVideo={generateVideo}
-                onPreview={setPreview}
-              />
-            )}
           </>
         ) : (
           <ProjectHomePanel

@@ -22,6 +22,7 @@ import { apiUrl, staticUrl } from "../../lib/api";
 import { Icon } from "../Icon";
 
 type ClipChatPanelProps = {
+  variant?: "panel" | "dock";
   clip: TimelineClip;
   clipIndex: number;
   feedback?: FeedbackGroup;
@@ -29,7 +30,8 @@ type ClipChatPanelProps = {
   projectData: ProjectData;
   provider: Provider;
   runningIndexes: Set<number>;
-  onClose: () => void;
+  externalGeneratingVideo?: boolean;
+  onClose?: () => void;
   onExecuteWorkflow: (feedbackIndex: number) => void;
   onOpenPromptDetails: (version: PromptVersion) => void;
   onGenerateVideo: (clipIndex: number, promptVersionIndex?: number) => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
@@ -63,6 +65,7 @@ const SLASH_COMMANDS = [
 ];
 
 export function ClipChatPanel({
+  variant = "panel",
   clip,
   clipIndex,
   feedback,
@@ -70,6 +73,7 @@ export function ClipChatPanel({
   projectData,
   provider,
   runningIndexes,
+  externalGeneratingVideo = false,
   onClose,
   onExecuteWorkflow,
   onOpenPromptDetails,
@@ -94,6 +98,7 @@ export function ClipChatPanel({
   const latestVersion = versions[versions.length - 1] || prompt || null;
   const runnableFeedback = feedbackItems[0];
   const running = feedbackItems.some((item) => runningIndexes.has(item.raw_index));
+  const videoBusy = generatingVideo || externalGeneratingVideo;
   const clearStorageKey = useMemo(
     () => `loka15.clip-chat.cleared-at:${projectData.project_name}:${clipIndex}`,
     [clipIndex, projectData.project_name],
@@ -341,47 +346,51 @@ export function ClipChatPanel({
     window.localStorage.setItem("loka15.clip-chat.width", String(nextWidth));
   }
 
-  const panelStyle = window.innerWidth > 900 ? { width: panelWidth, minWidth: panelWidth } : undefined;
+  const panelStyle = variant === "panel" && window.innerWidth > 900 ? { width: panelWidth, minWidth: panelWidth } : undefined;
 
   return (
-    <aside className="clip-chat-panel" style={panelStyle} aria-label="Clip chat">
-      <div
-        className="clip-chat-resize-handle"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize chat"
-        tabIndex={0}
-        onPointerDown={(event) => {
-          event.currentTarget.setPointerCapture(event.pointerId);
-          resizePanel(event.clientX);
-        }}
-        onPointerMove={(event) => {
-          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+    <aside className={`clip-chat-panel ${variant === "dock" ? "dock-chat-panel" : ""}`} style={panelStyle} aria-label="Clip chat">
+      {variant === "panel" && (
+        <div
+          className="clip-chat-resize-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize chat"
+          tabIndex={0}
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId);
             resizePanel(event.clientX);
-          }
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "ArrowLeft") setPanelWidth((width) => Math.min(760, width + 24));
-          if (event.key === "ArrowRight") setPanelWidth((width) => Math.max(320, width - 24));
-        }}
-      />
+          }}
+          onPointerMove={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              resizePanel(event.clientX);
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") setPanelWidth((width) => Math.min(760, width + 24));
+            if (event.key === "ArrowRight") setPanelWidth((width) => Math.max(320, width - 24));
+          }}
+        />
+      )}
       <div className="clip-chat-header">
         <div>
           <div className="clip-chat-kicker">Clip Chat</div>
           <h3>{clip.clip}</h3>
           <span>{projectData.sequence_name || projectData.project_name}</span>
         </div>
-        <button className="icon-btn" type="button" title="Close Chat" onClick={onClose}>
-          <Icon name="close" />
-        </button>
+        {onClose && (
+          <button className="icon-btn" type="button" title="Close Chat" onClick={onClose}>
+            <Icon name="close" />
+          </button>
+        )}
       </div>
 
       <div className="clip-chat-actions">
         <button className="premium-btn secondary" type="button" disabled={!runnableFeedback || running} onClick={() => runWorkflowFromChat()}>
           <Icon name="refresh" /> {running ? "Running..." : "Run Workflow"}
         </button>
-        <button className="premium-btn" type="button" disabled={generatingVideo} onClick={() => void generateVideoFromChat()}>
-          <Icon name="video" /> {generatingVideo ? "Generating..." : "Generate Video"}
+        <button className="premium-btn" type="button" disabled={videoBusy} onClick={() => void generateVideoFromChat()}>
+          <Icon name="video" /> {videoBusy ? "Generating..." : "Generate Video"}
         </button>
       </div>
 
@@ -415,7 +424,7 @@ export function ClipChatPanel({
           </div>
         ))}
         {sending && <div className="inline-loader"><span className="loader-orbit" aria-hidden="true"><span /><span /><span /></span>Thinking with {provider.toUpperCase()}...</div>}
-        {generatingVideo && <div className="inline-loader"><span className="loader-orbit" aria-hidden="true"><span /><span /><span /></span>Generating video...</div>}
+        {videoBusy && <div className="inline-loader"><span className="loader-orbit" aria-hidden="true"><span /><span /><span /></span>Generating video...</div>}
       </div>
 
       {error && <div className="clip-chat-error"><Icon name="warning" /> {error}</div>}

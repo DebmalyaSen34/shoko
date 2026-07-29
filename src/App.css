@@ -385,23 +385,37 @@ button {
 
 .rail-collapse {
   position: absolute;
-  left: 78px;
+  right: -18px;
   top: 50%;
-  width: 30px;
-  height: 44px;
+  width: 22px;
+  height: 52px;
   transform: translateY(-50%);
-  border-radius: 0 3px 3px 0;
+  border-radius: 0 4px 4px 0;
   border: 1px solid rgba(250, 251, 252, 0.1);
-  background: #2b3137;
+  border-left: 0;
+  background: #24292e;
   color: #fafbfc;
   display: grid;
   place-items: center;
-  z-index: 3;
+  z-index: 6;
+  box-shadow: 1px 0 0 rgba(36, 41, 46, 0.18);
+}
+
+.rail-collapse .icon {
+  width: 14px;
+  height: 14px;
 }
 
 .rail-collapse:hover {
-  border-color: var(--border-hover);
-  color: var(--text-primary);
+  background: #2b3137;
+  border-color: rgba(250, 251, 252, 0.18);
+  color: #ffffff;
+}
+
+.shoko-left-rail.drawer-open .rail-collapse {
+  background: #2b3137;
+  border-color: rgba(250, 251, 252, 0.12);
+  box-shadow: none;
 }
 
 .shoko-workspace {
@@ -1873,7 +1887,8 @@ button {
 
 .clip-preview-panel,
 .clip-inspector-panel,
-.timeline-chat-panel {
+.timeline-chat-panel,
+.dock-chat-panel {
   border: 1px solid var(--border-color);
   border-radius: 3px;
   background: var(--card-bg);
@@ -3065,6 +3080,67 @@ button {
   z-index: 25;
   box-shadow: -12px 0 34px rgba(0, 0, 0, 0.26);
   position: relative;
+}
+
+.dock-chat-panel {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  height: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  box-shadow: none;
+}
+
+.dock-chat-panel .clip-chat-header {
+  padding: 12px 14px 10px;
+}
+
+.dock-chat-panel .clip-chat-header h3 {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-chat-panel .clip-chat-actions {
+  padding: 8px 10px;
+  gap: 6px;
+}
+
+.dock-chat-panel .clip-chat-actions .premium-btn {
+  min-height: 32px;
+  padding-inline: 8px;
+  font-size: 11px;
+}
+
+.dock-chat-panel .clip-chat-log {
+  padding: 12px;
+  gap: 9px;
+}
+
+.dock-chat-panel .chat-message {
+  max-width: 96%;
+  padding: 8px 10px;
+}
+
+.dock-chat-panel .chat-message-text {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.dock-chat-panel .clip-chat-input {
+  padding: 9px 10px;
+}
+
+.dock-chat-panel .clip-chat-input textarea {
+  max-height: 74px;
+  font-size: 12px;
+}
+
+.dock-chat-panel .chat-send-btn {
+  width: 34px;
+  height: 34px;
 }
 
 .clip-chat-resize-handle {
@@ -5221,7 +5297,7 @@ button {
     grid-template-columns: 1fr;
   }
 
-  .clip-chat-panel {
+  .clip-chat-panel:not(.dock-chat-panel) {
     position: fixed;
     top: var(--header-height);
     right: 0;
@@ -5508,6 +5584,22 @@ button {
   border-color: var(--border-hover);
 }
 
+.chat-message.user {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #ffffff;
+}
+
+.chat-message.user .chat-message-meta {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.chat-message.user .chat-message-text,
+.chat-message.user .chat-message-text p,
+.chat-message.user .chat-message-text li {
+  color: #ffffff;
+}
+
 .chat-send-btn,
 .copy-btn,
 .close-btn,
@@ -5554,6 +5646,23 @@ button {
   box-shadow: 0 0 0 2px rgba(45, 186, 78, 0.18);
 }
 
+.clip-chat-input {
+  align-items: center;
+}
+
+.clip-chat-input textarea:focus,
+.clip-chat-input textarea:focus-visible {
+  border-color: var(--border-hover);
+  box-shadow: none;
+}
+
+.chat-send-btn {
+  display: grid;
+  place-items: center;
+  align-self: center;
+  padding: 0;
+}
+
 /* GitHub light palette pass: dark chrome, light work surfaces, green action states. */
 .shoko-topbar,
 .shoko-workspace,
@@ -5564,6 +5673,7 @@ button {
 .clip-inspector-panel,
 .timeline-chat-panel,
 .clip-chat-panel,
+.dock-chat-panel,
 .modal-content,
 .result-modal-body,
 .new-project-body,
@@ -5698,8 +5808,9 @@ button {
 }
 
 .rail-collapse {
-  background: #2b3137;
+  background: #24292e;
   color: #fafbfc;
+  border-color: rgba(250, 251, 252, 0.1);
 }
 
 .rail-item {
@@ -5848,7 +5959,8 @@ button {
 
 .clip-preview-panel,
 .clip-inspector-panel,
-.timeline-chat-panel {
+.timeline-chat-panel,
+.dock-chat-panel {
   border-color: rgba(36, 41, 46, 0.18);
   box-shadow:
     0 1px 2px rgba(36, 41, 46, 0.06),
@@ -6231,7 +6343,8 @@ button {
 
 .clip-preview-panel,
 .clip-inspector-panel,
-.timeline-chat-panel {
+.timeline-chat-panel,
+.dock-chat-panel {
   height: 100%;
 }
 

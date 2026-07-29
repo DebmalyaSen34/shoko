@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, Dispatch, MouseEvent, RefObject, SetStateAction } from "react";
-import type { FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptRecord, PromptVersion, TimelineClip, TimelineFilmstripFrame, TimelineWaveformSegment } from "../../types";
-import { basename, formatSeconds, formatTimecode, getVersions, versionLabel } from "../../lib/format";
+import type { Dispatch, MouseEvent, RefObject, SetStateAction } from "react";
+import type { FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptRecord, PromptVersion, Provider, TimelineClip, TimelineFilmstripFrame, TimelineWaveformSegment } from "../../types";
+import { basename, formatSeconds, formatTimecode, getVersions } from "../../lib/format";
 import { apiUrl, staticUrl } from "../../lib/api";
 import { EmptyState } from "../EmptyState";
 import { Icon } from "../Icon";
+import { ClipChatPanel } from "../chat/ClipChatPanel";
 import { ClipInspectorPanel } from "./ClipInspectorPanel";
 import { ClipPreviewPanel } from "./ClipPreviewPanel";
 
@@ -13,13 +14,10 @@ export type TimelinePanelProps = {
   error: string;
   loading: boolean;
   projectData: ProjectData | null;
+  provider: Provider;
   refEl: RefObject<HTMLDivElement | null>;
   runningIndexes: Set<number>;
-  selectedVersions: Record<string, number>;
-  setSelectedVersions: Dispatch<SetStateAction<Record<string, number>>>;
-  timelineStyle: CSSProperties;
   zoom: number;
-  zoomClass: string;
   executeWorkflow: (feedbackIndex: number) => void;
   findPrompt: (clipName: string, clipOccurrence?: number) => PromptRecord | null;
   openResultFromVersion: (version: PromptVersion) => void;
@@ -28,7 +26,6 @@ export type TimelinePanelProps = {
   setZoom: Dispatch<SetStateAction<number>>;
   onUploadFeedback: () => void;
   onAddManualFeedback: (clipName: string) => void;
-  onOpenClipChat: (clipIndex: number) => void;
   onPreview: (preview: PreviewState) => void;
 };
 
@@ -77,10 +74,9 @@ export function TimelinePanel({
   error,
   loading,
   projectData,
+  provider,
   refEl,
   runningIndexes,
-  selectedVersions,
-  setSelectedVersions,
   zoom,
   executeWorkflow,
   findPrompt,
@@ -90,7 +86,6 @@ export function TimelinePanel({
   setZoom,
   onUploadFeedback,
   onAddManualFeedback,
-  onOpenClipChat,
   onPreview,
 }: TimelinePanelProps) {
   return (
@@ -141,10 +136,9 @@ export function TimelinePanel({
         error={error}
         loading={loading}
         projectData={projectData}
+        provider={provider}
         refEl={refEl}
         runningIndexes={runningIndexes}
-        selectedVersions={selectedVersions}
-        setSelectedVersions={setSelectedVersions}
         zoom={zoom}
         executeWorkflow={executeWorkflow}
         findPrompt={findPrompt}
@@ -152,7 +146,6 @@ export function TimelinePanel({
         generatingVideoKeys={generatingVideoKeys}
         onGenerateVideo={onGenerateVideo}
         onAddManualFeedback={onAddManualFeedback}
-        onOpenClipChat={onOpenClipChat}
         onPreview={onPreview}
       />
     </section>
@@ -163,10 +156,9 @@ function CompactTimeline({
   error,
   loading,
   projectData,
+  provider,
   refEl,
   runningIndexes,
-  selectedVersions,
-  setSelectedVersions,
   zoom,
   executeWorkflow,
   findPrompt,
@@ -174,16 +166,14 @@ function CompactTimeline({
   generatingVideoKeys,
   onGenerateVideo,
   onAddManualFeedback,
-  onOpenClipChat,
   onPreview,
 }: {
   error: string;
   loading: boolean;
   projectData: ProjectData | null;
+  provider: Provider;
   refEl: RefObject<HTMLDivElement | null>;
   runningIndexes: Set<number>;
-  selectedVersions: Record<string, number>;
-  setSelectedVersions: Dispatch<SetStateAction<Record<string, number>>>;
   zoom: number;
   executeWorkflow: (feedbackIndex: number) => void;
   findPrompt: (clipName: string, clipOccurrence?: number) => PromptRecord | null;
@@ -191,7 +181,6 @@ function CompactTimeline({
   generatingVideoKeys: Set<string>;
   onGenerateVideo: (clipIndex: number, promptVersionIndex?: number) => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
   onAddManualFeedback: (clipName: string) => void;
-  onOpenClipChat: (clipIndex: number) => void;
   onPreview: (preview: PreviewState) => void;
 }) {
   const drag = useRef({ down: false, mode: "pan" as "pan" | "scrub", startX: 0, scrollLeft: 0 });
@@ -346,8 +335,7 @@ function CompactTimeline({
   const selectedFeedback = findFeedback(projectData, selectedClip, clampedSelectedClipIndex);
   const selectedPrompt = findPrompt(selectedClip.clip, clampedSelectedClipIndex);
   const selectedVersionsForClip = getVersions(selectedPrompt);
-  const clipKey = `${selectedClip.clip}::${clampedSelectedClipIndex}`;
-  const selectedVersionIndex = selectedVersions[clipKey] ?? Math.max(selectedVersionsForClip.length - 1, 0);
+  const selectedVersionIndex = Math.max(selectedVersionsForClip.length - 1, 0);
   const selectedVersion = selectedVersionsForClip[selectedVersionIndex] || selectedPrompt || undefined;
   const clampedPlayheadSeconds = Math.min(Math.max(playheadSeconds, 0), totalSeconds);
   const playheadLeft = TIMELINE_GUTTER + clampedPlayheadSeconds * pxPerSecond;
@@ -494,23 +482,19 @@ function CompactTimeline({
 
       <SelectedClipDock
         projectData={projectData}
+        provider={provider}
+        clipIndex={clampedSelectedClipIndex}
         clip={selectedClip}
         feedback={selectedFeedback}
+        prompt={selectedPrompt}
         versions={selectedVersionsForClip}
         selectedVersion={selectedVersion}
         selectedVersionIndex={selectedVersionIndex}
-        setSelectedVersion={(versionIndex) =>
-          setSelectedVersions((current) => ({
-            ...current,
-            [clipKey]: versionIndex,
-          }))
-        }
         runningIndexes={runningIndexes}
-        generatingVideo={generatingVideoKeys.has(`${clampedSelectedClipIndex}:${selectedVersionIndex}`)}
+        externalGeneratingVideo={generatingVideoKeys.has(`${clampedSelectedClipIndex}:${selectedVersionIndex}`)}
         executeWorkflow={executeWorkflow}
         onAddManualFeedback={onAddManualFeedback}
-        onGenerateVideo={() => onGenerateVideo(clampedSelectedClipIndex, selectedVersionIndex)}
-        onOpenChat={() => onOpenClipChat(clampedSelectedClipIndex)}
+        onGenerateVideo={onGenerateVideo}
         onOpenDetails={openResultFromVersion}
         onPreview={onPreview}
         playheadOffsetSeconds={playheadOffsetForSelectedClip}
@@ -672,42 +656,42 @@ function feedbackMarkerClass(marker: TimelineMarker) {
 
 function SelectedClipDock({
   projectData,
+  provider,
+  clipIndex,
   clip,
   feedback,
+  prompt,
   versions,
   selectedVersion,
   selectedVersionIndex,
-  setSelectedVersion,
   runningIndexes,
-  generatingVideo,
+  externalGeneratingVideo,
   executeWorkflow,
   onAddManualFeedback,
   onGenerateVideo,
-  onOpenChat,
   onOpenDetails,
   onPreview,
   playheadOffsetSeconds,
 }: {
   projectData: ProjectData;
+  provider: Provider;
+  clipIndex: number;
   clip: TimelineClip;
   feedback?: FeedbackGroup;
+  prompt: PromptRecord | null;
   versions: PromptVersion[];
   selectedVersion?: PromptVersion;
   selectedVersionIndex: number;
-  setSelectedVersion: (versionIndex: number) => void;
   runningIndexes: Set<number>;
-  generatingVideo: boolean;
+  externalGeneratingVideo: boolean;
   executeWorkflow: (feedbackIndex: number) => void;
   onAddManualFeedback: (clipName: string) => void;
-  onGenerateVideo: () => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
-  onOpenChat: () => void;
+  onGenerateVideo: (clipIndex: number, promptVersionIndex?: number) => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
   onOpenDetails: (version: PromptVersion) => void;
   onPreview: (preview: PreviewState) => void;
   playheadOffsetSeconds?: number;
 }) {
   const feedbackItems = feedback?.feedback_items || [];
-  const runnableFeedback = feedbackItems[0];
-  const running = feedbackItems.some((item) => runningIndexes.has(item.raw_index));
   const [activeTab, setActiveTab] = useState<"feedback" | "prompts" | "assets">("assets");
 
   return (
@@ -725,133 +709,22 @@ function SelectedClipDock({
         onAddManualFeedback={onAddManualFeedback}
         onPreview={onPreview}
       />
-      <TimelineClipChatPanel
+      <ClipChatPanel
+        variant="dock"
         clip={clip}
-        feedbackItems={feedbackItems}
-        runnableFeedback={runnableFeedback}
-        running={running}
-        generatingVideo={generatingVideo}
-        hasPrompt={Boolean(selectedVersion?.video_model_prompt)}
-        versions={versions}
-        selectedVersion={selectedVersion}
-        selectedVersionIndex={selectedVersionIndex}
-        setSelectedVersion={setSelectedVersion}
-        executeWorkflow={executeWorkflow}
+        clipIndex={clipIndex}
+        feedback={feedback}
+        prompt={prompt}
+        projectData={projectData}
+        provider={provider}
+        runningIndexes={runningIndexes}
+        externalGeneratingVideo={externalGeneratingVideo}
+        onExecuteWorkflow={executeWorkflow}
+        onOpenPromptDetails={onOpenDetails}
         onGenerateVideo={onGenerateVideo}
-        onOpenChat={onOpenChat}
-        onOpenDetails={onOpenDetails}
+        onPreview={onPreview}
       />
     </aside>
-  );
-}
-
-function TimelineClipChatPanel({
-  clip,
-  feedbackItems,
-  runnableFeedback,
-  running,
-  generatingVideo,
-  hasPrompt,
-  versions,
-  selectedVersion,
-  selectedVersionIndex,
-  setSelectedVersion,
-  executeWorkflow,
-  onGenerateVideo,
-  onOpenChat,
-  onOpenDetails,
-}: {
-  clip: TimelineClip;
-  feedbackItems: FeedbackGroup["feedback_items"];
-  runnableFeedback?: FeedbackGroup["feedback_items"][number];
-  running: boolean;
-  generatingVideo: boolean;
-  hasPrompt: boolean;
-  versions: PromptVersion[];
-  selectedVersion?: PromptVersion;
-  selectedVersionIndex: number;
-  setSelectedVersion: (versionIndex: number) => void;
-  executeWorkflow: (feedbackIndex: number) => void;
-  onGenerateVideo: () => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
-  onOpenChat: () => void;
-  onOpenDetails: (version: PromptVersion) => void;
-}) {
-  const promptSummary = feedbackItems[0]?.remark || "Ask anything about this clip.";
-
-  return (
-    <section className="timeline-chat-panel">
-      <div className="timeline-chat-header">
-        <div>
-          <h3>Chat with AI</h3>
-          <span>{basename(clip.clip)}</span>
-        </div>
-        <button type="button" title="Open full chat" onClick={onOpenChat}>
-          ...
-        </button>
-      </div>
-
-      <div className="timeline-chat-log">
-        <div className="chat-bubble user">
-          <p>Make this shot more dramatic.</p>
-          <time>10:30 AM</time>
-        </div>
-        <div className="chat-bubble assistant">
-          <p>I can help improve this clip.</p>
-          <p>Here is what I recommend:</p>
-          <ul>
-            <li>Add depth and contrast</li>
-            <li>Enhance lighting and visual rhythm</li>
-            <li>Use the clip feedback as the primary constraint</li>
-          </ul>
-          <p className="chat-context-line">{promptSummary}</p>
-          <time>10:31 AM</time>
-        </div>
-      </div>
-
-      <div className="timeline-chat-actions">
-        {versions.length > 1 && (
-          <select value={selectedVersionIndex} onChange={(event) => setSelectedVersion(Number(event.target.value))}>
-            {versions.map((version, index) => (
-              <option value={index} key={`${version.timestamp || "version"}-${index}`}>
-                {versionLabel(version, index)}
-              </option>
-            ))}
-          </select>
-        )}
-        {hasPrompt && selectedVersion ? (
-          <>
-            <button className="shoko-ghost-button compact-action" type="button" onClick={() => onOpenDetails(selectedVersion)}>
-              Show examples
-            </button>
-            <button className="shoko-primary-button compact-action" type="button" disabled={generatingVideo} onClick={() => void onGenerateVideo().catch(() => undefined)}>
-              {generatingVideo ? "Generating..." : "Yes, generate"}
-            </button>
-          </>
-        ) : (
-          <button
-            className="shoko-primary-button compact-action"
-            type="button"
-            disabled={!runnableFeedback || running}
-            onClick={() => runnableFeedback && executeWorkflow(runnableFeedback.raw_index)}
-          >
-            {running ? "Running..." : "Run Workflow"}
-          </button>
-        )}
-      </div>
-
-      <form
-        className="timeline-chat-input"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onOpenChat();
-        }}
-      >
-        <input placeholder="Ask anything about this clip..." aria-label="Ask anything about this clip" />
-        <button type="submit" title="Open chat">
-          <Icon name="send" />
-        </button>
-      </form>
-    </section>
   );
 }
 

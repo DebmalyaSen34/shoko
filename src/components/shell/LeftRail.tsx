@@ -35,7 +35,7 @@ export function LeftRail({
   onSelect,
 }: LeftRailProps) {
   return (
-    <nav className="shoko-left-rail" aria-label="Primary">
+    <nav className={`shoko-left-rail ${onCollapsedPanelOpen ? "has-drawer-toggle" : ""} ${collapsedPanelOpen ? "drawer-open" : ""}`} aria-label="Primary">
       {RAIL_ITEMS.map((item) => {
         const active = projectContextActive ? item.id === "project" : activeItem === item.id;
         return (

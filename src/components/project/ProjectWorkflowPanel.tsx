@@ -138,7 +138,7 @@ export function ProjectHomePanel({
           <span className="project-home-kicker">Project Workspace</span>
           <h2>{projectData?.sequence_name || activeProject || "No project selected"}</h2>
           <p>
-            Use the workflow column to import media, attach feedback, and assign notes to clips. Open the timeline when you are ready to work clip by clip.
+            Review project status, confirm feedback readiness, then open the timeline to work clip by clip.
           </p>
         </div>
         <button className="shoko-primary-button" type="button" onClick={onOpenTimeline} disabled={!projectData}>

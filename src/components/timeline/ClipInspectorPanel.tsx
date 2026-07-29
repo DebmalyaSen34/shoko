@@ -1,18 +1,19 @@
 import { useState } from "react";
 import type { AssetFile, ClipAssetReference, FeedbackGroup, PreviewState, ProjectData, PromptVersion, TimelineClip } from "../../types";
 import { staticUrl } from "../../lib/api";
-import { basename, formatSeconds, formatTimecode } from "../../lib/format";
+import { basename, versionLabel } from "../../lib/format";
 import { Icon } from "../Icon";
 
-type ClipInspectorTab = "feedback" | "details" | "assets";
+type ClipInspectorTab = "feedback" | "prompts" | "assets";
 
 type ClipInspectorPanelProps = {
   activeTab: ClipInspectorTab;
   clip: TimelineClip;
-  clipIndex: number;
   feedbackItems: FeedbackGroup["feedback_items"];
   projectData: ProjectData;
+  versions: PromptVersion[];
   selectedVersion?: PromptVersion;
+  selectedVersionIndex: number;
   setActiveTab: (tab: ClipInspectorTab) => void;
   onAddManualFeedback: (clipName: string) => void;
   onPreview: (preview: PreviewState) => void;
@@ -25,15 +26,19 @@ type AssetReferenceInput = string | AssetFile | ClipAssetReference;
 export function ClipInspectorPanel({
   activeTab,
   clip,
-  clipIndex,
   feedbackItems,
   projectData,
+  versions,
   selectedVersion,
+  selectedVersionIndex,
   setActiveTab,
   onAddManualFeedback,
   onPreview,
 }: ClipInspectorPanelProps) {
   const [showAllAssets, setShowAllAssets] = useState(false);
+  const promptVersions = versions
+    .map((version, index) => ({ version, index, sections: promptSections(version) }))
+    .filter((item) => item.sections.length > 0);
   const projectAssets = flattenProjectAssets(projectData);
   const assets = selectedVersion?.selected_assets?.length
     ? (selectedVersion.selected_assets as AssetReferenceInput[]).map((asset) => assetFromReference(asset, projectAssets))
@@ -46,8 +51,8 @@ export function ClipInspectorPanel({
         <button className={activeTab === "feedback" ? "active" : ""} type="button" onClick={() => setActiveTab("feedback")}>
           Feedback ({feedbackItems.length})
         </button>
-        <button className={activeTab === "details" ? "active" : ""} type="button" onClick={() => setActiveTab("details")}>
-          Details
+        <button className={activeTab === "prompts" ? "active" : ""} type="button" onClick={() => setActiveTab("prompts")}>
+          Prompt ({promptVersions.length})
         </button>
         <button className={activeTab === "assets" ? "active" : ""} type="button" onClick={() => setActiveTab("assets")}>
           Assets ({assets.length})
@@ -78,14 +83,35 @@ export function ClipInspectorPanel({
         </div>
       )}
 
-      {activeTab === "details" && (
-        <div className="clip-tab-body">
-          <div className="selected-details-grid">
-            <Detail label="Clip" value={basename(clip.clip)} />
-            <Detail label="Sequence Position" value={`#${clipIndex + 1}`} />
-            <Detail label="Timecode" value={`${formatTimecode(clip.start_tc)} - ${formatTimecode(clip.end_tc)}`} />
-            <Detail label="Bounds" value={`${formatSeconds(clip.start_s)} - ${formatSeconds(clip.end_s)}`} />
+      {activeTab === "prompts" && (
+        <div className="clip-tab-body prompts-tab-body">
+          <div className="selected-section-title">
+            <Icon name="file" />
+            <span>Generated prompts</span>
           </div>
+          {promptVersions.length ? (
+            <div className="clip-prompts-list">
+              {promptVersions.map(({ version, index, sections }) => (
+                <article className={`clip-prompt-card ${index === selectedVersionIndex ? "selected" : ""}`} key={`${version.prompt_version_id || version.timestamp || "prompt"}-${index}`}>
+                  <header>
+                    <strong>{versionLabel(version, index)}</strong>
+                    <span>{index === selectedVersionIndex ? "Selected" : version.is_latest ? "Latest" : "Saved"}</span>
+                  </header>
+                  {sections.map((section) => (
+                    <section className="clip-prompt-section" key={section.label}>
+                      <h4>{section.label}</h4>
+                      <pre>{section.text}</pre>
+                    </section>
+                  ))}
+                  {version.explanation && <p className="clip-prompt-explanation">{version.explanation}</p>}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="compact-feedback-empty">
+              <Icon name="file" /> No generated prompts for this clip
+            </div>
+          )}
         </div>
       )}
 
@@ -149,6 +175,22 @@ function MiniWaveform() {
       ))}
     </div>
   );
+}
+
+function promptSections(version: PromptVersion) {
+  const sections: Array<{ label: string; text: string }> = [];
+  const videoPrompt = normalizePromptText(version.video_model_prompt);
+  const segmindPrompt = normalizePromptText(version.segmind_prompt);
+  const initialFramePrompt = normalizePromptText(version.initial_frame_prompt);
+
+  if (videoPrompt) sections.push({ label: "Video Prompt", text: videoPrompt });
+  if (segmindPrompt && segmindPrompt !== videoPrompt) sections.push({ label: "Provider Prompt", text: segmindPrompt });
+  if (initialFramePrompt) sections.push({ label: "Initial Frame Prompt", text: initialFramePrompt });
+  return sections;
+}
+
+function normalizePromptText(value?: string | null) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function flattenProjectAssets(projectData: ProjectData): AssetFile[] {
@@ -233,13 +275,4 @@ function inferAssetType(asset: string): "image" | "video" | "audio" | "other" {
   if (/\.(mp4|mov|webm|m4v)$/.test(normalized)) return "video";
   if (/\.(wav|mp3|m4a|aac|flac)$/.test(normalized)) return "audio";
   return "other";
-}
-
-function Detail({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="compact-detail">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
 }

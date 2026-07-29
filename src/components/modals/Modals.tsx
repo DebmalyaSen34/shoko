@@ -161,7 +161,7 @@ export function ResultModal({ result, onClose, onCopy }: { result: NonNullable<R
                   <label className="result-label">
                     <Icon name="image" /> Generated Initial Frame Image
                   </label>
-                  <div className="initial-image-preview-wrapper" style={{ maxHeight: "200px", overflow: "hidden", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                  <div className="initial-image-preview-wrapper" style={{ maxHeight: "200px", overflow: "hidden", borderRadius: "3px", border: "1px solid var(--border-color)" }}>
                     <img src={result.initialImage} alt="Initial Frame" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
                   </div>
                 </div>

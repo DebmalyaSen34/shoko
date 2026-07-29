@@ -495,7 +495,6 @@ function CompactTimeline({
       <SelectedClipDock
         projectData={projectData}
         clip={selectedClip}
-        clipIndex={clampedSelectedClipIndex}
         feedback={selectedFeedback}
         versions={selectedVersionsForClip}
         selectedVersion={selectedVersion}
@@ -674,7 +673,6 @@ function feedbackMarkerClass(marker: TimelineMarker) {
 function SelectedClipDock({
   projectData,
   clip,
-  clipIndex,
   feedback,
   versions,
   selectedVersion,
@@ -692,7 +690,6 @@ function SelectedClipDock({
 }: {
   projectData: ProjectData;
   clip: TimelineClip;
-  clipIndex: number;
   feedback?: FeedbackGroup;
   versions: PromptVersion[];
   selectedVersion?: PromptVersion;
@@ -711,7 +708,7 @@ function SelectedClipDock({
   const feedbackItems = feedback?.feedback_items || [];
   const runnableFeedback = feedbackItems[0];
   const running = feedbackItems.some((item) => runningIndexes.has(item.raw_index));
-  const [activeTab, setActiveTab] = useState<"feedback" | "details" | "assets">("assets");
+  const [activeTab, setActiveTab] = useState<"feedback" | "prompts" | "assets">("assets");
 
   return (
     <aside className="lower-context-panels">
@@ -719,10 +716,11 @@ function SelectedClipDock({
       <ClipInspectorPanel
         activeTab={activeTab}
         clip={clip}
-        clipIndex={clipIndex}
         feedbackItems={feedbackItems}
         projectData={projectData}
+        versions={versions}
         selectedVersion={selectedVersion}
+        selectedVersionIndex={selectedVersionIndex}
         setActiveTab={setActiveTab}
         onAddManualFeedback={onAddManualFeedback}
         onPreview={onPreview}

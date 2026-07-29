@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import uuid
+from array import array
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -3544,6 +3545,160 @@ def find_clip_url(clip_name: str, assets_dir: str | Path) -> Optional[str]:
             return f"/assets/{quote(rel_path.as_posix())}"
     return None
 
+
+def resolve_timeline_audio_path(project_name: str, audio_name: str | None) -> Optional[Path]:
+    if not audio_name:
+        return None
+    project_assets = project_assets_dir(project_name)
+    clean_name = str(audio_name).replace("\\", "/")
+    filename = Path(clean_name).name
+    candidates = [
+        project_assets / "04_audio" / audio_name,
+        project_assets / "04_audio" / clean_name,
+        project_assets / "04_audio" / filename,
+        project_assets / filename,
+    ]
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return candidate.resolve()
+        except OSError:
+            continue
+    audio_dir = project_assets / "04_audio"
+    if filename and audio_dir.exists():
+        filename_lower = filename.lower()
+        for candidate in audio_dir.rglob("*"):
+            try:
+                if candidate.is_file() and candidate.name.lower() == filename_lower:
+                    return candidate.resolve()
+            except OSError:
+                continue
+    return None
+
+
+def timeline_audio_with_urls(project_name: str, timeline_data: dict) -> dict:
+    audio_timeline = timeline_data.get("audio_timeline") or {}
+    dedicated = []
+    for index, segment in enumerate(audio_timeline.get("dedicated_audio_tracks") or []):
+        audio_path = resolve_timeline_audio_path(project_name, segment.get("clip"))
+        dedicated.append({
+            **segment,
+            "audio_index": index,
+            "audio_url": static_url_for_path(str(audio_path)) if audio_path else None,
+            "audio_path": str(audio_path) if audio_path else None,
+        })
+    return {
+        **audio_timeline,
+        "dedicated_audio_tracks": dedicated,
+    }
+
+
+def _safe_waveform_stem(text: str) -> str:
+    stem = Path(text or "audio").stem
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-") or "audio"
+
+
+def _waveform_cache_path(project_name: str, audio_path: Path, segment: dict, bin_count: int) -> Path:
+    try:
+        stat = audio_path.stat()
+        fingerprint_source = {
+            "version": 2,
+            "path": str(audio_path.resolve()),
+            "mtime_ns": stat.st_mtime_ns,
+            "size": stat.st_size,
+            "start_s": segment.get("start_s"),
+            "end_s": segment.get("end_s"),
+            "bins": bin_count,
+        }
+    except OSError:
+        fingerprint_source = {
+            "version": 2,
+            "path": str(audio_path),
+            "start_s": segment.get("start_s"),
+            "end_s": segment.get("end_s"),
+            "bins": bin_count,
+        }
+    digest = hashlib.sha1(json.dumps(fingerprint_source, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    return project_data_dir(project_name) / "audio_waveforms" / f"{_safe_waveform_stem(segment.get('clip', 'audio'))}_{digest}.json"
+
+
+def _decode_waveform_samples(audio_path: Path, start_s: float, duration: float) -> bytes:
+    command = [
+        "ffmpeg",
+        "-v",
+        "error",
+        "-ss",
+        f"{max(start_s, 0.0):.3f}",
+        "-t",
+        f"{duration:.3f}",
+        "-i",
+        str(audio_path),
+        "-ac",
+        "1",
+        "-ar",
+        "8000",
+        "-f",
+        "s16le",
+        "pipe:1",
+    ]
+    completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if completed.returncode != 0:
+        return b""
+    return completed.stdout
+
+
+def _extract_waveform_peaks(audio_path: Path, segment: dict, bin_count: int) -> list[float]:
+    sequence_start_s = max(float(segment.get("start_s") or 0.0), 0.0)
+    end_s = max(float(segment.get("end_s") or 0.0), sequence_start_s)
+    duration = end_s - sequence_start_s
+    if duration <= 0:
+        return []
+
+    decoded = _decode_waveform_samples(audio_path, sequence_start_s, duration)
+    if not decoded:
+        decoded = _decode_waveform_samples(audio_path, 0.0, duration)
+    if not decoded:
+        return []
+
+    samples = array("h")
+    usable_bytes = len(decoded) - (len(decoded) % samples.itemsize)
+    samples.frombytes(decoded[:usable_bytes])
+    if sys.byteorder != "little":
+        samples.byteswap()
+    if not samples:
+        return []
+
+    samples_per_bin = max(1, len(samples) // max(1, bin_count))
+    peaks = []
+    for start in range(0, len(samples), samples_per_bin):
+        chunk = samples[start:start + samples_per_bin]
+        peak = max((abs(sample) for sample in chunk), default=0) / 32768
+        peaks.append(round(min(1.0, peak), 4))
+        if len(peaks) >= bin_count:
+            break
+    return peaks
+
+
+def waveform_for_audio_segment(project_name: str, segment: dict, bin_count: int) -> dict:
+    audio_path = resolve_timeline_audio_path(project_name, segment.get("clip"))
+    base = {
+        **segment,
+        "audio_url": static_url_for_path(str(audio_path)) if audio_path else None,
+        "peaks": [],
+    }
+    if not audio_path:
+        return {**base, "error": "Audio file not found"}
+
+    cache_path = _waveform_cache_path(project_name, audio_path, segment, bin_count)
+    cached = read_json_file(cache_path, None) if cache_path.exists() else None
+    if isinstance(cached, dict) and isinstance(cached.get("peaks"), list):
+        return {**base, "peaks": cached["peaks"]}
+
+    peaks = _extract_waveform_peaks(audio_path, segment, bin_count)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json_file(cache_path, {"peaks": peaks})
+    return {**base, "peaks": peaks}
+
 def save_output_to_prompts(project: str, provider: str = "unknown"):
     import datetime
     project_dir = project_data_dir(project)
@@ -4434,6 +4589,7 @@ def get_project_data(project_name: str):
         "feedback": aligned_feedback_with_indexes,
         "assets": assets,
         "prompts": prompts_data,
+        "audio_timeline": timeline_audio_with_urls(project_name, timeline_data),
         "summary": timeline_data.get("summary", {}),
         "sequence_name": timeline_data.get("sequence_name", ""),
         "total_duration_tc": timeline_data.get("total_duration_tc", ""),
@@ -4486,6 +4642,36 @@ def get_clip_filmstrip(project_name: str, clip_index: int, frames: int = 4):
             filmstrip_frames.append({"offset_s": offset_s, "url": frame_url})
 
     return {"clip_index": clip_index, "frames": filmstrip_frames}
+
+
+@app.get("/api/projects/{project_name}/audio-waveform")
+def get_project_audio_waveform(project_name: str, bins: int = 1200):
+    project_name = safe_project_name(project_name)
+    project_dir = project_data_dir(project_name)
+    timeline_path = project_dir / "timeline.json"
+
+    if not timeline_path.exists():
+        raise HTTPException(status_code=404, detail="Project timeline not found")
+
+    timeline_data = read_json_file(timeline_path, {})
+    segments = (timeline_data.get("audio_timeline") or {}).get("dedicated_audio_tracks") or []
+    total_duration = max(float(timeline_data.get("total_duration_s") or 0.0), 0.1)
+    total_bins = max(120, min(int(bins or 1200), 2400))
+    waveform_segments = []
+
+    for index, segment in enumerate(segments):
+        duration = max(float(segment.get("duration_s") or 0.0), float(segment.get("end_s") or 0.0) - float(segment.get("start_s") or 0.0), 0.0)
+        segment_bins = max(12, min(total_bins, round((duration / total_duration) * total_bins)))
+        waveform_segments.append({
+            **waveform_for_audio_segment(project_name, {**segment, "audio_index": index}, segment_bins),
+            "audio_index": index,
+        })
+
+    return {
+        "project_name": project_name,
+        "bins": total_bins,
+        "segments": waveform_segments,
+    }
 
 
 @app.get("/api/projects/{project_name}/clips/{clip_index}/state")

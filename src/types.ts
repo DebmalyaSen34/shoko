@@ -25,6 +25,7 @@ export type FeedbackItem = {
 export type FeedbackGroup = {
   feedback_id?: string;
   clip_used: string;
+  category?: "audio" | "video" | "both" | string;
   clip_occurrence?: number | null;
   feedback_items: FeedbackItem[];
 };
@@ -42,6 +43,23 @@ export type TimelineClip = {
 export type TimelineFilmstripFrame = {
   offset_s: number;
   url: string;
+};
+
+export type TimelineAudioSegment = {
+  audio_index?: number;
+  clip: string;
+  start_tc: string;
+  end_tc: string;
+  start_s: number;
+  end_s: number;
+  duration_s: number;
+  audio_url?: string | null;
+  audio_path?: string | null;
+};
+
+export type TimelineWaveformSegment = TimelineAudioSegment & {
+  peaks: number[];
+  error?: string;
 };
 
 export type QualityReport = {
@@ -165,6 +183,10 @@ export type GenerateVideoOptions = {
 export type ProjectData = {
   project_name: string;
   timeline: TimelineClip[];
+  audio_timeline?: {
+    dedicated_audio_tracks?: TimelineAudioSegment[];
+    embedded_video_audio?: TimelineAudioSegment[];
+  };
   feedback: FeedbackGroup[];
   assets: Record<string, AssetFile[]>;
   prompts: PromptRecord[];

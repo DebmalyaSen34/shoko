@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, Dispatch, MouseEvent, RefObject, SetStateAction } from "react";
-import type { FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptRecord, PromptVersion, TimelineClip, TimelineFilmstripFrame } from "../../types";
+import type { FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptRecord, PromptVersion, TimelineClip, TimelineFilmstripFrame, TimelineWaveformSegment } from "../../types";
 import { basename, formatSeconds, formatTimecode, getVersions, versionLabel } from "../../lib/format";
 import { apiUrl, staticUrl } from "../../lib/api";
 import { EmptyState } from "../EmptyState";
@@ -53,8 +53,11 @@ type FilmstripLoadState = {
   frames: TimelineFilmstripFrame[];
 };
 
-const TRACK_COLORS = ["#7c4dff", "#d99a38", "#bf3d76", "#2d6ad5", "#2f8a5b", "#6341d4"];
-const WAVEFORM_PATTERN = [16, 29, 42, 55, 26, 39, 52, 23, 36, 49, 20, 33, 46, 17, 30, 43, 56, 27, 40, 53];
+type WaveformLoadState = {
+  status: "idle" | "loading" | "ready" | "failed";
+  segments: TimelineWaveformSegment[];
+};
+
 const REFERENCE_SELECTED_CLIP_INDEX = 2;
 const TIMELINE_GUTTER = 56;
 const TIMELINE_END_PADDING = 48;
@@ -192,6 +195,7 @@ function CompactTimeline({
   const [selectedClipIndex, setSelectedClipIndex] = useState(REFERENCE_SELECTED_CLIP_INDEX);
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [filmstrips, setFilmstrips] = useState<Record<number, FilmstripLoadState>>({});
+  const [waveform, setWaveform] = useState<WaveformLoadState>({ status: "idle", segments: [] });
 
   const { layouts, contentWidth, pxPerSecond, totalSeconds } = useMemo(() => {
     const clips = projectData?.timeline || [];
@@ -235,6 +239,29 @@ function CompactTimeline({
   useEffect(() => {
     requestedFilmstrips.current.clear();
     setFilmstrips({});
+    setWaveform({ status: "idle", segments: [] });
+  }, [projectData?.project_name]);
+
+  useEffect(() => {
+    if (!projectData?.project_name) return;
+    const controller = new AbortController();
+    setWaveform({ status: "loading", segments: [] });
+    fetch(apiUrl(`/api/projects/${encodeURIComponent(projectData.project_name)}/audio-waveform?bins=1200`), {
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error("Failed to load audio waveform");
+        return response.json() as Promise<{ segments?: TimelineWaveformSegment[] }>;
+      })
+      .then((data) => {
+        setWaveform({ status: "ready", segments: data.segments || [] });
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setWaveform({ status: "failed", segments: [] });
+      });
+
+    return () => controller.abort();
   }, [projectData?.project_name]);
 
   useEffect(() => {
@@ -386,7 +413,7 @@ function CompactTimeline({
           }
           if (target.closest("button, select, input, video")) return;
           if (!refEl.current) return;
-          const scrubTarget = target.closest(".timeline-ruler, .compact-video-track, .compact-audio-track, .timeline-playhead-grab");
+          const scrubTarget = target.closest(".timeline-ruler, .compact-audio-track, .timeline-playhead-grab");
           if (scrubTarget) {
             drag.current = { down: true, mode: "scrub", startX: event.pageX - refEl.current.offsetLeft, scrollLeft: refEl.current.scrollLeft };
             refEl.current.classList.add("scrubbing");
@@ -458,11 +485,10 @@ function CompactTimeline({
                 />
               );
             })}
+            <FeedbackMarkers markers={markers} onSeek={seekMarker} />
           </div>
 
-          <FeedbackMarkers markers={markers} onSeek={seekMarker} />
-          <VideoTrack layouts={layouts} />
-          <MockWaveform width={contentWidth} pxPerSecond={pxPerSecond} totalSeconds={totalSeconds} />
+          <AudioWaveformTrack waveform={waveform} width={contentWidth} pxPerSecond={pxPerSecond} />
         </div>
       </div>
 
@@ -625,31 +651,6 @@ function TimelineFilmstrip({ filmstrip, clip }: { filmstrip?: FilmstripLoadState
   );
 }
 
-function VideoTrack({ layouts }: { layouts: ClipLayout[] }) {
-  return (
-    <div className="compact-video-track">
-      <div className="track-label" aria-label="Video track">
-        <Icon name="video" />
-      </div>
-      <div className="track-content">
-        {layouts.map((layout) => {
-          return (
-            <div
-              className="track-block"
-              key={`${layout.clip.clip}-track`}
-              style={{
-                left: layout.left,
-                width: Math.max(layout.scaledWidth, 2),
-                background: TRACK_COLORS[layout.index % TRACK_COLORS.length],
-              }}
-            />
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 function FeedbackMarkers({ markers, onSeek }: { markers: TimelineMarker[]; onSeek: (marker: TimelineMarker) => void }) {
   if (markers.length === 0) return null;
 
@@ -657,11 +658,11 @@ function FeedbackMarkers({ markers, onSeek }: { markers: TimelineMarker[]; onSee
     <div className="timeline-feedback-markers" aria-label="Feedback markers">
       {markers.map((marker) => (
         <button
-          className="timeline-feedback-marker"
+          className={`timeline-feedback-marker ${feedbackMarkerClass(marker)}`}
           key={`${marker.feedback.clip_used}-${marker.item.raw_index}`}
           style={{ left: marker.left }}
           type="button"
-          title={`${formatTimecode(marker.item.timestamp)}: ${marker.item.remark}`}
+          title={`${marker.item.category || marker.feedback.category || "video"} review - ${formatTimecode(marker.item.timestamp)}: ${marker.item.remark}`}
           onClick={() => onSeek(marker)}
         >
           <Icon name="comments" />
@@ -671,23 +672,39 @@ function FeedbackMarkers({ markers, onSeek }: { markers: TimelineMarker[]; onSee
   );
 }
 
-function MockWaveform({ width, pxPerSecond, totalSeconds }: { width: number; pxPerSecond: number; totalSeconds: number }) {
-  const timelineWidth = Math.max(0, totalSeconds * pxPerSecond);
-  const count = Math.max(80, Math.floor(timelineWidth / 3));
-  const bars = Array.from({ length: count }, (_item, index) => WAVEFORM_PATTERN[index % WAVEFORM_PATTERN.length]);
+function AudioWaveformTrack({ waveform, width, pxPerSecond }: { waveform: WaveformLoadState; width: number; pxPerSecond: number }) {
+  const placeholderPeaks = [0.18, 0.34, 0.22, 0.42, 0.26, 0.3, 0.16, 0.38];
 
   return (
     <div className="compact-audio-track">
       <div className="track-label" aria-label="Audio track">
         <Icon name="audio" />
       </div>
-      <div className="waveform" aria-hidden="true" style={{ width, paddingLeft: TIMELINE_GUTTER, paddingRight: TIMELINE_END_PADDING }}>
-        {bars.map((height, index) => (
-          <i key={index} style={{ height: Math.max(8, Math.round(height * 0.52)) }} />
-        ))}
+      <div className={`waveform real-waveform ${waveform.status}`} aria-hidden="true" style={{ width }}>
+        {waveform.status === "loading" && <span className="waveform-loading" style={{ left: TIMELINE_GUTTER, right: TIMELINE_END_PADDING }} />}
+        {waveform.status !== "loading" && waveform.segments.length === 0 && <span className="waveform-empty-lane" style={{ left: TIMELINE_GUTTER, right: TIMELINE_END_PADDING }} />}
+        {waveform.segments.map((segment) => {
+          const left = TIMELINE_GUTTER + Math.max(0, segment.start_s || 0) * pxPerSecond;
+          const segmentWidth = Math.max(2, Math.max(0, (segment.end_s || 0) - (segment.start_s || 0)) * pxPerSecond);
+          const peaks = segment.peaks.length ? segment.peaks : placeholderPeaks;
+          return (
+            <div className={`waveform-segment ${segment.peaks.length ? "" : "empty"}`} key={`${segment.clip}-${segment.audio_index}-${segment.start_s}`} style={{ left, width: segmentWidth }} title={segment.clip}>
+              {peaks.map((peak, index) => (
+                <i key={`${segment.audio_index}-${index}`} style={{ height: `${Math.max(8, Math.round(peak * 34))}px` }} />
+              ))}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
+}
+
+function feedbackMarkerClass(marker: TimelineMarker) {
+  const category = `${marker.item.category || marker.feedback.category || "video"}`.toLowerCase();
+  if (category.includes("both")) return "both-review";
+  if (category.includes("audio")) return "audio-review";
+  return "video-review";
 }
 
 function SelectedClipDock({

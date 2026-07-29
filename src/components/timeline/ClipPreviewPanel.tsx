@@ -1,20 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent } from "react";
-import type { PreviewState, TimelineClip } from "../../types";
+import type { TimelineClip } from "../../types";
 import { staticUrl } from "../../lib/api";
 import { basename, formatSeconds, formatTimecode } from "../../lib/format";
 import { Icon } from "../Icon";
 
 type ClipPreviewPanelProps = {
   clip: TimelineClip;
-  onPreview: (preview: PreviewState) => void;
   playheadOffsetSeconds?: number;
 };
 
-export function ClipPreviewPanel({ clip, onPreview, playheadOffsetSeconds }: ClipPreviewPanelProps) {
+export function ClipPreviewPanel({ clip, playheadOffsetSeconds }: ClipPreviewPanelProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastSyncedPlayhead = useRef<number | undefined>(undefined);
-  const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(clip.duration_s || 0);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -28,7 +26,6 @@ export function ClipPreviewPanel({ clip, onPreview, playheadOffsetSeconds }: Cli
       video.currentTime = 0;
       video.load();
     }
-    setPlaying(false);
     setCurrentTime(0);
     setDuration(clip.duration_s || 0);
     setLoadFailed(false);
@@ -46,20 +43,6 @@ export function ClipPreviewPanel({ clip, onPreview, playheadOffsetSeconds }: Cli
     lastSyncedPlayhead.current = nextTime;
   }, [clip.duration_s, duration, playheadOffsetSeconds]);
 
-  const togglePlayback = async () => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (video.paused) {
-      try {
-        await video.play();
-      } catch {
-        setPlaying(false);
-      }
-    } else {
-      video.pause();
-    }
-  };
-
   const seekToPoint = (event: MouseEvent<HTMLButtonElement>) => {
     const video = videoRef.current;
     if (!video) return;
@@ -69,24 +52,6 @@ export function ClipPreviewPanel({ clip, onPreview, playheadOffsetSeconds }: Cli
     const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
     video.currentTime = ratio * seekDuration;
     setCurrentTime(video.currentTime);
-  };
-
-  const enterFullscreen = async () => {
-    const video = videoRef.current;
-    if (!video || !clip.clip_url) return;
-    if (video.requestFullscreen) {
-      await video.requestFullscreen();
-      return;
-    }
-    onPreview({
-      file: {
-        name: basename(clip.clip),
-        path: clip.clip_url,
-        url: clip.clip_url,
-        type: "video",
-        size: "",
-      },
-    });
   };
 
   return (
@@ -104,48 +69,18 @@ export function ClipPreviewPanel({ clip, onPreview, playheadOffsetSeconds }: Cli
             playsInline
             onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || clip.duration_s || 0)}
             onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
-            onPlay={() => setPlaying(true)}
-            onPause={() => setPlaying(false)}
-            onEnded={() => setPlaying(false)}
-            onError={() => {
-              setLoadFailed(true);
-              setPlaying(false);
-            }}
+            onError={() => setLoadFailed(true)}
           />
         ) : (
           <Icon name="video" />
         )}
-        {loadFailed && (
-          <button
-            className="clip-preview-error"
-            type="button"
-            onClick={() =>
-              onPreview({
-                file: {
-                  name: basename(clip.clip),
-                  path: clip.clip_url || "",
-                  url: clip.clip_url || "",
-                  type: "video",
-                  size: "",
-                },
-              })
-            }
-          >
-            Open video preview
-          </button>
-        )}
+        {loadFailed && <div className="clip-preview-error">Preview unavailable</div>}
       </div>
       <div className="clip-preview-controls">
-        <button type="button" title={playing ? "Pause clip" : "Play clip"} disabled={!clip.clip_url} onClick={togglePlayback}>
-          <Icon name={playing ? "pause" : "play"} />
-        </button>
-        <span>{formatSeconds(currentTime)} / {formatSeconds(duration || clip.duration_s)}</span>
+        <span className="clip-preview-time">{formatSeconds(currentTime)} / {formatSeconds(duration || clip.duration_s)}</span>
         <button className="preview-progress" type="button" aria-label="Seek clip" disabled={!clip.clip_url} onClick={seekToPoint}>
           <i style={{ width: `${progress * 100}%` }} />
-          <b style={{ left: `calc(${progress * 100}% - 4px)` }} />
-        </button>
-        <button type="button" title="Fullscreen" disabled={!clip.clip_url} onClick={enterFullscreen}>
-          <Icon name="expand" />
+          <b style={{ left: `calc(${progress * 100}% - 6px)` }} />
         </button>
       </div>
       <div className="clip-preview-stats">

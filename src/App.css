@@ -1642,28 +1642,6 @@ button {
   transform: translate(-50%, -50%);
 }
 
-.compact-play-mark {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 32px;
-  height: 32px;
-  transform: translate(-50%, -50%);
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.42);
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  opacity: 0;
-  transition: opacity 0.16s ease;
-}
-
-.compact-clip-card:hover .compact-play-mark,
-.compact-clip-card.selected .compact-play-mark {
-  opacity: 1;
-}
-
 .compact-clip-meta {
   min-height: 38px;
   display: grid;
@@ -1705,32 +1683,6 @@ button {
 .compact-clip-card.compact.selected .compact-clip-index {
   color: var(--text-primary);
   opacity: 1;
-}
-
-.compact-clip-actions {
-  position: absolute;
-  right: 5px;
-  top: 5px;
-  display: flex;
-  gap: 4px;
-  opacity: 0;
-  transition: opacity 0.16s ease;
-}
-
-.compact-clip-card:hover .compact-clip-actions,
-.compact-clip-card.selected .compact-clip-actions {
-  opacity: 1;
-}
-
-.compact-clip-actions button {
-  width: 24px;
-  height: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 5px;
-  color: var(--text-primary);
-  background: rgba(0, 0, 0, 0.44);
-  display: grid;
-  place-items: center;
 }
 
 .compact-audio-track {
@@ -1959,8 +1911,9 @@ button {
 .clip-preview-media video {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
+  background: var(--bg-primary);
 }
 
 .clip-preview-media video[controls] {
@@ -1978,34 +1931,29 @@ button {
 }
 
 .clip-preview-controls {
-  height: 42px;
+  height: 36px;
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: 28px auto minmax(72px, 1fr) 26px;
+  grid-template-columns: auto minmax(72px, 1fr);
   align-items: center;
-  gap: 11px;
+  gap: 12px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
-.clip-preview-controls button {
-  width: 28px;
-  height: 28px;
-  border: 0;
-  background: transparent;
-  color: var(--text-primary);
-  display: grid;
-  place-items: center;
+.clip-preview-time {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
-.clip-preview-controls button:disabled {
+.clip-preview-controls .preview-progress:disabled {
   opacity: 0.45;
   cursor: default;
 }
 
 .preview-progress {
   width: 100%;
-  height: 4px;
+  height: 6px;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -2028,8 +1976,8 @@ button {
 .preview-progress b {
   position: absolute;
   top: 50%;
-  width: 16px;
-  height: 16px;
+  width: 12px;
+  height: 12px;
   transform: translateY(-50%);
   border-radius: 999px;
   background: var(--accent-primary);
@@ -2047,16 +1995,16 @@ button {
 
 .clip-preview-error {
   position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 12px;
-  min-height: 34px;
+  inset: 0;
   border: 1px solid var(--border-hover);
-  border-radius: 3px;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
+  border-radius: 2px;
+  background: rgba(36, 41, 46, 0.86);
+  color: var(--text-inverse);
   font-size: 12px;
   font-weight: 700;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
 }
 
 .clip-inspector-panel {

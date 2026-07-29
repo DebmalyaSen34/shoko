@@ -388,8 +388,6 @@ function CompactTimeline({
   };
 
   const seekClipFromClick = (event: MouseEvent<HTMLElement>, layout: ClipLayout) => {
-    const target = event.target as HTMLElement;
-    if (target.closest(".compact-clip-actions")) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
     setTimelinePlayhead(layout.clip.start_s + ratio * Math.max(layout.clip.duration_s, 0.1));
@@ -484,8 +482,6 @@ function CompactTimeline({
                   selected={clampedSelectedClipIndex === layout.index}
                   filmstrip={filmstrips[layout.index]}
                   onSeek={(event) => seekClipFromClick(event, layout)}
-                  onOpenChat={() => onOpenClipChat(layout.index)}
-                  onPreview={onPreview}
                 />
               );
             })}
@@ -560,15 +556,11 @@ function CompactClipCard({
   selected,
   filmstrip,
   onSeek,
-  onOpenChat,
-  onPreview,
 }: {
   layout: ClipLayout;
   selected: boolean;
   filmstrip?: FilmstripLoadState;
   onSeek: (event: MouseEvent<HTMLElement>) => void;
-  onOpenChat: () => void;
-  onPreview: (preview: PreviewState) => void;
 }) {
   const clip = layout.clip;
   const canShowThumbnail = layout.width >= MIN_FILMSTRIP_WIDTH;
@@ -590,30 +582,6 @@ function CompactClipCard({
         )}
         {!canShowName && canShowCompactIndex && <span className="compact-clip-index">{layout.index + 1}</span>}
       </button>
-      {!layout.compact && <div className="compact-clip-actions">
-        <button type="button" title="Chat" onClick={onOpenChat}>
-          <Icon name="chat" />
-        </button>
-        {clip.clip_url && (
-          <button
-            type="button"
-            title="Preview"
-            onClick={() =>
-              onPreview({
-                file: {
-                  name: basename(clip.clip),
-                  path: clip.clip_url || "",
-                  url: clip.clip_url || "",
-                  type: "video",
-                  size: "",
-                },
-              })
-            }
-          >
-            <Icon name="expand" />
-          </button>
-        )}
-      </div>}
     </article>
   );
 }
@@ -625,9 +593,6 @@ function TimelineFilmstrip({ filmstrip, clip }: { filmstrip?: FilmstripLoadState
         {filmstrip.frames.map((frame, index) => (
           <img src={staticUrl(frame.url)} alt="" aria-hidden="true" key={`${frame.url}-${index}`} />
         ))}
-        <span className="compact-play-mark">
-          <Icon name="play" />
-        </span>
       </div>
     );
   }
@@ -638,9 +603,6 @@ function TimelineFilmstrip({ filmstrip, clip }: { filmstrip?: FilmstripLoadState
         <i />
         <i />
         <i />
-        <span className="compact-play-mark">
-          <Icon name="play" />
-        </span>
       </div>
     );
   }
@@ -648,9 +610,6 @@ function TimelineFilmstrip({ filmstrip, clip }: { filmstrip?: FilmstripLoadState
   return (
     <div className="compact-thumb filmstrip-fallback">
       {clip.clip_url ? <video src={`${staticUrl(clip.clip_url)}#t=0.5`} preload="metadata" muted playsInline /> : <Icon name="video" />}
-      <span className="compact-play-mark">
-        <Icon name="play" />
-      </span>
     </div>
   );
 }
@@ -756,7 +715,7 @@ function SelectedClipDock({
 
   return (
     <aside className="lower-context-panels">
-      <ClipPreviewPanel clip={clip} onPreview={onPreview} playheadOffsetSeconds={playheadOffsetSeconds} />
+      <ClipPreviewPanel clip={clip} playheadOffsetSeconds={playheadOffsetSeconds} />
       <ClipInspectorPanel
         activeTab={activeTab}
         clip={clip}

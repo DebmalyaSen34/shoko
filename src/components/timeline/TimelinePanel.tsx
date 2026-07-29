@@ -6,7 +6,7 @@ import { apiUrl, staticUrl } from "../../lib/api";
 import { EmptyState } from "../EmptyState";
 import { Icon } from "../Icon";
 import { ClipChatPanel } from "../chat/ClipChatPanel";
-import { ClipInspectorPanel } from "./ClipInspectorPanel";
+import { ClipInspectorPanel, type ClipInspectorTab } from "./ClipInspectorPanel";
 import { ClipPreviewPanel } from "./ClipPreviewPanel";
 
 export type TimelinePanelProps = {
@@ -692,7 +692,7 @@ function SelectedClipDock({
   playheadOffsetSeconds?: number;
 }) {
   const feedbackItems = feedback?.feedback_items || [];
-  const [activeTab, setActiveTab] = useState<"feedback" | "prompts" | "assets">("assets");
+  const [activeTab, setActiveTab] = useState<ClipInspectorTab>("assets");
 
   return (
     <aside className="lower-context-panels">

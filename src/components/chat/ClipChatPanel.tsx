@@ -84,6 +84,7 @@ export function ClipChatPanel({
   const [generatingVideo, setGeneratingVideo] = useState(false);
   const [error, setError] = useState("");
   const [clearedAt, setClearedAt] = useState("");
+  const [expandedRunIds, setExpandedRunIds] = useState<Set<string>>(new Set());
   const [panelWidth, setPanelWidth] = useState(() => {
     const saved = window.localStorage.getItem("loka15.clip-chat.width");
     return saved ? Number(saved) || 420 : 420;
@@ -337,6 +338,18 @@ export function ClipChatPanel({
     return "chat";
   }
 
+  function toggleAgentRun(messageId: string) {
+    setExpandedRunIds((current) => {
+      const next = new Set(current);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
+  }
+
   function resizePanel(clientX: number) {
     const nextWidth = Math.min(760, Math.max(320, window.innerWidth - clientX));
     setPanelWidth(nextWidth);
@@ -403,22 +416,44 @@ export function ClipChatPanel({
           </div>
         )}
         {visibleMessages.map((message) => (
-          <div className={`chat-message ${message.role}`} key={message.id}>
-            <div className="chat-message-meta">{message.role} · {formatMessageTime(message.created_at)}</div>
-            <div className="chat-message-text">
-              <MarkdownMessage text={message.content} />
+          <div className={`chat-message-group ${message.role}`} key={message.id}>
+            <div className={`chat-message ${message.role}`}>
+              <div className="chat-message-text">
+                <MarkdownMessage text={message.content} />
+              </div>
+              {Boolean(message.metadata?.media?.length) && (
+                <ChatMediaGallery media={message.metadata?.media || []} onPreview={onPreview} />
+              )}
+              {Boolean(message.metadata?.actions?.length) && (
+                <div className="chat-action-row">
+                  {message.metadata?.actions?.map((action) => (
+                    <button className="premium-btn secondary" type="button" key={`${message.id}-${action.type}-${action.label}`} onClick={() => handleAction(action)}>
+                      <Icon name={actionIcon(action)} /> {action.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-            {Boolean(message.metadata?.media?.length) && (
-              <ChatMediaGallery media={message.metadata?.media || []} onPreview={onPreview} />
-            )}
-            {message.metadata?.agent_run && <AgentRunSummary run={message.metadata.agent_run} />}
-            {Boolean(message.metadata?.actions?.length) && (
-              <div className="chat-action-row">
-                {message.metadata?.actions?.map((action) => (
-                  <button className="premium-btn secondary" type="button" key={`${message.id}-${action.type}-${action.label}`} onClick={() => handleAction(action)}>
-                    <Icon name={actionIcon(action)} /> {action.label}
-                  </button>
-                ))}
+            <div className="chat-message-footer">
+              {message.metadata?.agent_run ? (
+                <button
+                  className="chat-info-toggle"
+                  type="button"
+                  title={expandedRunIds.has(message.id) ? "Hide feedback review" : "Show feedback review"}
+                  aria-label={expandedRunIds.has(message.id) ? "Hide feedback review" : "Show feedback review"}
+                  aria-expanded={expandedRunIds.has(message.id)}
+                  onClick={() => toggleAgentRun(message.id)}
+                >
+                  <Icon name="info" />
+                </button>
+              ) : (
+                <span />
+              )}
+              <time>{formatMessageTime(message.created_at)}</time>
+            </div>
+            {message.metadata?.agent_run && expandedRunIds.has(message.id) && (
+              <div className="chat-message-info">
+                <AgentRunSummary run={message.metadata.agent_run} />
               </div>
             )}
           </div>

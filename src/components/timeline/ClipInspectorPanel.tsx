@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import type { AssetFile, ClipAssetReference, FeedbackGroup, PreviewState, ProjectData, PromptVersion, TimelineClip } from "../../types";
+import type { AssetFile, ClipAssetReference, FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptVersion, TimelineClip } from "../../types";
 import { staticUrl } from "../../lib/api";
 import { basename, versionLabel } from "../../lib/format";
 import { Icon } from "../Icon";
 
-type ClipInspectorTab = "feedback" | "prompts" | "assets";
+export type ClipInspectorTab = "feedback" | "prompts" | "assets" | "videos";
 
 type ClipInspectorPanelProps = {
   activeTab: ClipInspectorTab;
@@ -51,14 +51,21 @@ export function ClipInspectorPanel({
     ? (selectedVersion.selected_assets as AssetReferenceInput[]).map((asset) => assetFromReference(asset, projectAssets))
     : projectAssets;
   const visibleAssets = showAllAssets ? assets : assets.slice(0, ASSET_PREVIEW_LIMIT);
+  const generatedVideos = collectGeneratedVideos(versions);
 
   useEffect(() => {
     setPromptVersionIndex(selectedVersionIndex);
   }, [clip.clip, selectedVersionIndex]);
 
+  useEffect(() => {
+    if (activeTab === "videos" && generatedVideos.length === 0) {
+      setActiveTab("assets");
+    }
+  }, [activeTab, generatedVideos.length, setActiveTab]);
+
   return (
     <section className="clip-inspector-panel">
-      <div className="clip-inspector-tabs" role="tablist" aria-label="Clip context">
+      <div className={`clip-inspector-tabs ${generatedVideos.length > 0 ? "has-videos" : ""}`} role="tablist" aria-label="Clip context">
         <button className={activeTab === "feedback" ? "active" : ""} type="button" onClick={() => setActiveTab("feedback")}>
           Feedback ({feedbackItems.length})
         </button>
@@ -68,6 +75,11 @@ export function ClipInspectorPanel({
         <button className={activeTab === "assets" ? "active" : ""} type="button" onClick={() => setActiveTab("assets")}>
           Assets ({assets.length})
         </button>
+        {generatedVideos.length > 0 && (
+          <button className={activeTab === "videos" ? "active" : ""} type="button" onClick={() => setActiveTab("videos")}>
+            Videos ({generatedVideos.length})
+          </button>
+        )}
       </div>
 
       {activeTab === "feedback" && (
@@ -191,6 +203,33 @@ export function ClipInspectorPanel({
           )}
         </div>
       )}
+
+      {activeTab === "videos" && generatedVideos.length > 0 && (
+        <div className="clip-tab-body generated-videos-tab-body">
+          <div className="generated-videos-grid">
+            {generatedVideos.map(({ video, versionIndex }) => (
+              <button
+                className="generated-video-tile"
+                key={`${video.generated_video_id || video.path}-${versionIndex}-${video.version}`}
+                type="button"
+                title={`Preview ${video.label || `Generated video v${video.version}`}`}
+                onClick={() => onPreview({ file: generatedVideoToAsset(video) })}
+              >
+                <div className="generated-video-thumb">
+                  <video src={`${staticUrl(video.url || video.path)}#t=0.2`} preload="metadata" muted playsInline />
+                  <span>
+                    <Icon name="video" />
+                  </span>
+                </div>
+                <div className="generated-video-meta">
+                  <strong>{video.label || `Generated video v${video.version}`}</strong>
+                  <span>{versionLabel(versions[versionIndex], versionIndex)}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -219,6 +258,23 @@ function promptSections(version: PromptVersion) {
 
 function normalizePromptText(value?: string | null) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function collectGeneratedVideos(versions: PromptVersion[]) {
+  return versions.flatMap((version, versionIndex) =>
+    (version.generated_videos || []).map((video) => ({ video, versionIndex })),
+  );
+}
+
+function generatedVideoToAsset(video: GeneratedVideo): AssetFile {
+  const path = video.path || video.url;
+  return {
+    name: video.label || basename(path),
+    path,
+    url: video.url || path,
+    type: "video",
+    size: video.resolution || "",
+  };
 }
 
 function flattenProjectAssets(projectData: ProjectData): AssetFile[] {

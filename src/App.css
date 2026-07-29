@@ -2077,26 +2077,85 @@ button {
 }
 
 .clip-tab-body.prompts-tab-body {
-  padding: 14px 16px 12px;
+  padding: 12px;
+  gap: 0;
+}
+
+.single-prompt-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prompt-version-toolbar {
+  flex: 0 0 auto;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
 }
 
-.clip-prompts-list {
+.prompt-version-toolbar label {
   flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding-right: 2px;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.prompt-version-toolbar label span {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.prompt-version-status {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(45, 186, 78, 0.42);
+  border-radius: 999px;
+  background: rgba(45, 186, 78, 0.08);
+  color: var(--accent-primary);
+  display: grid;
+  place-items: center;
+}
+
+.prompt-version-status .icon {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2.4;
+}
+
+.prompt-version-toolbar select {
+  min-width: 0;
+  height: 32px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: #ffffff;
+  color: var(--text-primary);
+  padding: 0 9px;
+  font-size: 12px;
 }
 
 .clip-prompt-card {
+  flex: 1;
+  min-height: 0;
   border: 1px solid var(--border-color);
   border-radius: 3px;
   background: #ffffff;
   color: var(--text-primary);
   padding: 10px;
+}
+
+.clip-prompt-card.single {
+  overflow-y: auto;
+  padding: 12px;
 }
 
 .clip-prompt-card.selected {
@@ -2164,6 +2223,42 @@ button {
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.45;
+}
+
+.video-prompt-section {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.video-prompt-section h4 {
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.video-prompt-section pre {
+  max-height: none;
+  min-height: 190px;
+  font-size: 12px;
+  line-height: 1.58;
+}
+
+.supporting-prompts {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 9px;
+}
+
+.supporting-prompts summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.supporting-prompts .clip-prompt-section {
+  margin-top: 9px;
 }
 
 .clip-prompt-explanation {

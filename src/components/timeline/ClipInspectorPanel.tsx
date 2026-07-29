@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AssetFile, ClipAssetReference, FeedbackGroup, PreviewState, ProjectData, PromptVersion, TimelineClip } from "../../types";
 import { staticUrl } from "../../lib/api";
 import { basename, versionLabel } from "../../lib/format";
@@ -36,14 +36,25 @@ export function ClipInspectorPanel({
   onPreview,
 }: ClipInspectorPanelProps) {
   const [showAllAssets, setShowAllAssets] = useState(false);
+  const [promptVersionIndex, setPromptVersionIndex] = useState(selectedVersionIndex);
   const promptVersions = versions
     .map((version, index) => ({ version, index, sections: promptSections(version) }))
     .filter((item) => item.sections.length > 0);
+  const selectedPromptVersion =
+    promptVersions.find((item) => item.index === promptVersionIndex) ||
+    promptVersions.find((item) => item.index === selectedVersionIndex) ||
+    promptVersions[promptVersions.length - 1];
+  const videoPromptSection = selectedPromptVersion?.sections.find((section) => section.kind === "video");
+  const supportingPromptSections = selectedPromptVersion?.sections.filter((section) => section.kind !== "video") || [];
   const projectAssets = flattenProjectAssets(projectData);
   const assets = selectedVersion?.selected_assets?.length
     ? (selectedVersion.selected_assets as AssetReferenceInput[]).map((asset) => assetFromReference(asset, projectAssets))
     : projectAssets;
   const visibleAssets = showAllAssets ? assets : assets.slice(0, ASSET_PREVIEW_LIMIT);
+
+  useEffect(() => {
+    setPromptVersionIndex(selectedVersionIndex);
+  }, [clip.clip, selectedVersionIndex]);
 
   return (
     <section className="clip-inspector-panel">
@@ -85,27 +96,44 @@ export function ClipInspectorPanel({
 
       {activeTab === "prompts" && (
         <div className="clip-tab-body prompts-tab-body">
-          <div className="selected-section-title">
-            <Icon name="file" />
-            <span>Generated prompts</span>
-          </div>
           {promptVersions.length ? (
-            <div className="clip-prompts-list">
-              {promptVersions.map(({ version, index, sections }) => (
-                <article className={`clip-prompt-card ${index === selectedVersionIndex ? "selected" : ""}`} key={`${version.prompt_version_id || version.timestamp || "prompt"}-${index}`}>
-                  <header>
-                    <strong>{versionLabel(version, index)}</strong>
-                    <span>{index === selectedVersionIndex ? "Selected" : version.is_latest ? "Latest" : "Saved"}</span>
-                  </header>
-                  {sections.map((section) => (
-                    <section className="clip-prompt-section" key={section.label}>
-                      <h4>{section.label}</h4>
-                      <pre>{section.text}</pre>
-                    </section>
-                  ))}
-                  {version.explanation && <p className="clip-prompt-explanation">{version.explanation}</p>}
-                </article>
-              ))}
+            <div className="single-prompt-view">
+              <div className="prompt-version-toolbar">
+                <label>
+                  <span>Version</span>
+                  <select value={selectedPromptVersion.index} onChange={(event) => setPromptVersionIndex(Number(event.target.value))}>
+                    {promptVersions.map(({ version, index }) => (
+                      <option value={index} key={`${version.prompt_version_id || version.timestamp || "prompt"}-${index}`}>
+                        {versionLabel(version, index)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {selectedPromptVersion.index === selectedVersionIndex && (
+                  <span className="prompt-version-status" title="Selected version" aria-label="Selected version">
+                    <Icon name="check" />
+                  </span>
+                )}
+              </div>
+
+              <article className="clip-prompt-card single">
+                <section className="clip-prompt-section video-prompt-section">
+                  <h4>Video Prompt</h4>
+                  <pre>{videoPromptSection?.text || "No video prompt was generated for this version."}</pre>
+                </section>
+                {supportingPromptSections.length > 0 && (
+                  <details className="supporting-prompts">
+                    <summary>Supporting prompts</summary>
+                    {supportingPromptSections.map((section) => (
+                      <section className="clip-prompt-section" key={section.label}>
+                        <h4>{section.label}</h4>
+                        <pre>{section.text}</pre>
+                      </section>
+                    ))}
+                  </details>
+                )}
+                {selectedPromptVersion.version.explanation && <p className="clip-prompt-explanation">{selectedPromptVersion.version.explanation}</p>}
+              </article>
             </div>
           ) : (
             <div className="compact-feedback-empty">
@@ -178,14 +206,14 @@ function MiniWaveform() {
 }
 
 function promptSections(version: PromptVersion) {
-  const sections: Array<{ label: string; text: string }> = [];
+  const sections: Array<{ label: string; text: string; kind: "video" | "provider" | "initial" }> = [];
   const videoPrompt = normalizePromptText(version.video_model_prompt);
   const segmindPrompt = normalizePromptText(version.segmind_prompt);
   const initialFramePrompt = normalizePromptText(version.initial_frame_prompt);
 
-  if (videoPrompt) sections.push({ label: "Video Prompt", text: videoPrompt });
-  if (segmindPrompt && segmindPrompt !== videoPrompt) sections.push({ label: "Provider Prompt", text: segmindPrompt });
-  if (initialFramePrompt) sections.push({ label: "Initial Frame Prompt", text: initialFramePrompt });
+  if (videoPrompt) sections.push({ label: "Video Prompt", text: videoPrompt, kind: "video" });
+  if (segmindPrompt && segmindPrompt !== videoPrompt) sections.push({ label: "Provider Prompt", text: segmindPrompt, kind: "provider" });
+  if (initialFramePrompt) sections.push({ label: "Initial Frame Prompt", text: initialFramePrompt, kind: "initial" });
   return sections;
 }
 

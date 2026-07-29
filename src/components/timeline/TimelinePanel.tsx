@@ -711,7 +711,6 @@ function SelectedClipDock({
       />
       <ClipChatPanel
         variant="dock"
-        clip={clip}
         clipIndex={clipIndex}
         feedback={feedback}
         prompt={prompt}

@@ -15,7 +15,6 @@ import type {
   PreviewState,
   ProjectData,
   Provider,
-  TimelineClip,
 } from "../../types";
 import { getVersions } from "../../lib/format";
 import { apiUrl, staticUrl } from "../../lib/api";
@@ -23,7 +22,6 @@ import { Icon } from "../Icon";
 
 type ClipChatPanelProps = {
   variant?: "panel" | "dock";
-  clip: TimelineClip;
   clipIndex: number;
   feedback?: FeedbackGroup;
   prompt: PromptRecord | null;
@@ -66,7 +64,6 @@ const SLASH_COMMANDS = [
 
 export function ClipChatPanel({
   variant = "panel",
-  clip,
   clipIndex,
   feedback,
   prompt,
@@ -372,11 +369,14 @@ export function ClipChatPanel({
           }}
         />
       )}
+      
+      {/*TODO: Remove the header later to give more space to actual chat*/}
       <div className="clip-chat-header">
         <div>
           <div className="clip-chat-kicker">Clip Chat</div>
-          <h3>{clip.clip}</h3>
-          <span>{projectData.sequence_name || projectData.project_name}</span>
+          {/*Commented the below header and spanner to get more space to actual chat agent text area*/}
+          {/*<h3>{clip.clip}</h3>*/}
+          {/*<span>{projectData.sequence_name || projectData.project_name}</span>*/}
         </div>
         {onClose && (
           <button className="icon-btn" type="button" title="Close Chat" onClick={onClose}>

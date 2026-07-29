@@ -458,7 +458,7 @@ export function ClipChatPanel({
             )}
           </div>
         ))}
-        {sending && <div className="inline-loader"><span className="loader-orbit" aria-hidden="true"><span /><span /><span /></span>Thinking with {provider.toUpperCase()}...</div>}
+        {sending && <FilmThinkingLoader provider={provider} />}
         {videoBusy && <div className="inline-loader"><span className="loader-orbit" aria-hidden="true"><span /><span /><span /></span>Generating video...</div>}
       </div>
 
@@ -501,6 +501,33 @@ export function ClipChatPanel({
         </button>
       </form>
     </aside>
+  );
+}
+
+function FilmThinkingLoader({ provider }: { provider: Provider }) {
+  const words = ["blocking", "framing", "lighting", "rolling", "storyboarding", "composing", "grading", "cutting", "mixing", "rendering"];
+
+  return (
+    <div className="film-thinking-loader" role="status" aria-live="polite" aria-label={`Working with ${provider.toUpperCase()}`}>
+      <div className="film-clapper" aria-hidden="true">
+        <span className="film-clapper-top">
+          <i />
+          <i />
+          <i />
+        </span>
+        <span className="film-clapper-body">
+          <b />
+          <b />
+        </span>
+      </div>
+      <div className="film-loader-copy">
+        <strong>
+          {words.map((word) => (
+            <em key={word}>{word}</em>
+          ))}
+        </strong>
+      </div>
+    </div>
   );
 }
 

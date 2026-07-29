@@ -63,6 +63,10 @@ const TIMELINE_GUTTER = 56;
 const TIMELINE_END_PADDING = 48;
 const BASE_PX_PER_SECOND = 18;
 const MIN_SEGMENT_WIDTH = 28;
+const MIN_TIMELINE_ZOOM = 0.5;
+const DEFAULT_TIMELINE_ZOOM = 2;
+const MAX_TIMELINE_ZOOM = 2.5;
+const MIN_FILMSTRIP_WIDTH = 64;
 
 function preferredClipIndex(clipCount: number) {
   return Math.min(REFERENCE_SELECTED_CLIP_INDEX, Math.max(clipCount - 1, 0));
@@ -97,25 +101,25 @@ export function TimelinePanel({
           <span>Duration {duration}</span>
         </div>
         <div className="compact-timeline-actions timeline-zoom-actions">
-          <button className="timeline-zoom-icon" title="Zoom Out" type="button" onClick={() => setZoom((value) => Math.max(0.5, Number((value - 0.1).toFixed(2))))}>
+          <button className="timeline-zoom-icon" title="Zoom Out" type="button" onClick={() => setZoom((value) => Math.max(MIN_TIMELINE_ZOOM, Number((value - 0.1).toFixed(2))))}>
             <Icon name="zoomOut" />
           </button>
-          <button className="timeline-zoom-icon" title="Zoom In" type="button" onClick={() => setZoom((value) => Math.min(1.5, Number((value + 0.1).toFixed(2))))}>
+          <button className="timeline-zoom-icon" title="Zoom In" type="button" onClick={() => setZoom((value) => Math.min(MAX_TIMELINE_ZOOM, Number((value + 0.1).toFixed(2))))}>
             <Icon name="zoomIn" />
           </button>
           <div className="timeline-zoom-group">
             <input
               className="premium-slider"
               type="range"
-              min="0.5"
-              max="1.5"
+              min={MIN_TIMELINE_ZOOM}
+              max={MAX_TIMELINE_ZOOM}
               step="0.05"
               value={zoom}
               aria-label="Timeline zoom"
               onChange={(event) => setZoom(Number(event.target.value))}
             />
           </div>
-          <button className="timeline-fit-button" type="button" onClick={() => setZoom(1)}>
+          <button className="timeline-fit-button" type="button" onClick={() => setZoom(DEFAULT_TIMELINE_ZOOM)}>
             Fit
           </button>
         </div>
@@ -469,8 +473,8 @@ function CompactTimeline({
           </div>
 
           <div className="compact-clip-row">
-            <div className="timeline-lane-label">
-              <span>V1</span>
+            <div className="timeline-lane-label" aria-label="Video track">
+              <Icon name="video" />
             </div>
             {layouts.map((layout) => {
               return (
@@ -567,7 +571,7 @@ function CompactClipCard({
   onPreview: (preview: PreviewState) => void;
 }) {
   const clip = layout.clip;
-  const canShowThumbnail = layout.width >= 112;
+  const canShowThumbnail = layout.width >= MIN_FILMSTRIP_WIDTH;
   const canShowName = layout.width >= 84;
   const canShowDuration = layout.width >= 104;
   const canShowCompactIndex = layout.width >= 18;

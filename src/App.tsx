@@ -24,6 +24,7 @@ const DEFAULT_VIDEO_OPTIONS: GenerateVideoOptions = {
 };
 
 const VIDEO_OPTIONS_STORAGE_KEY = "loka15.video-generation.options";
+const DEFAULT_TIMELINE_ZOOM = 2;
 
 type PendingVideoRequest = {
   clipIndex: number;
@@ -53,7 +54,7 @@ function App() {
   const [projectData, setProjectData] = useState<ProjectData | null>(null);
   const [loadingProject, setLoadingProject] = useState(false);
   const [loadError, setLoadError] = useState("");
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(DEFAULT_TIMELINE_ZOOM);
   const [preview, setPreview] = useState<PreviewState>(null);
   const [result, setResult] = useState<ResultState>(null);
   const [errorLog, setErrorLog] = useState("");

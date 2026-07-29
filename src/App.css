@@ -57,8 +57,8 @@
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   --header-height: 58px;
   --sidebar-width: 320px;
-  --timeline-strip-height: 418px;
-  --timeline-context-height: 440px;
+  --timeline-strip-height: 350px;
+  --timeline-context-height: 508px;
 
   font-family: var(--font-sans);
   color: var(--text-primary);
@@ -1485,10 +1485,9 @@ button {
 .timeline-lane-label {
   position: absolute;
   left: 12px;
-  top: 50%;
+  top: 64px;
   width: 34px;
   height: 32px;
-  transform: translateY(-50%);
   border: 1px solid var(--border-color);
   border-radius: 3px;
   background: var(--bg-secondary);
@@ -1498,6 +1497,11 @@ button {
   font-size: 11px;
   font-weight: 800;
   z-index: 3;
+}
+
+.timeline-lane-label .icon {
+  width: 16px;
+  height: 16px;
 }
 
 .timeline-selected-range {
@@ -1745,9 +1749,10 @@ button {
 .track-label {
   position: absolute;
   left: 12px;
-  top: 0;
+  top: 50%;
   width: 34px;
   height: 30px;
+  transform: translateY(-50%);
   border: 1px solid var(--border-color);
   border-radius: 3px;
   background: var(--bg-secondary);
@@ -5679,6 +5684,27 @@ button {
     #2b3137;
   background-size: 100% 32px;
   border-bottom-color: rgba(250, 251, 252, 0.12);
+  scrollbar-color: rgba(45, 186, 78, 0.82) rgba(36, 41, 46, 0.9);
+  scrollbar-width: thin;
+}
+
+.compact-timeline-scroll::-webkit-scrollbar {
+  height: 12px;
+}
+
+.compact-timeline-scroll::-webkit-scrollbar-track {
+  background: #24292e;
+  border-top: 1px solid rgba(250, 251, 252, 0.08);
+}
+
+.compact-timeline-scroll::-webkit-scrollbar-thumb {
+  background: rgba(45, 186, 78, 0.82);
+  border: 3px solid #24292e;
+  border-radius: 999px;
+}
+
+.compact-timeline-scroll::-webkit-scrollbar-thumb:hover {
+  background: #2dba4e;
 }
 
 .compact-timeline-stage {
@@ -5707,6 +5733,36 @@ button {
   background: #24292e;
   color: #fafbfc;
   border-color: rgba(250, 251, 252, 0.14);
+}
+
+.timeline-zoom-actions .premium-slider {
+  width: 96px;
+  height: 6px;
+  background: rgba(36, 41, 46, 0.16);
+  border: 1px solid rgba(36, 41, 46, 0.16);
+  border-radius: 999px;
+}
+
+.timeline-zoom-actions .premium-slider::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  background: #2dba4e;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px rgba(36, 41, 46, 0.18);
+}
+
+.timeline-zoom-actions .premium-slider::-moz-range-track {
+  height: 6px;
+  background: rgba(36, 41, 46, 0.16);
+  border-radius: 999px;
+}
+
+.timeline-zoom-actions .premium-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: #2dba4e;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
 }
 
 .ruler-tick i,
@@ -5750,10 +5806,61 @@ button {
     0 8px 22px rgba(36, 41, 46, 0.1);
 }
 
+.compact-clip-row {
+  top: 50px;
+  height: 150px;
+}
+
+.compact-clip-card,
+.compact-clip-card.compact {
+  top: 48px;
+}
+
+.timeline-selected-range {
+  top: 98px;
+}
+
+.timeline-feedback-markers {
+  top: 12px;
+}
+
+.timeline-lane-label {
+  top: 48px;
+}
+
+.compact-audio-track {
+  top: 238px;
+}
+
+.timeline-playhead-grab::after {
+  top: 58px;
+}
+
 .lower-context-panels {
   width: 100%;
   margin: 0;
   padding: 18px 24px 20px;
   background: #ffffff;
   border-top: 1px solid var(--border-color);
+}
+
+.lower-context-panels > * {
+  height: 100%;
+  min-height: 0;
+}
+
+.clip-preview-panel,
+.clip-inspector-panel,
+.timeline-chat-panel {
+  height: 100%;
+}
+
+.clip-preview-media {
+  width: min(220px, 82%);
+  max-height: 332px;
+}
+
+.timeline-chat-log,
+.clip-tab-body {
+  min-height: 0;
 }

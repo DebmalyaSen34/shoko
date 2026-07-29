@@ -19,6 +19,7 @@ type ClipInspectorPanelProps = {
 };
 
 const WAVEFORM_PATTERN = [16, 29, 42, 55, 26, 39, 52, 23, 36, 49, 20, 33, 46, 17, 30, 43, 56, 27, 40, 53];
+const ASSET_PREVIEW_LIMIT = 12;
 type AssetReferenceInput = string | AssetFile | ClipAssetReference;
 
 export function ClipInspectorPanel({
@@ -37,8 +38,7 @@ export function ClipInspectorPanel({
   const assets = selectedVersion?.selected_assets?.length
     ? (selectedVersion.selected_assets as AssetReferenceInput[]).map((asset) => assetFromReference(asset, projectAssets))
     : projectAssets;
-  const visibleAssets = showAllAssets ? assets : assets.slice(0, 6);
-  const assetTabCount = showAllAssets ? assets.length : Math.min(assets.length, 6);
+  const visibleAssets = showAllAssets ? assets : assets.slice(0, ASSET_PREVIEW_LIMIT);
 
   return (
     <section className="clip-inspector-panel">
@@ -50,7 +50,7 @@ export function ClipInspectorPanel({
           Details
         </button>
         <button className={activeTab === "assets" ? "active" : ""} type="button" onClick={() => setActiveTab("assets")}>
-          Assets ({assetTabCount})
+          Assets ({assets.length})
         </button>
       </div>
 
@@ -90,7 +90,7 @@ export function ClipInspectorPanel({
       )}
 
       {activeTab === "assets" && (
-        <div className="clip-tab-body">
+        <div className="clip-tab-body assets-tab-body">
           <div className="selected-section-title">
             <Icon name="box" />
             <span>Assets used in this clip</span>
@@ -130,9 +130,11 @@ export function ClipInspectorPanel({
               </button>
             ))}
           </div>
-          <button className="clip-assets-view-all" type="button" onClick={() => setShowAllAssets((value) => !value)} disabled={assets.length <= 6}>
-            {showAllAssets ? "Show Fewer Assets" : "View All Assets"}
-          </button>
+          {assets.length > ASSET_PREVIEW_LIMIT && (
+            <button className="clip-assets-view-all" type="button" onClick={() => setShowAllAssets((value) => !value)}>
+              {showAllAssets ? "Show Fewer Assets" : `View All Assets (${assets.length})`}
+            </button>
+          )}
         </div>
       )}
     </section>

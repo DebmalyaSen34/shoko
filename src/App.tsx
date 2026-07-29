@@ -12,7 +12,7 @@ import { TimelineWorkspace } from "./components/timeline/TimelineWorkspace";
 import { ToastStack } from "./components/ToastStack";
 import { apiUrl, API_BASE, initializeApiBase, staticUrl } from "./lib/api";
 import { clipBasename } from "./lib/format";
-import type { GenerateVideoOptions, GeneratedVideo, PreviewState, ProjectData, PromptRecord, PromptVersion, Provider, ResultState, Toast } from "./types";
+import type { GenerateVideoOptions, GeneratedVideo, PreviewState, ProjectData, ProjectJob, PromptRecord, PromptVersion, Provider, ResultState, Toast } from "./types";
 
 const DEFAULT_VIDEO_OPTIONS: GenerateVideoOptions = {
   resolution: "720p",
@@ -30,6 +30,10 @@ type PendingVideoRequest = {
   resolve: (result: { video: GeneratedVideo; generated_videos: GeneratedVideo[] }) => void;
   reject: (error: Error) => void;
 };
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 function loadRememberedVideoOptions(): GenerateVideoOptions {
   try {
@@ -69,7 +73,6 @@ function App() {
   const [videoOptions, setVideoOptions] = useState<GenerateVideoOptions>(() => loadRememberedVideoOptions());
   const [pendingVideoRequest, setPendingVideoRequest] = useState<PendingVideoRequest | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
-  const eventSourcesRef = useRef<Record<number, EventSource>>({});
 
   const notify = useCallback((message: string, type: Toast["type"] = "info") => {
     const id = Date.now() + Math.random();
@@ -153,7 +156,6 @@ function App() {
 
     return () => {
       cancelled = true;
-      Object.values(eventSourcesRef.current).forEach((source) => source.close());
     };
   }, [loadProject]);
 
@@ -206,15 +208,32 @@ function App() {
     });
   }, []);
 
+  const waitForProjectJob = useCallback(
+    async (jobId: string) => {
+      if (!activeProject) throw new Error("No active project selected.");
+      for (;;) {
+        const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(activeProject)}/jobs/${encodeURIComponent(jobId)}`));
+        if (!response.ok) throw new Error(await response.text());
+        const job = (await response.json()) as ProjectJob;
+        if (job.status === "succeeded") return job;
+        if (job.status === "failed" || job.status === "cancelled") {
+          throw new Error(job.error || `${job.type} job ${job.status}.`);
+        }
+        await sleep(1400);
+      }
+    },
+    [activeProject],
+  );
+
   const runGenerateVideo = useCallback(
     async (clipIndex: number, promptVersionIndex: number | undefined, options: GenerateVideoOptions) => {
       if (!activeProject) throw new Error("No active project selected.");
       const key = `${clipIndex}:${promptVersionIndex ?? "latest"}`;
       setGeneratingVideoKeys((current) => new Set(current).add(key));
-      notify("Video generation started with Segmind...");
+      notify("Video generation job queued with Segmind...");
 
       try {
-        const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(activeProject)}/generate-video`), {
+        const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(activeProject)}/jobs/generate-video`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -243,10 +262,13 @@ function App() {
           }
           throw new Error(message);
         }
-        const data = (await response.json()) as { video: GeneratedVideo; generated_videos: GeneratedVideo[] };
-        notify("Video generated successfully.", "success");
+        const queuedJob = (await response.json()) as ProjectJob;
+        const job = await waitForProjectJob(queuedJob.id);
+        const data = (job.result || {}) as { video?: GeneratedVideo; generated_videos?: GeneratedVideo[] };
+        if (!data.video) throw new Error("Video job succeeded but did not return a generated video.");
+        notify("Video generated and self-evaluated.", "success");
         await loadProject(activeProject, { preserveTimelineScroll: true });
-        return data;
+        return { video: data.video, generated_videos: data.generated_videos || [] };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Video generation failed.";
         notify(message, "error");
@@ -259,7 +281,7 @@ function App() {
         });
       }
     },
-    [activeProject, loadProject, notify],
+    [activeProject, loadProject, notify, waitForProjectJob],
   );
 
   const rememberVideoOptions = useCallback(
@@ -303,62 +325,46 @@ function App() {
   const executeWorkflow = useCallback(
     (feedbackIndex: number) => {
       if (!activeProject) return;
-      eventSourcesRef.current[feedbackIndex]?.close();
 
       setRunningIndexes((current) => new Set(current).add(feedbackIndex));
-      const logs = [
-        `[SYSTEM] Initializing pipeline connection for feedback index ${feedbackIndex}...`,
-        `[SYSTEM] Selected AI Provider: ${provider.toUpperCase()}`,
-      ];
-      notify(`Workflow initiated for feedback index ${feedbackIndex}...`);
+      notify(`Workflow job queued for feedback index ${feedbackIndex}...`);
 
-      const source = new EventSource(
-        apiUrl(
-          `/api/run-workflow?project=${encodeURIComponent(activeProject)}&index=${feedbackIndex}&provider=${provider}`,
-        ),
-      );
-      eventSourcesRef.current[feedbackIndex] = source;
-
-      source.onmessage = (event) => {
-        const line = event.data as string;
-        logs.push(line);
-
-        if (line.includes("[SUCCESS]") || line.startsWith("[SUCCESS]")) {
-          source.close();
-          delete eventSourcesRef.current[feedbackIndex];
+      void (async () => {
+        try {
+          const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(activeProject)}/jobs/workflow`), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ feedback_index: feedbackIndex, provider }),
+          });
+          if (!response.ok) throw new Error(await response.text());
+          const queuedJob = (await response.json()) as ProjectJob;
+          const job = await waitForProjectJob(queuedJob.id);
           setRunningIndexes((current) => {
             const next = new Set(current);
             next.delete(feedbackIndex);
             return next;
           });
-          notify("Prompt plan generated successfully.", "success");
+          const selfEval = (job.result || {}).self_evaluation as { verdict?: string; next_action?: { type?: string } } | undefined;
+          notify(
+            selfEval?.verdict
+              ? `Prompt plan generated. Self-evaluation: ${selfEval.verdict}.`
+              : "Prompt plan generated successfully.",
+            "success",
+          );
           void loadProject(activeProject, { preserveTimelineScroll: true });
-        } else if (line.includes("[ERROR]") || line.startsWith("[ERROR]")) {
-          source.close();
-          delete eventSourcesRef.current[feedbackIndex];
+        } catch (error) {
           setRunningIndexes((current) => {
             const next = new Set(current);
             next.delete(feedbackIndex);
             return next;
           });
-          setErrorLog(logs.join("\n"));
+          const message = error instanceof Error ? error.message : "Workflow execution failed.";
+          setErrorLog(message);
           notify(`Workflow execution failed for feedback index ${feedbackIndex}`, "error");
         }
-      };
-
-      source.onerror = () => {
-        source.close();
-        delete eventSourcesRef.current[feedbackIndex];
-        setRunningIndexes((current) => {
-          const next = new Set(current);
-          next.delete(feedbackIndex);
-          return next;
-        });
-        setErrorLog(`${logs.join("\n")}\n[CONNECTION ERROR] EventStream connection dropped or interrupted.`);
-        notify(`Workflow execution failed for feedback index ${feedbackIndex}`, "error");
-      };
+      })();
     },
-    [activeProject, loadProject, notify, provider],
+    [activeProject, loadProject, notify, provider, waitForProjectJob],
   );
 
   const copyPrompt = useCallback(async () => {

@@ -7,9 +7,12 @@ import type {
   ClipChatMedia,
   ClipChatMessage,
   ClipChatResponse,
+  ClipState,
   GeneratedVideo,
   ClipChatSnapshot,
   FeedbackGroup,
+  ProjectEvent,
+  ProjectJob,
   PromptRecord,
   PromptVersion,
   PreviewState,
@@ -79,6 +82,8 @@ export function ClipChatPanel({
 }: ClipChatPanelProps) {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ClipChatMessage[]>([]);
+  const [clipState, setClipState] = useState<ClipState | null>(null);
+  const [events, setEvents] = useState<ProjectEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [generatingVideo, setGeneratingVideo] = useState(false);
@@ -92,11 +97,20 @@ export function ClipChatPanel({
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const feedbackItems = feedback?.feedback_items || [];
-  const versions = getVersions(prompt);
-  const latestVersion = versions[versions.length - 1] || prompt || null;
+  const activePrompt = clipState?.active_prompt;
+  const versions = activePrompt?.versions?.length ? activePrompt.versions : getVersions(prompt);
+  const latestVersion = activePrompt?.version || versions[versions.length - 1] || prompt || null;
   const runnableFeedback = feedbackItems[0];
-  const running = feedbackItems.some((item) => runningIndexes.has(item.raw_index));
-  const videoBusy = generatingVideo || externalGeneratingVideo;
+  const activeJobs = clipState?.job_state.active_jobs || [];
+  const recentJobs = clipState?.job_state.recent_jobs || [];
+  const workflowJobs = activeJobs.filter((job) => job.type === "workflow");
+  const videoJobs = activeJobs.filter((job) => job.type === "generate_video");
+  const running = feedbackItems.some((item) => runningIndexes.has(item.raw_index)) || workflowJobs.length > 0;
+  const videoBusy = generatingVideo || externalGeneratingVideo || videoJobs.length > 0;
+  const activeVideo = clipState?.video_state.active_video || clipState?.video_state.latest_video;
+  const selectedAssets = clipState?.asset_state.selected_assets || [];
+  const staleRuns = clipState?.agent_state.recent_runs.filter((run) => run.freshness?.is_stale) || [];
+  const selfEvaluation = clipState?.agent_state.recent_runs.find((run) => run.self_evaluation)?.self_evaluation;
   const clearStorageKey = useMemo(
     () => `loka15.clip-chat.cleared-at:${projectData.project_name}:${clipIndex}`,
     [clipIndex, projectData.project_name],
@@ -127,6 +141,8 @@ export function ClipChatPanel({
         const data = (await response.json()) as ClipChatSnapshot;
         if (cancelled) return;
         setMessages(data.messages);
+        setClipState(data.context.clip_state);
+        void loadEvents(data.context.clip_state.clip_key);
       } catch (loadError) {
         if (cancelled) return;
         const message = loadError instanceof Error ? loadError.message : "Failed to load clip chat.";
@@ -142,6 +158,44 @@ export function ClipChatPanel({
       cancelled = true;
     };
   }, [clipIndex, projectData.project_name]);
+
+  useEffect(() => {
+    if (!clipState?.job_state.active_jobs.length) return;
+    const timer = window.setInterval(() => {
+      void refreshClipState();
+    }, 1800);
+    return () => window.clearInterval(timer);
+  }, [clipState?.clip_state_id, clipState?.job_state.active_jobs.length]);
+
+  useEffect(() => {
+    if (running) {
+      void refreshClipState();
+    }
+  }, [running]);
+
+  async function refreshClipState() {
+    try {
+      const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectData.project_name)}/clips/${clipIndex}/state`));
+      if (!response.ok) throw new Error(await response.text());
+      const state = (await response.json()) as ClipState;
+      setClipState(state);
+      void loadEvents(state.clip_key);
+    } catch {
+      // Keep the last known state visible.
+    }
+  }
+
+  async function loadEvents(clipKey?: string) {
+    const query = clipKey ? `?limit=8&clip_key=${encodeURIComponent(clipKey)}` : "?limit=8";
+    try {
+      const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectData.project_name)}/events${query}`));
+      if (!response.ok) return;
+      const data = (await response.json()) as { events: ProjectEvent[] };
+      setEvents(data.events || []);
+    } catch {
+      // Event history is helpful but non-blocking.
+    }
+  }
 
   useEffect(() => {
     setClearedAt(window.localStorage.getItem(clearStorageKey) || "");
@@ -229,18 +283,8 @@ export function ClipChatPanel({
       if (!response.ok) throw new Error(await response.text());
       const data = (await response.json()) as ClipChatResponse;
       setMessages(data.messages);
-      const autonomousWorkflow = data.suggested_actions.find(
-        (action) => action.type === "execute_workflow" && action.autonomous,
-      );
-      if (autonomousWorkflow) {
-        runWorkflowFromChat(autonomousWorkflow.feedback_index);
-      }
-      const autonomousVideo = data.suggested_actions.find(
-        (action) => action.type === "generate_video" && action.autonomous,
-      );
-      if (autonomousVideo) {
-        void generateVideoFromChat();
-      }
+      setClipState(data.clip_state);
+      void loadEvents(data.clip_state.clip_key);
     } catch (sendError) {
       const message = sendError instanceof Error ? sendError.message : "Failed to send message.";
       setError(message);
@@ -264,6 +308,7 @@ export function ClipChatPanel({
 
     onExecuteWorkflow(index);
     setMessages((current) => [...current, localToolMessage(`Workflow started for feedback index ${index} using ${provider.toUpperCase()}.`)]);
+    window.setTimeout(() => void refreshClipState(), 800);
   }
 
   function prepareVideoGeneration() {
@@ -291,7 +336,7 @@ export function ClipChatPanel({
       return;
     }
 
-    const promptVersionIndex = Math.max(versions.length - 1, 0);
+    const promptVersionIndex = activePrompt?.version_index ?? Math.max(versions.length - 1, 0);
     setGeneratingVideo(true);
     setMessages((current) => [...current, localToolMessage("Choose video generation options to start the Segmind render.")]);
     try {
@@ -311,6 +356,7 @@ export function ClipChatPanel({
         ],
       };
       setMessages((current) => [...current, videoMessage]);
+      void refreshClipState();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Video generation failed.";
       if (message === "Video generation cancelled.") return;
@@ -329,12 +375,75 @@ export function ClipChatPanel({
       prepareVideoGeneration();
     } else if (action.type === "send_message" && action.prompt) {
       void sendMessage(action.prompt);
+    } else if (action.type === "set_active_prompt_version" && action.prompt_version_id) {
+      const version = versions.find((candidate) => candidate.prompt_version_id === action.prompt_version_id);
+      if (version) void setActivePromptVersion(version);
+    } else if (action.type === "detach_asset") {
+      void detachAsset(action.asset_path, action.asset_id);
+    } else if (action.type === "attach_asset" || action.type === "mark_feedback_resolved" || action.type === "add_reference_frame") {
+      void sendMessage(action.prompt || action.reason || action.label);
+    }
+  }
+
+  async function setActivePromptVersion(version: PromptVersion) {
+    const versionId = version.prompt_version_id;
+    if (!versionId) return;
+    try {
+      const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectData.project_name)}/clips/${clipIndex}/selection`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active_prompt_version_id: versionId }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data = (await response.json()) as { clip_state: ClipState };
+      setClipState(data.clip_state);
+      void loadEvents(data.clip_state.clip_key);
+      setMessages((current) => [...current, localToolMessage(`Active prompt switched to version ${(version.version_index ?? 0) + 1}.`)]);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Failed to switch prompt version.");
+    }
+  }
+
+  async function detachAsset(assetPath?: string | null, assetId?: string | null) {
+    if (!clipState) return;
+    const nextAssets = (clipState.selection_state.selected_assets || []).filter((asset) => {
+      if (assetId && asset.asset_id === assetId) return false;
+      if (assetPath && asset.path === assetPath) return false;
+      return true;
+    });
+    try {
+      const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectData.project_name)}/clips/${clipIndex}/selection`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selected_assets: nextAssets }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data = (await response.json()) as { clip_state: ClipState };
+      setClipState(data.clip_state);
+      void loadEvents(data.clip_state.clip_key);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Failed to detach asset.");
+    }
+  }
+
+  async function cancelJob(job: ProjectJob) {
+    try {
+      const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectData.project_name)}/jobs/${encodeURIComponent(job.id)}/cancel`), {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error(await response.text());
+      await refreshClipState();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Failed to cancel job.");
     }
   }
 
   function actionIcon(action: ClipChatAction) {
     if (action.type === "execute_workflow") return "refresh";
     if (action.type === "prepare_video" || action.type === "generate_video") return "video";
+    if (action.type === "attach_asset" || action.type === "detach_asset") return "file";
+    if (action.type === "mark_feedback_resolved") return "check";
+    if (action.type === "add_reference_frame") return "image";
     return "chat";
   }
 
@@ -406,6 +515,114 @@ export function ClipChatPanel({
           <Icon name="video" /> {videoBusy ? "Generating..." : "Generate Video"}
         </button>
       </div>
+
+      {clipState && (
+        <div className="clip-agent-state">
+          {(clipState.freshness.stale_reasons.length > 0 || staleRuns.length > 0) && (
+            <div className="agent-state-alert">
+              <Icon name="warning" />
+              <span>
+                {clipState.freshness.stale_reasons.length > 0
+                  ? `State warning: ${clipState.freshness.stale_reasons.join(", ")}`
+                  : `${staleRuns.length} prior agent run${staleRuns.length === 1 ? "" : "s"} stale`}
+              </span>
+            </div>
+          )}
+
+          <div className="agent-state-grid">
+            <div>
+              <span>Prompt</span>
+              <strong>{activePrompt?.prompt_ready ? `v${(activePrompt.version_index ?? 0) + 1}` : "Missing"}</strong>
+            </div>
+            <div>
+              <span>Video</span>
+              <strong>{activeVideo ? activeVideo.label || `v${activeVideo.version}` : "Missing"}</strong>
+            </div>
+            <div>
+              <span>Assets</span>
+              <strong>{selectedAssets.length}</strong>
+            </div>
+            <div>
+              <span>Jobs</span>
+              <strong>{activeJobs.length ? `${activeJobs.length} active` : recentJobs[0]?.status || "Idle"}</strong>
+            </div>
+          </div>
+
+          {versions.length > 1 && (
+            <div className="agent-state-row">
+              <span>Active prompt</span>
+              <div className="agent-chip-row">
+                {versions.map((version, index) => (
+                  <button
+                    type="button"
+                    className={`agent-chip ${activePrompt?.version_id === version.prompt_version_id ? "active" : ""}`}
+                    key={version.prompt_version_id || index}
+                    onClick={() => void setActivePromptVersion(version)}
+                  >
+                    v{(version.version_index ?? index) + 1}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {selectedAssets.length > 0 && (
+            <div className="agent-state-row">
+              <span>Structured assets</span>
+              <div className="agent-chip-row">
+                {selectedAssets.slice(0, 4).map((asset) => (
+                  <button
+                    type="button"
+                    className={`agent-chip ${asset.missing ? "warning" : ""}`}
+                    key={asset.asset_id || asset.path}
+                    title={asset.reason || asset.selected_path || asset.path}
+                    onClick={() => void detachAsset(asset.selected_path || asset.path, asset.asset_id)}
+                  >
+                    {asset.role || "asset"} · {asset.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {recentJobs.length > 0 && (
+            <div className="agent-state-row">
+              <span>Jobs</span>
+              <div className="agent-job-list">
+                {recentJobs.slice(0, 3).map((job) => {
+                  const latestLog = job.logs?.[job.logs.length - 1]?.message;
+                  const cancellable = job.status === "queued" || job.status === "running" || job.status === "cancelling";
+                  return (
+                  <div className="agent-job-row" key={job.id}>
+                    <strong>{job.type.replace(/_/g, " ")}</strong>
+                    <em>{job.status}</em>
+                    {cancellable ? <button type="button" onClick={() => void cancelJob(job)}>Cancel</button> : <span />}
+                    {latestLog && <small>{latestLog}</small>}
+                  </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {selfEvaluation && (
+            <div className="agent-state-alert muted">
+              <Icon name="check" />
+              <span>{formatSelfEvaluation(selfEvaluation)}</span>
+            </div>
+          )}
+
+          {events.length > 0 && (
+            <div className="agent-event-strip">
+              {events.slice(-3).map((event) => (
+                <span key={event.id} title={event.event_hash}>
+                  #{event.sequence} {event.type.replace(/_/g, " ")}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="clip-chat-log" ref={listRef}>
         {loading && <div className="inline-loader"><span className="loader-orbit" aria-hidden="true"><span /><span /><span /></span>Loading chat...</div>}
@@ -551,6 +768,7 @@ function AgentRunSummary({ run }: { run: ClipAgentRun }) {
         <span>{formatAgentRunStatus(run.autonomy_level)}</span>
         <span>{Math.round((run.confidence || 0) * 100)}% confidence</span>
         {run.approval_required && <span>approval needed</span>}
+        {run.freshness?.is_stale && <span>stale: {run.freshness.stale_reasons.join(", ")}</span>}
       </div>
       {steps.length > 0 && (
         <ol className="agent-run-steps">
@@ -571,6 +789,11 @@ function AgentRunSummary({ run }: { run: ClipAgentRun }) {
           ))}
         </div>
       )}
+      {run.self_evaluation && (
+        <div className="agent-run-results">
+          <span>{formatSelfEvaluation(run.self_evaluation)}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -579,6 +802,13 @@ function formatToolResult(result: Record<string, unknown>) {
   const tool = typeof result.tool === "string" ? formatAgentRunStatus(result.tool) : "tool";
   const message = typeof result.message === "string" ? result.message : "";
   return message ? `${tool}: ${message}` : tool;
+}
+
+function formatSelfEvaluation(value: Record<string, unknown>) {
+  const verdict = typeof value.verdict === "string" ? value.verdict.replace(/_/g, " ") : "evaluated";
+  const nextAction = value.next_action && typeof value.next_action === "object" ? value.next_action as Record<string, unknown> : null;
+  const nextType = typeof nextAction?.type === "string" ? nextAction.type.replace(/_/g, " ") : "";
+  return nextType ? `Self-evaluation: ${verdict}. Next: ${nextType}.` : `Self-evaluation: ${verdict}.`;
 }
 
 function ChatMediaGallery({ media, onPreview }: { media: ClipChatMedia[]; onPreview: (preview: PreviewState) => void }) {

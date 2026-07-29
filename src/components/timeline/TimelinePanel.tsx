@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, MouseEvent, RefObject, SetStateAction } from "react";
-import type { FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptRecord, PromptVersion, Provider, TimelineClip, TimelineFilmstripFrame, TimelineWaveformSegment } from "../../types";
+import type { ClipState, FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptRecord, PromptVersion, Provider, TimelineClip, TimelineFilmstripFrame, TimelineWaveformSegment } from "../../types";
 import { basename, formatSeconds, formatTimecode, getVersions } from "../../lib/format";
 import { apiUrl, staticUrl } from "../../lib/api";
 import { EmptyState } from "../EmptyState";
@@ -186,6 +186,7 @@ function CompactTimeline({
   const drag = useRef({ down: false, mode: "pan" as "pan" | "scrub", startX: 0, scrollLeft: 0 });
   const requestedFilmstrips = useRef<Set<string>>(new Set());
   const [selectedClipIndex, setSelectedClipIndex] = useState(REFERENCE_SELECTED_CLIP_INDEX);
+  const [selectedClipState, setSelectedClipState] = useState<ClipState | null>(null);
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [filmstrips, setFilmstrips] = useState<Record<number, FilmstripLoadState>>({});
   const [waveform, setWaveform] = useState<WaveformLoadState>({ status: "idle", segments: [] });
@@ -233,7 +234,28 @@ function CompactTimeline({
     requestedFilmstrips.current.clear();
     setFilmstrips({});
     setWaveform({ status: "idle", segments: [] });
+    setSelectedClipState(null);
   }, [projectData?.project_name]);
+
+  useEffect(() => {
+    if (!projectData?.project_name || projectData.timeline.length === 0) return;
+    const controller = new AbortController();
+    const clipIndex = Math.min(Math.max(selectedClipIndex, 0), projectData.timeline.length - 1);
+    fetch(apiUrl(`/api/projects/${encodeURIComponent(projectData.project_name)}/clips/${clipIndex}/state`), {
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error("Failed to load clip state");
+        return response.json() as Promise<ClipState>;
+      })
+      .then((state) => setSelectedClipState(state))
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setSelectedClipState(null);
+      });
+
+    return () => controller.abort();
+  }, [projectData?.project_name, projectData?.timeline.length, selectedClipIndex]);
 
   useEffect(() => {
     if (!projectData?.project_name) return;
@@ -333,10 +355,11 @@ function CompactTimeline({
   const selectedLayout = layouts.find((layout) => layout.index === clampedSelectedClipIndex) || layouts[0];
   const selectedClip = selectedLayout.clip;
   const selectedFeedback = findFeedback(projectData, selectedClip, clampedSelectedClipIndex);
-  const selectedPrompt = findPrompt(selectedClip.clip, clampedSelectedClipIndex);
-  const selectedVersionsForClip = getVersions(selectedPrompt);
-  const selectedVersionIndex = Math.max(selectedVersionsForClip.length - 1, 0);
-  const selectedVersion = selectedVersionsForClip[selectedVersionIndex] || selectedPrompt || undefined;
+  const backendPromptState = selectedClipState?.clip_index === clampedSelectedClipIndex ? selectedClipState.active_prompt : null;
+  const selectedPrompt = backendPromptState?.prompt || findPrompt(selectedClip.clip, clampedSelectedClipIndex);
+  const selectedVersionsForClip = backendPromptState?.versions?.length ? backendPromptState.versions : getVersions(selectedPrompt);
+  const selectedVersionIndex = backendPromptState?.version_index ?? Math.max(selectedVersionsForClip.length - 1, 0);
+  const selectedVersion = backendPromptState?.version || selectedVersionsForClip[selectedVersionIndex] || selectedPrompt || undefined;
   const clampedPlayheadSeconds = Math.min(Math.max(playheadSeconds, 0), totalSeconds);
   const playheadLeft = TIMELINE_GUTTER + clampedPlayheadSeconds * pxPerSecond;
   const markers = buildTimelineMarkers(projectData, layouts, pxPerSecond);
@@ -484,6 +507,7 @@ function CompactTimeline({
         projectData={projectData}
         provider={provider}
         clipIndex={clampedSelectedClipIndex}
+        clipState={selectedClipState?.clip_index === clampedSelectedClipIndex ? selectedClipState : null}
         clip={selectedClip}
         feedback={selectedFeedback}
         prompt={selectedPrompt}
@@ -658,6 +682,7 @@ function SelectedClipDock({
   projectData,
   provider,
   clipIndex,
+  clipState,
   clip,
   feedback,
   prompt,
@@ -676,6 +701,7 @@ function SelectedClipDock({
   projectData: ProjectData;
   provider: Provider;
   clipIndex: number;
+  clipState?: ClipState | null;
   clip: TimelineClip;
   feedback?: FeedbackGroup;
   prompt: PromptRecord | null;
@@ -702,6 +728,7 @@ function SelectedClipDock({
         clip={clip}
         feedbackItems={feedbackItems}
         projectData={projectData}
+        clipState={clipState}
         versions={versions}
         selectedVersion={selectedVersion}
         selectedVersionIndex={selectedVersionIndex}

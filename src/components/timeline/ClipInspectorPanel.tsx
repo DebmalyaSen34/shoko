@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AssetFile, ClipAssetReference, FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptVersion, TimelineClip } from "../../types";
+import type { AssetFile, ClipAssetReference, ClipState, FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptVersion, TimelineClip } from "../../types";
 import { staticUrl } from "../../lib/api";
 import { basename, versionLabel } from "../../lib/format";
 import { Icon } from "../Icon";
@@ -11,6 +11,7 @@ type ClipInspectorPanelProps = {
   clip: TimelineClip;
   feedbackItems: FeedbackGroup["feedback_items"];
   projectData: ProjectData;
+  clipState?: ClipState | null;
   versions: PromptVersion[];
   selectedVersion?: PromptVersion;
   selectedVersionIndex: number;
@@ -28,6 +29,7 @@ export function ClipInspectorPanel({
   clip,
   feedbackItems,
   projectData,
+  clipState,
   versions,
   selectedVersion,
   selectedVersionIndex,
@@ -47,11 +49,16 @@ export function ClipInspectorPanel({
   const videoPromptSection = selectedPromptVersion?.sections.find((section) => section.kind === "video");
   const supportingPromptSections = selectedPromptVersion?.sections.filter((section) => section.kind !== "video") || [];
   const projectAssets = flattenProjectAssets(projectData);
-  const assets = selectedVersion?.selected_assets?.length
+  const backendAssets = clipState?.asset_state.selected_assets || [];
+  const assets = clipState
+    ? backendAssets
+    : selectedVersion?.selected_assets?.length
     ? (selectedVersion.selected_assets as AssetReferenceInput[]).map((asset) => assetFromReference(asset, projectAssets))
     : projectAssets;
   const visibleAssets = showAllAssets ? assets : assets.slice(0, ASSET_PREVIEW_LIMIT);
-  const generatedVideos = collectGeneratedVideos(versions);
+  const generatedVideos = clipState
+    ? clipState.video_state.generated_videos.map((video) => ({ video, versionIndex: selectedVersionIndex }))
+    : collectGeneratedVideos(versions);
 
   useEffect(() => {
     setPromptVersionIndex(selectedVersionIndex);
@@ -162,7 +169,7 @@ export function ClipInspectorPanel({
             <span>Assets used in this clip</span>
           </div>
           <div className={`clip-assets-grid ${showAllAssets ? "show-all" : ""}`}>
-            {visibleAssets.map((asset) => (
+            {visibleAssets.length ? visibleAssets.map((asset) => (
               <button
                 className={`clip-asset-tile ${asset.type}`}
                 key={`${asset.name}-${asset.url || asset.path}`}
@@ -194,7 +201,11 @@ export function ClipInspectorPanel({
                 </div>
                 <span title={asset.name}>{asset.name}</span>
               </button>
-            ))}
+            )) : (
+              <div className="compact-feedback-empty">
+                <Icon name="box" /> No selected assets for this clip
+              </div>
+            )}
           </div>
           {assets.length > ASSET_PREVIEW_LIMIT && (
             <button className="clip-assets-view-all" type="button" onClick={() => setShowAllAssets((value) => !value)}>

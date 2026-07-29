@@ -11,6 +11,8 @@ export type AssetFile = {
   role?: string;
   source?: string;
   selected_path?: string;
+  reason?: string;
+  confidence?: number;
   missing?: boolean;
 };
 
@@ -305,6 +307,7 @@ export type ClipAgentRun = {
   suggested_actions: ClipChatAction[];
   tool_results?: Record<string, unknown>[];
   errors?: string[];
+  self_evaluation?: Record<string, unknown>;
   freshness?: {
     is_stale: boolean;
     stale_reasons: string[];

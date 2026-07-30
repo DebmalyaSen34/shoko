@@ -11,6 +11,12 @@ use std::{
 
 use tauri::Manager;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 struct BackendManager {
     base_url: Mutex<Option<String>>,
     child: Mutex<Option<Child>>,
@@ -89,7 +95,9 @@ impl BackendManager {
             thread::sleep(Duration::from_millis(250));
         }
 
-        Err(format!("Backend did not become healthy at {base_url}/health"))
+        Err(format!(
+            "Backend did not become healthy at {base_url}/health"
+        ))
     }
 
     fn stop(&self) {
@@ -161,6 +169,8 @@ fn spawn_backend_binary(binary: PathBuf, port: u16, shutdown_token: &str) -> Res
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
+    configure_hidden_console(&mut command);
+
     command
         .spawn()
         .map_err(|error| format!("Could not start bundled backend {:?}: {error}", binary))
@@ -188,7 +198,8 @@ fn spawn_python_dev_backend(port: u16, shutdown_token: &str) -> Result<Child, St
         }
     });
 
-    Command::new(&python)
+    let mut command = Command::new(&python);
+    command
         .current_dir(&backend_dir)
         .arg("-m")
         .arg("uvicorn")
@@ -202,14 +213,16 @@ fn spawn_python_dev_backend(port: u16, shutdown_token: &str) -> Result<Child, St
         .env("LOKA_BACKEND_SHUTDOWN_TOKEN", shutdown_token)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| {
-            format!(
-                "Could not start development backend with {python} in {:?}: {error}",
-                backend_dir
-            )
-        })
+        .stderr(Stdio::null());
+
+    configure_hidden_console(&mut command);
+
+    command.spawn().map_err(|error| {
+        format!(
+            "Could not start development backend with {python} in {:?}: {error}",
+            backend_dir
+        )
+    })
 }
 
 fn spawn_shell_command(command: &str, port: u16, shutdown_token: &str) -> Result<Child, String> {
@@ -229,12 +242,29 @@ fn spawn_shell_command(command: &str, port: u16, shutdown_token: &str) -> Result
         .env("LOKA_BACKEND_SHUTDOWN_TOKEN", shutdown_token)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+
+    configure_hidden_console(&mut child_command);
+
+    child_command
         .spawn()
         .map_err(|error| format!("Could not start backend command `{command}`: {error}"))
 }
 
-fn http_request(method: &str, base_url: &str, path: &str, shutdown_token: Option<&str>) -> Option<String> {
+#[cfg(windows)]
+fn configure_hidden_console(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn configure_hidden_console(_command: &mut Command) {}
+
+fn http_request(
+    method: &str,
+    base_url: &str,
+    path: &str,
+    shutdown_token: Option<&str>,
+) -> Option<String> {
     let port = base_url.rsplit(':').next()?.parse::<u16>().ok()?;
     let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
@@ -252,26 +282,24 @@ fn http_request(method: &str, base_url: &str, path: &str, shutdown_token: Option
 }
 
 #[tauri::command]
-fn backend_base_url(
+async fn backend_base_url(
     app: tauri::AppHandle,
     manager: tauri::State<'_, Arc<BackendManager>>,
 ) -> Result<String, String> {
-    manager.start(&app)
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || manager.start(&app))
+        .await
+        .map_err(|error| format!("Backend startup task failed: {error}"))?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let backend_manager = Arc::new(BackendManager::new());
-    let setup_manager = backend_manager.clone();
     let shutdown_manager = backend_manager.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(backend_manager)
-        .setup(move |app| {
-            setup_manager.start(&app.handle())?;
-            Ok(())
-        })
         .on_window_event(move |_window, event| {
             if matches!(*event, tauri::WindowEvent::Destroyed) {
                 shutdown_manager.stop();

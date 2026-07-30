@@ -1,14 +1,23 @@
 export type Provider = "gemini" | "openai";
 
 export type AssetFile = {
+  asset_id?: string;
+  category?: string | null;
   name: string;
   path: string;
   url: string;
   type: "image" | "video" | "audio" | "other";
   size: string;
+  role?: string;
+  source?: string;
+  selected_path?: string;
+  reason?: string;
+  confidence?: number;
+  missing?: boolean;
 };
 
 export type FeedbackItem = {
+  feedback_item_id?: string;
   timestamp?: string;
   category: string;
   remark: string;
@@ -16,7 +25,9 @@ export type FeedbackItem = {
 };
 
 export type FeedbackGroup = {
+  feedback_id?: string;
   clip_used: string;
+  category?: "audio" | "video" | "both" | string;
   clip_occurrence?: number | null;
   feedback_items: FeedbackItem[];
 };
@@ -31,6 +42,28 @@ export type TimelineClip = {
   clip_url?: string | null;
 };
 
+export type TimelineFilmstripFrame = {
+  offset_s: number;
+  url: string;
+};
+
+export type TimelineAudioSegment = {
+  audio_index?: number;
+  clip: string;
+  start_tc: string;
+  end_tc: string;
+  start_s: number;
+  end_s: number;
+  duration_s: number;
+  audio_url?: string | null;
+  audio_path?: string | null;
+};
+
+export type TimelineWaveformSegment = TimelineAudioSegment & {
+  peaks: number[];
+  error?: string;
+};
+
 export type QualityReport = {
   passed?: boolean;
   feedback_adherence?: string;
@@ -40,6 +73,11 @@ export type QualityReport = {
 };
 
 export type PromptVersion = {
+  prompt_id?: string;
+  prompt_version_id?: string;
+  version_index?: number;
+  is_latest?: boolean;
+  clip_index?: number;
   timestamp?: string;
   provider?: string;
   video_provider?: string;
@@ -59,6 +97,9 @@ export type PromptVersion = {
   initial_frame_image_path?: string;
   initial_frame_prompt?: string;
   clip_frame_paths?: string[];
+  referenced_frames?: ReferencedFrameState[];
+  referenced_frame_paths?: string[];
+  referenced_frame_labels?: string[];
   audio_used?: string | null;
   audio_path?: string | null;
   audio_url?: string | null;
@@ -92,6 +133,7 @@ export type PromptRecord = PromptVersion & {
 };
 
 export type GeneratedVideo = {
+  generated_video_id?: string;
   version: number;
   timestamp?: string;
   provider?: string;
@@ -146,12 +188,18 @@ export type GenerateVideoOptions = {
 export type ProjectData = {
   project_name: string;
   timeline: TimelineClip[];
+  audio_timeline?: {
+    dedicated_audio_tracks?: TimelineAudioSegment[];
+    embedded_video_audio?: TimelineAudioSegment[];
+  };
   feedback: FeedbackGroup[];
   assets: Record<string, AssetFile[]>;
   prompts: PromptRecord[];
   sequence_name: string;
   total_duration_tc: string;
   total_duration_s: number;
+  fps?: number;
+  frame_size?: string;
 };
 
 export type ProjectImportResult = {
@@ -211,12 +259,212 @@ export type ActiveClipChat = {
 } | null;
 
 export type ClipChatAction = {
-  type: "execute_workflow" | "prepare_video" | "generate_video" | "send_message";
+  type:
+    | "execute_workflow"
+    | "prepare_video"
+    | "generate_video"
+    | "send_message"
+    | "set_active_prompt_version"
+    | "attach_asset"
+    | "detach_asset"
+    | "mark_feedback_resolved"
+    | "add_reference_frame";
   label: string;
   feedback_index?: number;
   autonomous?: boolean;
   continuity_reference?: "previous_clip_last_frame" | string;
   prompt?: string;
+  prompt_version_id?: string | null;
+  active_generated_video_id?: string | null;
+  asset_id?: string | null;
+  asset_path?: string | null;
+  role?: string;
+  reason?: string;
+  confidence?: number;
+  timestamp?: string;
+  attach_to?: string;
+};
+
+export type ClipAgentRunStep = {
+  id: string;
+  label: string;
+  status: "pending" | "completed" | "awaiting_approval" | "dispatch_ready" | "blocked" | "failed" | string;
+  tool?: string;
+  requires_approval?: boolean;
+  action?: ClipChatAction | null;
+};
+
+export type ClipAgentRun = {
+  id: string;
+  goal: string;
+  clip_index: number;
+  clip_key: string;
+  status: "planned" | "ready" | "awaiting_approval" | "failed" | "completed" | string;
+  intent: string;
+  confidence: number;
+  autonomy_level: "manual" | "suggest" | "approval_required" | "full_autopilot" | string;
+  approval_required: boolean;
+  plan_steps: ClipAgentRunStep[];
+  required_actions: ClipChatAction[];
+  available_actions: ClipChatAction[];
+  suggested_actions: ClipChatAction[];
+  tool_results?: Record<string, unknown>[];
+  errors?: string[];
+  self_evaluation?: Record<string, unknown>;
+  freshness?: {
+    is_stale: boolean;
+    stale_reasons: string[];
+    captured_state_hash?: string | null;
+    current_state_hash?: string | null;
+    captured_at?: string | null;
+  };
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectJob = {
+  id: string;
+  type: "workflow" | "generate_video" | string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "cancelling" | string;
+  project_name: string;
+  clip_index?: number | null;
+  feedback_index?: number | null;
+  provider?: string;
+  payload?: Record<string, unknown>;
+  agent_run_id?: string | null;
+  logs?: { timestamp: string; message: string }[];
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  cancel_requested?: boolean;
+};
+
+export type ProjectEvent = {
+  schema_version: number;
+  id: string;
+  sequence: number;
+  type: string;
+  actor: string;
+  project_name: string;
+  clip_index?: number | null;
+  clip_key?: string | null;
+  entity?: string | null;
+  entity_id?: string | null;
+  payload: Record<string, unknown>;
+  previous_event_hash?: string | null;
+  event_hash: string;
+  created_at: string;
+};
+
+export type ReferencedFrameState = {
+  reference_id: string;
+  timestamp?: string | null;
+  reason?: string;
+  frame_path?: string;
+  url?: string | null;
+  clip_used?: string | null;
+  offset_s?: number | null;
+  usage?: string;
+};
+
+export type ClipAssetReference = {
+  asset_id?: string | null;
+  path?: string | null;
+  role: string;
+  reason: string;
+  confidence: number;
+  source: string;
+};
+
+export type ClipSelectionState = {
+  clip_key: string;
+  active_prompt_version_id?: string | null;
+  resolved_prompt_version_id?: string | null;
+  active_generated_video_id?: string | null;
+  resolved_generated_video_id?: string | null;
+  selected_assets: ClipAssetReference[];
+  selected_asset_ids: string[];
+  selected_asset_paths: string[];
+  pinned_assets: ClipAssetReference[];
+  pinned_asset_ids: string[];
+  pinned_asset_paths: string[];
+  resolved_assets: AssetFile[];
+  selection_source: "persisted" | "default_latest" | string;
+  stale_reasons: string[];
+  updated_at?: string | null;
+};
+
+export type ClipState = {
+  schema_version: number;
+  project_name: string;
+  clip_index: number;
+  clip_key: string;
+  clip_state_id: string;
+  updated_at: string;
+  project: {
+    name: string;
+    sequence_name?: string;
+    clip_count: number;
+    total_duration_tc?: string;
+    total_duration_s?: number;
+  };
+  timeline: {
+    clip: TimelineClip;
+    adjacent_clips: {
+      previous?: TimelineClip | null;
+      next?: TimelineClip | null;
+    };
+  };
+  feedback_state?: FeedbackGroup | null;
+  active_prompt: {
+    prompt?: PromptRecord | null;
+    prompt_id?: string | null;
+    version?: PromptVersion | null;
+    version_id?: string | null;
+    version_index?: number | null;
+    versions: PromptVersion[];
+    prompt_ready: boolean;
+  };
+  asset_state: {
+    available_assets: Record<string, AssetFile[]>;
+    selected_assets: AssetFile[];
+    pinned_assets: AssetFile[];
+    referenced_frames: ReferencedFrameState[];
+    missing_assets: AssetFile[];
+  };
+  video_state: {
+    generated_videos: GeneratedVideo[];
+    latest_video?: GeneratedVideo | null;
+    active_video?: GeneratedVideo | null;
+    active_video_id?: string | null;
+    generation_attempts: VideoGenerationAttempt[];
+    latest_attempt?: VideoGenerationAttempt | null;
+  };
+  selection_state: ClipSelectionState;
+  analysis_state: {
+    clip_context?: Record<string, unknown> | null;
+    clip_context_ready: boolean;
+  };
+  memory_state: ClipChatMemory;
+  agent_state: {
+    recent_runs: ClipAgentRun[];
+    pending_actions: ClipChatAction[];
+  };
+  job_state: {
+    recent_jobs: ProjectJob[];
+    active_jobs: ProjectJob[];
+  };
+  freshness: {
+    source_files: Record<string, string>;
+    source_mtimes?: Record<string, string | null>;
+    derived_from: string[];
+    fingerprints?: Record<string, string>;
+    state_hash?: string;
+    stale_reasons: string[];
+  };
 };
 
 export type ClipChatMedia = {
@@ -241,6 +489,9 @@ export type ClipChatMessage = {
     media?: ClipChatMedia[];
     saved_memory_ids?: string[];
     tool_results?: Record<string, unknown>[];
+    agent_run?: ClipAgentRun;
+    clip_state_id?: string;
+    prompt_version_id?: string | null;
     kind?: string;
   };
 };
@@ -273,6 +524,7 @@ export type ClipChatSnapshot = {
   clip_key: string;
   messages: ClipChatMessage[];
   memory: ClipChatMemory;
+  agent_runs: ClipAgentRun[];
   context: {
     project: {
       name: string;
@@ -282,6 +534,7 @@ export type ClipChatSnapshot = {
       total_duration_s?: number;
     };
     clip: TimelineClip;
+    clip_state: ClipState;
     adjacent_clips: {
       previous?: TimelineClip | null;
       next?: TimelineClip | null;
@@ -300,4 +553,6 @@ export type ClipChatResponse = {
   assistant_message: ClipChatMessage;
   memory: ClipChatMemory;
   suggested_actions: ClipChatAction[];
+  agent_run: ClipAgentRun;
+  clip_state: ClipState;
 };

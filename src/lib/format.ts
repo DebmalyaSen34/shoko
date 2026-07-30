@@ -14,9 +14,29 @@ export function clipBasename(path?: string) {
 
 export function getVersions(prompt?: PromptRecord | null) {
   if (!prompt) return [];
-  if (prompt.history?.length) return prompt.history;
-  if (prompt.video_model_prompt) return [prompt];
-  return [];
+  const versions = prompt.history?.length ? [...prompt.history] : [];
+  if (prompt.video_model_prompt) {
+    const topLevelVersion = { ...prompt };
+    delete topLevelVersion.history;
+    const lastVersion = versions[versions.length - 1];
+    if (!lastVersion || promptVersionSignature(lastVersion) !== promptVersionSignature(topLevelVersion)) {
+      versions.push(topLevelVersion);
+    } else {
+      versions[versions.length - 1] = { ...lastVersion, ...topLevelVersion };
+    }
+  }
+  return versions;
+}
+
+function promptVersionSignature(version: PromptVersion) {
+  return JSON.stringify({
+    prompt: (version.video_model_prompt || "").trim(),
+    initialPrompt: (version.initial_frame_prompt || "").trim(),
+    initialImage: version.initial_frame_image_path || "",
+    assets: version.selected_assets || [],
+    referencedFrames: version.referenced_frames || [],
+    referencedFramePaths: version.referenced_frame_paths || [],
+  });
 }
 
 export function versionLabel(version: PromptVersion, index: number) {
@@ -71,4 +91,3 @@ export function formatTimecode(tc?: string | null): string {
 
   return trimmed;
 }
-

@@ -1,20 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import "./App.css";
-import { AppHeader } from "./components/AppHeader";
-import { AssetsSidebar } from "./components/assets/AssetsSidebar";
+import { AppShell } from "./components/shell/AppShell";
+import type { RailItemId } from "./components/shell/LeftRail";
+import { ProjectHomePanel, ProjectWorkflowPanel } from "./components/project/ProjectWorkflowPanel";
 import { ErrorModal, GenerateVideoOptionsModal, PreviewModal, ResultModal } from "./components/modals/Modals";
 import { NewProjectModal } from "./components/modals/NewProjectModal";
-import { UploadAssetsModal } from "./components/modals/UploadAssetsModal";
 import { UploadFeedbackModal } from "./components/modals/UploadFeedbackModal";
 import { AddManualFeedbackModal } from "./components/modals/AddManualFeedbackModal";
 import { SettingsModal } from "./components/modals/SettingsModal";
-import { TimelinePanel } from "./components/timeline/TimelinePanel";
-import { ClipChatPanel } from "./components/chat/ClipChatPanel";
+import { TimelineWorkspace } from "./components/timeline/TimelineWorkspace";
 import { ToastStack } from "./components/ToastStack";
 import { apiUrl, API_BASE, initializeApiBase, staticUrl } from "./lib/api";
 import { clipBasename } from "./lib/format";
-import type { ActiveClipChat, GenerateVideoOptions, GeneratedVideo, PreviewState, ProjectData, PromptRecord, PromptVersion, Provider, ResultState, Toast } from "./types";
+import type { GenerateVideoOptions, GeneratedVideo, PreviewState, ProjectData, ProjectJob, PromptRecord, PromptVersion, Provider, ResultState, Toast } from "./types";
 
 const DEFAULT_VIDEO_OPTIONS: GenerateVideoOptions = {
   resolution: "720p",
@@ -24,6 +22,7 @@ const DEFAULT_VIDEO_OPTIONS: GenerateVideoOptions = {
 };
 
 const VIDEO_OPTIONS_STORAGE_KEY = "loka15.video-generation.options";
+const DEFAULT_TIMELINE_ZOOM = 2;
 
 type PendingVideoRequest = {
   clipIndex: number;
@@ -31,6 +30,10 @@ type PendingVideoRequest = {
   resolve: (result: { video: GeneratedVideo; generated_videos: GeneratedVideo[] }) => void;
   reject: (error: Error) => void;
 };
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 function loadRememberedVideoOptions(): GenerateVideoOptions {
   try {
@@ -49,32 +52,27 @@ function loadRememberedVideoOptions(): GenerateVideoOptions {
 function App() {
   const [projects, setProjects] = useState<string[]>([]);
   const [activeProject, setActiveProject] = useState("");
-  const [provider, setProvider] = useState<Provider>("openai");
+  const [provider] = useState<Provider>("openai");
   const [projectData, setProjectData] = useState<ProjectData | null>(null);
   const [loadingProject, setLoadingProject] = useState(false);
   const [loadError, setLoadError] = useState("");
-  const [assetFilter, setAssetFilter] = useState("");
-  const [collapsedAssets, setCollapsedAssets] = useState(false);
-  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(DEFAULT_TIMELINE_ZOOM);
   const [preview, setPreview] = useState<PreviewState>(null);
   const [result, setResult] = useState<ResultState>(null);
   const [errorLog, setErrorLog] = useState("");
   const [showNewProject, setShowNewProject] = useState(false);
-  const [showUploadAssets, setShowUploadAssets] = useState(false);
   const [showUploadFeedback, setShowUploadFeedback] = useState(false);
   const [showAddManualFeedback, setShowAddManualFeedback] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [activeClipForManualFeedback, setActiveClipForManualFeedback] = useState("");
+  const [activeRailItem, setActiveRailItem] = useState<RailItemId>("home");
+  const [timelineWorkflowOpen, setTimelineWorkflowOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [runningIndexes, setRunningIndexes] = useState<Set<number>>(new Set());
   const [generatingVideoKeys, setGeneratingVideoKeys] = useState<Set<string>>(new Set());
   const [videoOptions, setVideoOptions] = useState<GenerateVideoOptions>(() => loadRememberedVideoOptions());
   const [pendingVideoRequest, setPendingVideoRequest] = useState<PendingVideoRequest | null>(null);
-  const [selectedVersions, setSelectedVersions] = useState<Record<string, number>>({});
-  const [activeClipChat, setActiveClipChat] = useState<ActiveClipChat>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
-  const eventSourcesRef = useRef<Record<number, EventSource>>({});
 
   const notify = useCallback((message: string, type: Toast["type"] = "info") => {
     const id = Date.now() + Math.random();
@@ -90,7 +88,9 @@ function App() {
       setActiveProject(projectName);
       setLoadingProject(true);
       setLoadError("");
-      setProjectData(null);
+      if (!options?.preserveTimelineScroll) {
+        setProjectData(null);
+      }
 
       try {
         const response = await fetch(apiUrl(`/api/project/${encodeURIComponent(projectName)}`));
@@ -158,7 +158,6 @@ function App() {
 
     return () => {
       cancelled = true;
-      Object.values(eventSourcesRef.current).forEach((source) => source.close());
     };
   }, [loadProject]);
 
@@ -170,7 +169,6 @@ function App() {
   const duration = projectData
     ? projectData.total_duration_tc || `${projectData.total_duration_s.toFixed(2)}s`
     : "--";
-  const providerLabel = provider === "openai" ? "OpenAI" : "Gemini";
   const timelineCount = projectData?.timeline.length || 0;
 
   const findPrompt = useCallback(
@@ -212,15 +210,32 @@ function App() {
     });
   }, []);
 
+  const waitForProjectJob = useCallback(
+    async (jobId: string) => {
+      if (!activeProject) throw new Error("No active project selected.");
+      for (;;) {
+        const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(activeProject)}/jobs/${encodeURIComponent(jobId)}`));
+        if (!response.ok) throw new Error(await response.text());
+        const job = (await response.json()) as ProjectJob;
+        if (job.status === "succeeded") return job;
+        if (job.status === "failed" || job.status === "cancelled") {
+          throw new Error(job.error || `${job.type} job ${job.status}.`);
+        }
+        await sleep(1400);
+      }
+    },
+    [activeProject],
+  );
+
   const runGenerateVideo = useCallback(
     async (clipIndex: number, promptVersionIndex: number | undefined, options: GenerateVideoOptions) => {
       if (!activeProject) throw new Error("No active project selected.");
       const key = `${clipIndex}:${promptVersionIndex ?? "latest"}`;
       setGeneratingVideoKeys((current) => new Set(current).add(key));
-      notify("Video generation started with Segmind...");
+      notify("Video generation job queued with Segmind...");
 
       try {
-        const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(activeProject)}/generate-video`), {
+        const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(activeProject)}/jobs/generate-video`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -249,10 +264,13 @@ function App() {
           }
           throw new Error(message);
         }
-        const data = (await response.json()) as { video: GeneratedVideo; generated_videos: GeneratedVideo[] };
-        notify("Video generated successfully.", "success");
+        const queuedJob = (await response.json()) as ProjectJob;
+        const job = await waitForProjectJob(queuedJob.id);
+        const data = (job.result || {}) as { video?: GeneratedVideo; generated_videos?: GeneratedVideo[] };
+        if (!data.video) throw new Error("Video job succeeded but did not return a generated video.");
+        notify("Video generated and self-evaluated.", "success");
         await loadProject(activeProject, { preserveTimelineScroll: true });
-        return data;
+        return { video: data.video, generated_videos: data.generated_videos || [] };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Video generation failed.";
         notify(message, "error");
@@ -265,7 +283,7 @@ function App() {
         });
       }
     },
-    [activeProject, loadProject, notify],
+    [activeProject, loadProject, notify, waitForProjectJob],
   );
 
   const rememberVideoOptions = useCallback(
@@ -307,74 +325,44 @@ function App() {
   );
 
   const executeWorkflow = useCallback(
-    (feedbackIndex: number) => {
+    async (feedbackIndex: number) => {
       if (!activeProject) return;
-      eventSourcesRef.current[feedbackIndex]?.close();
 
       setRunningIndexes((current) => new Set(current).add(feedbackIndex));
-      const logs = [
-        `[SYSTEM] Initializing pipeline connection for feedback index ${feedbackIndex}...`,
-        `[SYSTEM] Selected AI Provider: ${provider.toUpperCase()}`,
-      ];
-      notify(`Workflow initiated for feedback index ${feedbackIndex}...`);
+      notify(`Workflow job queued for feedback index ${feedbackIndex}...`);
 
-      const source = new EventSource(
-        apiUrl(
-          `/api/run-workflow?project=${encodeURIComponent(activeProject)}&index=${feedbackIndex}&provider=${provider}`,
-        ),
-      );
-      eventSourcesRef.current[feedbackIndex] = source;
-
-      source.onmessage = (event) => {
-        const line = event.data as string;
-        logs.push(line);
-
-        if (line.includes("[SUCCESS]") || line.startsWith("[SUCCESS]")) {
-          source.close();
-          delete eventSourcesRef.current[feedbackIndex];
-          setRunningIndexes((current) => {
-            const next = new Set(current);
-            next.delete(feedbackIndex);
-            return next;
-          });
-          notify("Prompt plan generated successfully.", "success");
-          void loadProject(activeProject, { preserveTimelineScroll: true });
-        } else if (line.includes("[ERROR]") || line.startsWith("[ERROR]")) {
-          source.close();
-          delete eventSourcesRef.current[feedbackIndex];
-          setRunningIndexes((current) => {
-            const next = new Set(current);
-            next.delete(feedbackIndex);
-            return next;
-          });
-          setErrorLog(logs.join("\n"));
-          notify(`Workflow execution failed for feedback index ${feedbackIndex}`, "error");
-        }
-      };
-
-      source.onerror = () => {
-        source.close();
-        delete eventSourcesRef.current[feedbackIndex];
+      try {
+        const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(activeProject)}/jobs/workflow`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ feedback_index: feedbackIndex, provider }),
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const queuedJob = (await response.json()) as ProjectJob;
+        const job = await waitForProjectJob(queuedJob.id);
+        const selfEval = (job.result || {}).self_evaluation as { verdict?: string; next_action?: { type?: string } } | undefined;
+        notify(
+          selfEval?.verdict
+            ? `Prompt plan generated. Self-evaluation: ${selfEval.verdict}.`
+            : "Prompt plan generated successfully.",
+          "success",
+        );
+        await loadProject(activeProject, { preserveTimelineScroll: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Workflow execution failed.";
+        setErrorLog(message);
+        notify(`Workflow execution failed for feedback index ${feedbackIndex}`, "error");
+        throw error;
+      } finally {
         setRunningIndexes((current) => {
           const next = new Set(current);
           next.delete(feedbackIndex);
           return next;
         });
-        setErrorLog(`${logs.join("\n")}\n[CONNECTION ERROR] EventStream connection dropped or interrupted.`);
-        notify(`Workflow execution failed for feedback index ${feedbackIndex}`, "error");
-      };
+      }
     },
-    [activeProject, loadProject, notify, provider],
+    [activeProject, loadProject, notify, provider, waitForProjectJob],
   );
-
-  const toggleAssetCategory = useCallback((category: string) => {
-    setCollapsedCategories((current) => {
-      const next = new Set(current);
-      if (next.has(category)) next.delete(category);
-      else next.add(category);
-      return next;
-    });
-  }, []);
 
   const copyPrompt = useCallback(async () => {
     if (!result?.prompt) return;
@@ -386,104 +374,110 @@ function App() {
     }
   }, [notify, result]);
 
-  const timelineStyle = {
-    "--card-width": `${640 * zoom}px`,
-    "--thumbnail-height": `${320 * zoom}px`,
-  } as CSSProperties;
-
-  const zoomClass = zoom < 0.75 ? "font-small" : zoom > 1.25 ? "font-large" : "";
-  const chatClip = activeClipChat && projectData ? projectData.timeline[activeClipChat.clipIndex] : null;
-  const chatFeedback =
-    activeClipChat && chatClip && projectData
-      ? projectData.feedback.find(
-          (item) =>
-            item.clip_used === chatClip.clip &&
-            (typeof item.clip_occurrence !== "number" || item.clip_occurrence === activeClipChat.clipIndex),
-        )
-      : undefined;
-  const chatPrompt = activeClipChat && chatClip ? findPrompt(chatClip.clip, activeClipChat.clipIndex) : null;
+  const timelineOpen = activeRailItem === "timeline";
+  const projectLabel = projectData?.sequence_name || activeProject || "No Project";
+  const runFirstAvailableWorkflow = useCallback(() => {
+    const firstFeedback = projectData?.feedback.flatMap((group) => group.feedback_items)[0];
+    if (!firstFeedback) {
+      notify("Upload feedback before running the workflow.", "info");
+      return;
+    }
+    void executeWorkflow(firstFeedback.raw_index).catch(() => undefined);
+  }, [executeWorkflow, notify, projectData]);
 
   return (
-    <div className="flex flex-col w-screen h-screen bg-bg-primary">
-      <AppHeader
+    <>
+      <AppShell
         activeProject={activeProject}
+        activeRailItem={activeRailItem}
+        clipCount={timelineCount}
+        projectLabel={projectLabel}
         projects={projects}
         provider={provider}
-        onNewProject={() => setShowNewProject(true)}
+        workflowDrawerOpen={timelineWorkflowOpen}
         onOpenSettings={() => setShowSettings(true)}
+        onRunWorkflow={runFirstAvailableWorkflow}
         onProjectChange={(project) => void loadProject(project)}
-        onProviderChange={setProvider}
-      />
-
-      <main className="flex flex-1 h-[calc(100vh-var(--header-height)-32px)] overflow-hidden relative">
-        <AssetsSidebar
-          assetFilter={assetFilter}
-          assetTotal={assetTotal}
-          assets={projectData?.assets}
-          collapsed={collapsedAssets}
-          collapsedCategories={collapsedCategories}
-          loadError={loadError}
-          onCollapse={() => setCollapsedAssets(true)}
-          onExpand={() => setCollapsedAssets(false)}
-          onFilterChange={setAssetFilter}
-          onPreview={setPreview}
-          onToggleCategory={toggleAssetCategory}
-          onAddAssets={() => setShowUploadAssets(true)}
-        />
-
-        <TimelinePanel
-          duration={duration}
-          error={loadError}
-          loading={loadingProject}
-          projectData={projectData}
-          refEl={timelineRef}
-          runningIndexes={runningIndexes}
-          selectedVersions={selectedVersions}
-          setSelectedVersions={setSelectedVersions}
-          timelineStyle={timelineStyle}
-          zoom={zoom}
-          zoomClass={zoomClass}
-          executeWorkflow={executeWorkflow}
-          findPrompt={findPrompt}
-          openResultFromVersion={openResultFromVersion}
-          generatingVideoKeys={generatingVideoKeys}
-          onGenerateVideo={generateVideo}
-          setZoom={setZoom}
-          onUploadFeedback={() => setShowUploadFeedback(true)}
-          onAddManualFeedback={(clipName) => {
-            setActiveClipForManualFeedback(clipName);
-            setShowAddManualFeedback(true);
-          }}
-          onOpenClipChat={(clipIndex) => setActiveClipChat({ clipIndex })}
-          onPreview={setPreview}
-        />
-
-        {projectData && chatClip && activeClipChat && (
-          <ClipChatPanel
-            clip={chatClip}
-            clipIndex={activeClipChat.clipIndex}
-            feedback={chatFeedback}
-            prompt={chatPrompt}
+        onToggleWorkflowDrawer={() => setTimelineWorkflowOpen((open) => !open)}
+        onRailSelect={(item) => {
+          if (item === "settings") {
+            setActiveRailItem("settings");
+            setTimelineWorkflowOpen(false);
+            setShowSettings(true);
+            return;
+          }
+          if (item === "feedback") {
+            setActiveRailItem("feedback");
+            setTimelineWorkflowOpen(false);
+            setShowUploadFeedback(true);
+            return;
+          }
+          setActiveRailItem(item);
+          if (item === "timeline") {
+            setTimelineWorkflowOpen(false);
+          }
+        }}
+      >
+        {(!timelineOpen || timelineWorkflowOpen) && (
+          <ProjectWorkflowPanel
+            activeProject={activeProject}
+            assetTotal={assetTotal}
+            className={timelineOpen ? "timeline-workflow-drawer" : ""}
+            duration={duration}
+            loading={loadingProject}
+            loadError={loadError}
             projectData={projectData}
-            provider={provider}
             runningIndexes={runningIndexes}
-            onClose={() => setActiveClipChat(null)}
-            onExecuteWorkflow={executeWorkflow}
-            onOpenPromptDetails={openResultFromVersion}
-            onGenerateVideo={generateVideo}
-            onPreview={setPreview}
+            onCollapse={timelineOpen ? () => setTimelineWorkflowOpen(false) : undefined}
+            onImportProject={() => setShowNewProject(true)}
+            onRunAssignment={runFirstAvailableWorkflow}
+            onUploadFeedback={() => setShowUploadFeedback(true)}
+            onViewResults={() => {
+              setActiveRailItem("timeline");
+              setTimelineWorkflowOpen(false);
+            }}
           />
         )}
-      </main>
 
-      <footer className="h-8 bg-bg-secondary border-t border-border-color flex justify-between items-center px-6 text-[11px] text-text-muted font-medium flex-none select-none">
-        <div>
-          <span className="w-[7px] h-[7px] rounded-full bg-[#4caf50] inline-block mr-1.5" /> Synced to {providerLabel} - {projectData?.sequence_name || activeProject || "No Project"}
-        </div>
-        <div>
-          Showing clips {timelineCount ? 1 : 0} - {timelineCount} of {timelineCount} scroll horizontally
-        </div>
-      </footer>
+        {timelineOpen ? (
+          <>
+            <TimelineWorkspace
+              duration={duration}
+              error={loadError}
+              loading={loadingProject}
+              projectData={projectData}
+              provider={provider}
+              refEl={timelineRef}
+              runningIndexes={runningIndexes}
+              zoom={zoom}
+              executeWorkflow={executeWorkflow}
+              findPrompt={findPrompt}
+              openResultFromVersion={openResultFromVersion}
+              generatingVideoKeys={generatingVideoKeys}
+              onGenerateVideo={generateVideo}
+              setZoom={setZoom}
+              onUploadFeedback={() => setShowUploadFeedback(true)}
+              onAddManualFeedback={(clipName) => {
+                setActiveClipForManualFeedback(clipName);
+                setShowAddManualFeedback(true);
+              }}
+              onPreview={setPreview}
+            />
+          </>
+        ) : (
+          <ProjectHomePanel
+            activeProject={activeProject}
+            assetTotal={assetTotal}
+            duration={duration}
+            loading={loadingProject}
+            projectData={projectData}
+            projects={projects}
+            onImportProject={() => setShowNewProject(true)}
+            onOpenTimeline={() => setActiveRailItem("timeline")}
+            onProjectChange={(project) => void loadProject(project)}
+          />
+        )}
+      </AppShell>
 
       {preview && <PreviewModal preview={preview} onClose={() => setPreview(null)} />}
       {errorLog && <ErrorModal errorLog={errorLog} onClose={() => setErrorLog("")} />}
@@ -506,17 +500,6 @@ function App() {
         />
       )}
       {result && <ResultModal result={result} onClose={() => setResult(null)} onCopy={copyPrompt} />}
-      {showUploadAssets && activeProject && (
-        <UploadAssetsModal
-          projectName={activeProject}
-          onClose={() => setShowUploadAssets(false)}
-          onUploaded={() => {
-            setShowUploadAssets(false);
-            notify("Assets uploaded successfully.", "success");
-            void loadProject(activeProject);
-          }}
-        />
-      )}
       {showUploadFeedback && activeProject && (
         <UploadFeedbackModal
           projectName={activeProject}
@@ -551,7 +534,7 @@ function App() {
         />
       )}
       <ToastStack toasts={toasts} />
-    </div>
+    </>
   );
 }
 

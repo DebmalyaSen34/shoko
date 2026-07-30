@@ -32,11 +32,17 @@ export function staticUrl(path?: string | null) {
   if (/^https?:\/\//.test(path)) return path;
 
   let cleanPath = path.replace(/\\/g, "/");
-  const workspaceMarker = "developement/loka/";
-  const idx = cleanPath.indexOf(workspaceMarker);
-  if (idx !== -1) {
-    cleanPath = cleanPath.substring(idx + workspaceMarker.length);
+
+  for (const marker of ["/assets/", "assets/", "/data/", "data/"]) {
+    const idx = cleanPath.indexOf(marker);
+    if (idx !== -1) {
+      const prefix = marker.includes("assets") ? "/assets/" : "/data/";
+      const start = marker.startsWith("/") ? idx + marker.length : idx + marker.length;
+      cleanPath = `${prefix}${cleanPath.slice(start)}`;
+      break;
+    }
   }
+
   if (!cleanPath.startsWith("/")) {
     cleanPath = `/${cleanPath}`;
   }

@@ -226,6 +226,8 @@ def generate_video_prompts_batch(
     reference_handles = {}
     clip_handles = {}
     continuity_handles = {}
+    referenced_frame_handles = {}
+    referenced_frame_metadata = {}
     cluster_frame_paths = {}
     initial_frame_image_paths = {}
     initial_frame_image_refs = {}
@@ -274,6 +276,26 @@ def generate_video_prompts_batch(
                 if continuity_ref is not None:
                     continuity_handles[cluster_id] = continuity_ref
                     initial_frame_image_paths[cluster_id] = continuity_frame_path
+
+            cluster_refs = []
+            seen_ref_paths = set()
+            for item in cluster.get("feedback_items", []):
+                for ref_frame in item.get("referenced_frames", []) or []:
+                    ref_path = ref_frame.get("frame_path")
+                    if not ref_path or ref_path in seen_ref_paths or not os.path.exists(ref_path):
+                        continue
+                    seen_ref_paths.add(ref_path)
+                    if provider == "openai":
+                        ref_handle = _openai_file_reference(client, ref_path)
+                    else:
+                        ref_handle = upload._prepare_media_reference(client, ref_path, provider)
+                        if ref_handle is not None:
+                            uploaded_refs.append(ref_handle)
+                    if ref_handle is not None:
+                        cluster_refs.append((dict(ref_frame), ref_handle))
+            if cluster_refs:
+                referenced_frame_handles[cluster_id] = [handle for _metadata, handle in cluster_refs]
+                referenced_frame_metadata[cluster_id] = [metadata for metadata, _handle in cluster_refs]
 
         for batch_start in range(0, len(indexed_clusters), batch_size):
             batch = indexed_clusters[batch_start:batch_start + batch_size]
@@ -476,6 +498,28 @@ def generate_video_prompts_batch(
                     if continuity_note:
                         contents.append(f"CONTINUITY_INSTRUCTION: {continuity_note}")
                     _append_media_reference(contents, continuity_handles[cluster_id])
+                if cluster_id in referenced_frame_handles:
+                    contents.append(
+                        "CROSS_TIMEFRAME_REFERENCE_FRAMES: The following labeled images were "
+                        "requested by feedback from other timeline moments. Use them only for "
+                        "the specified expression, pose, cutaway, or continuity anchor; preserve "
+                        "the target clip's setting and blocking unless the feedback explicitly "
+                        "asks to change them."
+                    )
+                    for ref_index, (metadata, handle) in enumerate(
+                        zip(
+                            referenced_frame_metadata.get(cluster_id, []),
+                            referenced_frame_handles.get(cluster_id, []),
+                        ),
+                        start=1,
+                    ):
+                        contents.append(
+                            f"@ref{ref_index}: frame from {metadata.get('clip_used') or 'unknown clip'} "
+                            f"at {metadata.get('timestamp') or 'unknown timestamp'}; "
+                            f"usage={metadata.get('usage') or 'visual_anchor'}; "
+                            f"reason={metadata.get('reason') or 'requested by feedback'}."
+                        )
+                        _append_media_reference(contents, handle)
                 _append_clip_reference(contents, assets_dir, clip_handles, cluster, cluster_id)
             # Lazy load the video generation skill prompt and overrides only when needed
             video_prompt_skill_text = prompt_skill_text or _default_seedance_skill_text()
@@ -566,6 +610,12 @@ def generate_video_prompts_batch(
                         "initial_frame_prompt": initial_frame_prompts[cluster_id] or cluster_context.get("continuity_reference_note", ""),
                         "initial_frame_image_path": initial_frame_image_paths.get(cluster_id, ""),
                         "clip_frame_paths": cluster_frame_paths.get(cluster_id, []),
+                        "referenced_frames": referenced_frame_metadata.get(cluster_id, []),
+                        "referenced_frame_paths": [
+                            ref.get("frame_path")
+                            for ref in referenced_frame_metadata.get(cluster_id, [])
+                            if ref.get("frame_path")
+                        ],
                         "selected_assets": selected_assets,
                         "prompt_format": item.get("prompt_format"),
                         "reference_legend": _reference_legend_for_assets(selected_assets),

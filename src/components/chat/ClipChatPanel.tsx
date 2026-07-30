@@ -3,9 +3,11 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
   ClipChatAction,
+  ClipAgentRun,
   ClipChatMedia,
   ClipChatMessage,
   ClipChatResponse,
+  ClipState,
   GeneratedVideo,
   ClipChatSnapshot,
   FeedbackGroup,
@@ -14,22 +16,24 @@ import type {
   PreviewState,
   ProjectData,
   Provider,
-  TimelineClip,
 } from "../../types";
 import { getVersions } from "../../lib/format";
 import { apiUrl, staticUrl } from "../../lib/api";
 import { Icon } from "../Icon";
+import { WorkflowRunningLabel } from "../WorkflowRunningLabel";
+import { PromptInputBox } from "../ui/ai-prompt-box";
 
 type ClipChatPanelProps = {
-  clip: TimelineClip;
+  variant?: "panel" | "dock";
   clipIndex: number;
   feedback?: FeedbackGroup;
   prompt: PromptRecord | null;
   projectData: ProjectData;
   provider: Provider;
   runningIndexes: Set<number>;
-  onClose: () => void;
-  onExecuteWorkflow: (feedbackIndex: number) => void;
+  externalGeneratingVideo?: boolean;
+  onClose?: () => void;
+  onExecuteWorkflow: (feedbackIndex: number) => Promise<void> | void;
   onOpenPromptDetails: (version: PromptVersion) => void;
   onGenerateVideo: (clipIndex: number, promptVersionIndex?: number) => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
   onPreview: (preview: PreviewState) => void;
@@ -62,13 +66,14 @@ const SLASH_COMMANDS = [
 ];
 
 export function ClipChatPanel({
-  clip,
+  variant = "panel",
   clipIndex,
   feedback,
   prompt,
   projectData,
   provider,
   runningIndexes,
+  externalGeneratingVideo = false,
   onClose,
   onExecuteWorkflow,
   onOpenPromptDetails,
@@ -77,11 +82,13 @@ export function ClipChatPanel({
 }: ClipChatPanelProps) {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ClipChatMessage[]>([]);
+  const [clipState, setClipState] = useState<ClipState | null>(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [generatingVideo, setGeneratingVideo] = useState(false);
   const [error, setError] = useState("");
   const [clearedAt, setClearedAt] = useState("");
+  const [expandedRunIds, setExpandedRunIds] = useState<Set<string>>(new Set());
   const [panelWidth, setPanelWidth] = useState(() => {
     const saved = window.localStorage.getItem("loka15.clip-chat.width");
     return saved ? Number(saved) || 420 : 420;
@@ -89,10 +96,22 @@ export function ClipChatPanel({
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const feedbackItems = feedback?.feedback_items || [];
-  const versions = getVersions(prompt);
-  const latestVersion = versions[versions.length - 1] || prompt || null;
+  const activePrompt = clipState?.active_prompt;
+  const versions = activePrompt?.versions?.length ? activePrompt.versions : getVersions(prompt);
+  const latestVersion = activePrompt?.version || versions[versions.length - 1] || prompt || null;
   const runnableFeedback = feedbackItems[0];
-  const running = feedbackItems.some((item) => runningIndexes.has(item.raw_index));
+  const activeJobs = clipState?.job_state.active_jobs || [];
+  const recentJobs = clipState?.job_state.recent_jobs || [];
+  const workflowJobs = activeJobs.filter((job) => job.type === "workflow");
+  const videoJobs = activeJobs.filter((job) => job.type === "generate_video");
+  const running = feedbackItems.some((item) => runningIndexes.has(item.raw_index)) || workflowJobs.length > 0;
+  const videoBusy = generatingVideo || externalGeneratingVideo || videoJobs.length > 0;
+  const activeVideo = clipState?.video_state.active_video || clipState?.video_state.latest_video;
+  const selectedAssets = clipState?.asset_state.selected_assets || [];
+  const promptStatus = activePrompt?.prompt_ready ? `Prompt v${(activePrompt.version_index ?? 0) + 1}` : "Prompt missing";
+  const videoStatus = activeVideo ? activeVideo.label || `Video v${activeVideo.version}` : "Video missing";
+  const assetStatus = `${selectedAssets.length} asset${selectedAssets.length === 1 ? "" : "s"}`;
+  const jobStatus = activeJobs.length ? `${activeJobs.length} active job${activeJobs.length === 1 ? "" : "s"}` : recentJobs[0]?.status || "Idle";
   const clearStorageKey = useMemo(
     () => `loka15.clip-chat.cleared-at:${projectData.project_name}:${clipIndex}`,
     [clipIndex, projectData.project_name],
@@ -123,6 +142,7 @@ export function ClipChatPanel({
         const data = (await response.json()) as ClipChatSnapshot;
         if (cancelled) return;
         setMessages(data.messages);
+        setClipState(data.context.clip_state);
       } catch (loadError) {
         if (cancelled) return;
         const message = loadError instanceof Error ? loadError.message : "Failed to load clip chat.";
@@ -138,6 +158,31 @@ export function ClipChatPanel({
       cancelled = true;
     };
   }, [clipIndex, projectData.project_name]);
+
+  useEffect(() => {
+    if (!clipState?.job_state.active_jobs.length) return;
+    const timer = window.setInterval(() => {
+      void refreshClipState();
+    }, 1800);
+    return () => window.clearInterval(timer);
+  }, [clipState?.clip_state_id, clipState?.job_state.active_jobs.length]);
+
+  useEffect(() => {
+    if (running) {
+      void refreshClipState();
+    }
+  }, [running]);
+
+  async function refreshClipState() {
+    try {
+      const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectData.project_name)}/clips/${clipIndex}/state`));
+      if (!response.ok) throw new Error(await response.text());
+      const state = (await response.json()) as ClipState;
+      setClipState(state);
+    } catch {
+      // Keep the last known state visible.
+    }
+  }
 
   useEffect(() => {
     setClearedAt(window.localStorage.getItem(clearStorageKey) || "");
@@ -176,7 +221,7 @@ export function ClipChatPanel({
     }
 
     if (command === "/workflow") {
-      runWorkflowFromChat();
+      void runWorkflowFromChat();
       return true;
     }
 
@@ -225,18 +270,7 @@ export function ClipChatPanel({
       if (!response.ok) throw new Error(await response.text());
       const data = (await response.json()) as ClipChatResponse;
       setMessages(data.messages);
-      const autonomousWorkflow = data.suggested_actions.find(
-        (action) => action.type === "execute_workflow" && action.autonomous,
-      );
-      if (autonomousWorkflow) {
-        runWorkflowFromChat(autonomousWorkflow.feedback_index);
-      }
-      const autonomousVideo = data.suggested_actions.find(
-        (action) => action.type === "generate_video" && action.autonomous,
-      );
-      if (autonomousVideo) {
-        void generateVideoFromChat();
-      }
+      setClipState(data.clip_state);
     } catch (sendError) {
       const message = sendError instanceof Error ? sendError.message : "Failed to send message.";
       setError(message);
@@ -246,20 +280,22 @@ export function ClipChatPanel({
     }
   }
 
-  function submitInput() {
-    if (executeSlashCommand(input)) return;
-    void sendMessage(input);
-  }
-
-  function runWorkflowFromChat(feedbackIndex?: number) {
+  async function runWorkflowFromChat(feedbackIndex?: number) {
     const index = feedbackIndex ?? runnableFeedback?.raw_index;
     if (typeof index !== "number") {
       setMessages((current) => [...current, localToolMessage("No feedback item is available for this clip yet.")]);
       return;
     }
 
-    onExecuteWorkflow(index);
     setMessages((current) => [...current, localToolMessage(`Workflow started for feedback index ${index} using ${provider.toUpperCase()}.`)]);
+    try {
+      await onExecuteWorkflow(index);
+      await refreshClipState();
+      setMessages((current) => [...current, localToolMessage(`Workflow finished for feedback index ${index}. The latest prompt and references are ready.`)]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Workflow execution failed.";
+      setMessages((current) => [...current, localToolMessage(message)]);
+    }
   }
 
   function prepareVideoGeneration() {
@@ -287,7 +323,7 @@ export function ClipChatPanel({
       return;
     }
 
-    const promptVersionIndex = Math.max(versions.length - 1, 0);
+    const promptVersionIndex = activePrompt?.version_index ?? Math.max(versions.length - 1, 0);
     setGeneratingVideo(true);
     setMessages((current) => [...current, localToolMessage("Choose video generation options to start the Segmind render.")]);
     try {
@@ -307,6 +343,7 @@ export function ClipChatPanel({
         ],
       };
       setMessages((current) => [...current, videoMessage]);
+      void refreshClipState();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Video generation failed.";
       if (message === "Video generation cancelled.") return;
@@ -318,20 +355,81 @@ export function ClipChatPanel({
 
   function handleAction(action: ClipChatAction) {
     if (action.type === "execute_workflow") {
-      runWorkflowFromChat(action.feedback_index);
+      void runWorkflowFromChat(action.feedback_index);
     } else if (action.type === "generate_video" || (action.type === "prepare_video" && action.label.toLowerCase().includes("generate"))) {
       void generateVideoFromChat();
     } else if (action.type === "prepare_video") {
       prepareVideoGeneration();
     } else if (action.type === "send_message" && action.prompt) {
       void sendMessage(action.prompt);
+    } else if (action.type === "set_active_prompt_version" && action.prompt_version_id) {
+      const version = versions.find((candidate) => candidate.prompt_version_id === action.prompt_version_id);
+      if (version) void setActivePromptVersion(version);
+    } else if (action.type === "detach_asset") {
+      void detachAsset(action.asset_path, action.asset_id);
+    } else if (action.type === "attach_asset" || action.type === "mark_feedback_resolved" || action.type === "add_reference_frame") {
+      void sendMessage(action.prompt || action.reason || action.label);
+    }
+  }
+
+  async function setActivePromptVersion(version: PromptVersion) {
+    const versionId = version.prompt_version_id;
+    if (!versionId) return;
+    try {
+      const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectData.project_name)}/clips/${clipIndex}/selection`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active_prompt_version_id: versionId }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data = (await response.json()) as { clip_state: ClipState };
+      setClipState(data.clip_state);
+      setMessages((current) => [...current, localToolMessage(`Active prompt switched to version ${(version.version_index ?? 0) + 1}.`)]);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Failed to switch prompt version.");
+    }
+  }
+
+  async function detachAsset(assetPath?: string | null, assetId?: string | null) {
+    if (!clipState) return;
+    const nextAssets = (clipState.selection_state.selected_assets || []).filter((asset) => {
+      if (assetId && asset.asset_id === assetId) return false;
+      if (assetPath && asset.path === assetPath) return false;
+      return true;
+    });
+    try {
+      const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectData.project_name)}/clips/${clipIndex}/selection`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selected_assets: nextAssets }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data = (await response.json()) as { clip_state: ClipState };
+      setClipState(data.clip_state);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Failed to detach asset.");
     }
   }
 
   function actionIcon(action: ClipChatAction) {
     if (action.type === "execute_workflow") return "refresh";
     if (action.type === "prepare_video" || action.type === "generate_video") return "video";
+    if (action.type === "attach_asset" || action.type === "detach_asset") return "file";
+    if (action.type === "mark_feedback_resolved") return "check";
+    if (action.type === "add_reference_frame") return "image";
     return "chat";
+  }
+
+  function toggleAgentRun(messageId: string) {
+    setExpandedRunIds((current) => {
+      const next = new Set(current);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
   }
 
   function resizePanel(clientX: number) {
@@ -340,47 +438,53 @@ export function ClipChatPanel({
     window.localStorage.setItem("loka15.clip-chat.width", String(nextWidth));
   }
 
-  const panelStyle = window.innerWidth > 900 ? { width: panelWidth, minWidth: panelWidth } : undefined;
+  const panelStyle = variant === "panel" && window.innerWidth > 900 ? { width: panelWidth, minWidth: panelWidth } : undefined;
 
   return (
-    <aside className="clip-chat-panel" style={panelStyle} aria-label="Clip chat">
-      <div
-        className="clip-chat-resize-handle"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize chat"
-        tabIndex={0}
-        onPointerDown={(event) => {
-          event.currentTarget.setPointerCapture(event.pointerId);
-          resizePanel(event.clientX);
-        }}
-        onPointerMove={(event) => {
-          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+    <aside className={`clip-chat-panel ${variant === "dock" ? "dock-chat-panel" : ""}`} style={panelStyle} aria-label="Clip chat">
+      {variant === "panel" && (
+        <div
+          className="clip-chat-resize-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize chat"
+          tabIndex={0}
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId);
             resizePanel(event.clientX);
-          }
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "ArrowLeft") setPanelWidth((width) => Math.min(760, width + 24));
-          if (event.key === "ArrowRight") setPanelWidth((width) => Math.max(320, width - 24));
-        }}
-      />
+          }}
+          onPointerMove={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              resizePanel(event.clientX);
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") setPanelWidth((width) => Math.min(760, width + 24));
+            if (event.key === "ArrowRight") setPanelWidth((width) => Math.max(320, width - 24));
+          }}
+        />
+      )}
+      
       <div className="clip-chat-header">
-        <div>
-          <div className="clip-chat-kicker">Clip Chat</div>
-          <h3>{clip.clip}</h3>
-          <span>{projectData.sequence_name || projectData.project_name}</span>
+        <div className="clip-chat-meta-row" aria-label="Clip agent state">
+          <span className={!activePrompt?.prompt_ready ? "warning" : ""} title={activePrompt?.version_id || undefined}>{promptStatus}</span>
+          <span className={!activeVideo ? "warning" : ""} title={activeVideo?.path || activeVideo?.url || undefined}>{videoStatus}</span>
+          <span title={selectedAssets.map((asset) => `${asset.role || "asset"}: ${asset.name}`).join("\n") || undefined}>{assetStatus}</span>
+          <span title={recentJobs[0]?.logs?.[recentJobs[0].logs.length - 1]?.message || undefined}>{jobStatus}</span>
         </div>
-        <button className="icon-btn" type="button" title="Close Chat" onClick={onClose}>
-          <Icon name="close" />
-        </button>
+        {onClose && (
+          <button className="icon-btn" type="button" title="Close Chat" onClick={onClose}>
+            <Icon name="close" />
+          </button>
+        )}
       </div>
 
       <div className="clip-chat-actions">
-        <button className="premium-btn secondary" type="button" disabled={!runnableFeedback || running} onClick={() => runWorkflowFromChat()}>
-          <Icon name="refresh" /> {running ? "Running..." : "Run Workflow"}
+        <button className={`premium-btn secondary ${running ? "workflow-running-button" : ""}`} type="button" disabled={!runnableFeedback || running} onClick={() => void runWorkflowFromChat()}>
+          {running ? <WorkflowRunningLabel /> : <><Icon name="refresh" /> Run Workflow</>}
         </button>
-        <button className="premium-btn" type="button" disabled={generatingVideo} onClick={() => void generateVideoFromChat()}>
-          <Icon name="video" /> {generatingVideo ? "Generating..." : "Generate Video"}
+        <button className="premium-btn" type="button" disabled={videoBusy} onClick={() => void generateVideoFromChat()}>
+          <Icon name="video" /> {videoBusy ? "Generating..." : "Generate Video"}
         </button>
       </div>
 
@@ -393,69 +497,173 @@ export function ClipChatPanel({
           </div>
         )}
         {visibleMessages.map((message) => (
-          <div className={`chat-message ${message.role}`} key={message.id}>
-            <div className="chat-message-meta">{message.role} · {formatMessageTime(message.created_at)}</div>
-            <div className="chat-message-text">
-              <MarkdownMessage text={message.content} />
+          <div className={`chat-message-group ${message.role}`} key={message.id}>
+            <div className={`chat-message ${message.role}`}>
+              <div className="chat-message-text">
+                <MarkdownMessage text={message.content} />
+              </div>
+              {Boolean(message.metadata?.media?.length) && (
+                <ChatMediaGallery media={message.metadata?.media || []} onPreview={onPreview} />
+              )}
+              {Boolean(message.metadata?.actions?.length) && (
+                <div className="chat-action-row">
+                  {message.metadata?.actions?.map((action) => (
+                    <button className="premium-btn secondary" type="button" key={`${message.id}-${action.type}-${action.label}`} onClick={() => handleAction(action)}>
+                      <Icon name={actionIcon(action)} /> {action.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-            {Boolean(message.metadata?.media?.length) && (
-              <ChatMediaGallery media={message.metadata?.media || []} onPreview={onPreview} />
-            )}
-            {Boolean(message.metadata?.actions?.length) && (
-              <div className="chat-action-row">
-                {message.metadata?.actions?.map((action) => (
-                  <button className="premium-btn secondary" type="button" key={`${message.id}-${action.type}-${action.label}`} onClick={() => handleAction(action)}>
-                    <Icon name={actionIcon(action)} /> {action.label}
-                  </button>
-                ))}
+            <div className="chat-message-footer">
+              {message.metadata?.agent_run ? (
+                <button
+                  className="chat-info-toggle"
+                  type="button"
+                  title={expandedRunIds.has(message.id) ? "Hide feedback review" : "Show feedback review"}
+                  aria-label={expandedRunIds.has(message.id) ? "Hide feedback review" : "Show feedback review"}
+                  aria-expanded={expandedRunIds.has(message.id)}
+                  onClick={() => toggleAgentRun(message.id)}
+                >
+                  <Icon name="info" />
+                </button>
+              ) : (
+                <span />
+              )}
+              <time>{formatMessageTime(message.created_at)}</time>
+            </div>
+            {message.metadata?.agent_run && expandedRunIds.has(message.id) && (
+              <div className="chat-message-info">
+                <AgentRunSummary run={message.metadata.agent_run} />
               </div>
             )}
           </div>
         ))}
-        {sending && <div className="inline-loader"><span className="loader-orbit" aria-hidden="true"><span /><span /><span /></span>Thinking with {provider.toUpperCase()}...</div>}
-        {generatingVideo && <div className="inline-loader"><span className="loader-orbit" aria-hidden="true"><span /><span /><span /></span>Generating video...</div>}
+        {sending && <FilmThinkingLoader provider={provider} />}
+        {videoBusy && <div className="inline-loader"><span className="loader-orbit" aria-hidden="true"><span /><span /><span /></span>Generating video...</div>}
       </div>
 
       {error && <div className="clip-chat-error"><Icon name="warning" /> {error}</div>}
 
-      <form
-        className="clip-chat-input"
-        onSubmit={(event) => {
-          event.preventDefault();
-          submitInput();
-        }}
-      >
-        <div className="clip-chat-input-field">
-          {matchingCommands.length > 0 && (
-            <div className="slash-command-menu">
-              {matchingCommands.map((command) => (
-                <button type="button" key={command.name} onClick={() => setInput(command.name)}>
-                  <code>{command.name}</code>
-                  <span>{command.description}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          <textarea
-            value={input}
-            disabled={sending}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                submitInput();
-              }
-            }}
-            placeholder="Ask about feedback, assets, timeline, memory, workflow... Type /help for commands."
-            rows={2}
-          />
-        </div>
-        <button className="icon-btn chat-send-btn" type="submit" title="Send Message" disabled={sending || !input.trim()}>
-          <Icon name="send" />
-        </button>
-      </form>
+      <div className="clip-chat-input-wrapper">
+        <PromptInputBox
+          value={input}
+          onValueChange={setInput}
+          isLoading={sending}
+          onSend={(messageText) => {
+            if (executeSlashCommand(messageText)) return;
+            void sendMessage(messageText);
+          }}
+          topAddon={
+            matchingCommands.length > 0 && (
+              <div className="slash-command-menu">
+                {matchingCommands.map((command) => (
+                  <button
+                    type="button"
+                    key={command.name}
+                    onClick={() => setInput(command.name)}
+                  >
+                    <code>{command.name}</code>
+                    <span>{command.description}</span>
+                  </button>
+                ))}
+              </div>
+            )
+          }
+        />
+      </div>
     </aside>
   );
+}
+
+function FilmThinkingLoader({ provider }: { provider: Provider }) {
+  const words = ["blocking", "framing", "lighting", "rolling", "storyboarding", "composing", "grading", "cutting", "mixing", "rendering"];
+
+  return (
+    <div className="film-thinking-loader" role="status" aria-live="polite" aria-label={`Working with ${provider.toUpperCase()}`}>
+      <div className="film-clapper" aria-hidden="true">
+        <span className="film-clapper-top">
+          <i />
+          <i />
+          <i />
+        </span>
+        <span className="film-clapper-body">
+          <b />
+          <b />
+        </span>
+      </div>
+      <div className="film-loader-copy">
+        <strong>
+          {words.map((word) => (
+            <em key={word}>{word}</em>
+          ))}
+        </strong>
+      </div>
+    </div>
+  );
+}
+
+function formatAgentRunStatus(value: string) {
+  return value.replace(/_/g, " ");
+}
+
+function AgentRunSummary({ run }: { run: ClipAgentRun }) {
+  const steps = run.plan_steps || [];
+  const results = run.tool_results || [];
+  return (
+    <div className="agent-run-summary">
+      <div className="agent-run-header">
+        <div>
+          <span>Agent Plan</span>
+          <strong>{formatAgentRunStatus(run.intent)}</strong>
+        </div>
+        <em className={`agent-run-status ${run.status}`}>{formatAgentRunStatus(run.status)}</em>
+      </div>
+      <div className="agent-run-meta">
+        <span>{formatAgentRunStatus(run.autonomy_level)}</span>
+        <span>{Math.round((run.confidence || 0) * 100)}% confidence</span>
+        {run.approval_required && <span>approval needed</span>}
+        {run.freshness?.is_stale && <span>stale: {run.freshness.stale_reasons.join(", ")}</span>}
+      </div>
+      {steps.length > 0 && (
+        <ol className="agent-run-steps">
+          {steps.slice(0, 4).map((step) => (
+            <li key={step.id} className={step.status}>
+              <span>{step.label}</span>
+              <em>{formatAgentRunStatus(step.status)}</em>
+            </li>
+          ))}
+        </ol>
+      )}
+      {results.length > 0 && (
+        <div className="agent-run-results">
+          {results.slice(0, 3).map((result, index) => (
+            <span key={`${run.id}-result-${index}`}>
+              {formatToolResult(result)}
+            </span>
+          ))}
+        </div>
+      )}
+      {run.self_evaluation && (
+        <div className="agent-run-results">
+          <span>{formatSelfEvaluation(run.self_evaluation)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatToolResult(result: Record<string, unknown>) {
+  const tool = typeof result.tool === "string" ? formatAgentRunStatus(result.tool) : "tool";
+  const message = typeof result.message === "string" ? result.message : "";
+  return message ? `${tool}: ${message}` : tool;
+}
+
+function formatSelfEvaluation(value: Record<string, unknown>) {
+  const verdict = typeof value.verdict === "string" ? value.verdict.replace(/_/g, " ") : "evaluated";
+  const nextAction = value.next_action && typeof value.next_action === "object" ? value.next_action as Record<string, unknown> : null;
+  const nextType = typeof nextAction?.type === "string" ? nextAction.type.replace(/_/g, " ") : "";
+  return nextType ? `Self-evaluation: ${verdict}. Next: ${nextType}.` : `Self-evaluation: ${verdict}.`;
 }
 
 function ChatMediaGallery({ media, onPreview }: { media: ClipChatMedia[]; onPreview: (preview: PreviewState) => void }) {
@@ -549,13 +757,25 @@ function MarkdownMessage({ text }: { text: string }) {
 }
 
 function normalizeChatMarkdown(text: string) {
-  return dedentAccidentalPromptBlock(unwrapMarkdownFence(text));
+  return dedentAccidentalPromptBlock(unwrapPromptCodeFences(unwrapMarkdownFence(text)));
 }
 
 function unwrapMarkdownFence(text: string) {
   const trimmed = text.trim();
   const match = trimmed.match(/^```[\w-]*\s*\n([\s\S]*?)\n```$/i);
   return match ? match[1].trim() : text;
+}
+
+function unwrapPromptCodeFences(text: string) {
+  return text.replace(
+    /(^|\n)([^\n`]*(?:prompt|seedance|video model prompt)[^\n`]*:\s*)?\n?```(?:text|markdown|md)?\s*\n([\s\S]*?)\n```/gi,
+    (_match, prefix: string, label: string | undefined, body: string) => {
+      const cleanPrefix = prefix || "";
+      const cleanLabel = (label || "").trim();
+      const cleanBody = body.trim();
+      return cleanLabel ? `${cleanPrefix}${cleanLabel}\n${cleanBody}` : `${cleanPrefix}${cleanBody}`;
+    },
+  );
 }
 
 function dedentAccidentalPromptBlock(text: string) {

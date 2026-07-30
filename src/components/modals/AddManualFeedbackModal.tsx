@@ -131,7 +131,7 @@ export function AddManualFeedbackModal({
                   width: "100%",
                   background: "var(--bg-tertiary)",
                   border: "1px solid var(--border-color)",
-                  borderRadius: "6px",
+                  borderRadius: "3px",
                   padding: "8px 12px",
                   color: "var(--text-primary)",
                   outline: "none",

@@ -41,6 +41,7 @@ mdurl
 modal
 multidict
 openai
+openai-agents
 packaging
 pluggy
 propcache

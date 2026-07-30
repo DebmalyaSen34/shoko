@@ -57,8 +57,8 @@
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   --header-height: 58px;
   --sidebar-width: 320px;
-  --timeline-strip-height: 350px;
-  --timeline-context-height: 508px;
+  --timeline-strip-height: clamp(300px, 36vh, 350px);
+  --timeline-context-height: clamp(300px, 42vh, 508px);
 
   font-family: var(--font-sans);
   color: var(--text-primary);
@@ -145,6 +145,7 @@ button {
 .shoko-shell {
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   background: var(--bg-primary);
   color: var(--text-primary);
@@ -153,7 +154,7 @@ button {
 .shoko-topbar {
   height: var(--header-height);
   display: grid;
-  grid-template-columns: 230px minmax(260px, 1fr) auto;
+  grid-template-columns: clamp(168px, 16vw, 230px) minmax(220px, 1fr) auto;
   align-items: center;
   background: #ffffff;
   border-bottom: 1px solid var(--border-color);
@@ -336,13 +337,14 @@ button {
 
 .shoko-desktop-frame {
   height: calc(100vh - var(--header-height));
+  height: calc(100dvh - var(--header-height));
   display: flex;
   min-height: 0;
 }
 
 .shoko-left-rail {
-  width: 98px;
-  flex: 0 0 98px;
+  width: clamp(74px, 6.8vw, 98px);
+  flex: 0 0 clamp(74px, 6.8vw, 98px);
   background: #24292e;
   border-right: 1px solid rgba(250, 251, 252, 0.08);
   padding-top: 11px;
@@ -351,7 +353,7 @@ button {
 
 .rail-item {
   width: 100%;
-  min-height: 84px;
+  min-height: clamp(68px, 9vh, 84px);
   border: 0;
   background: transparent;
   color: #fafbfc;
@@ -1494,8 +1496,9 @@ button {
 }
 
 .compact-timeline-scroll {
-  flex: 0 0 var(--timeline-strip-height);
-  min-height: 0;
+  flex: 0 1 var(--timeline-strip-height);
+  min-height: 300px;
+  max-height: var(--timeline-strip-height);
   overflow: auto;
   cursor: grab;
   user-select: none;
@@ -2012,13 +2015,13 @@ button {
 }
 
 .lower-context-panels {
-  flex: 0 0 var(--timeline-context-height);
-  min-height: var(--timeline-context-height);
-  height: var(--timeline-context-height);
+  flex: 1 1 var(--timeline-context-height);
+  min-height: 240px;
+  height: auto;
   width: calc(100% - 48px);
   margin: 18px 24px 20px;
   display: grid;
-  grid-template-columns: 310px minmax(470px, 1.22fr) minmax(350px, 1fr);
+  grid-template-columns: minmax(240px, 0.74fr) minmax(360px, 1.22fr) minmax(300px, 1fr);
   gap: 16px;
   align-items: stretch;
 }
@@ -7092,4 +7095,216 @@ button {
 .timeline-chat-log,
 .clip-tab-body {
   min-height: 0;
+}
+
+@media (max-width: 1320px) {
+  :root {
+    --timeline-strip-height: clamp(300px, 34vh, 330px);
+    --timeline-context-height: clamp(280px, 40vh, 440px);
+  }
+
+  .shoko-topbar {
+    grid-template-columns: 178px minmax(190px, 1fr) auto;
+  }
+
+  .shoko-brand {
+    padding-left: 18px;
+  }
+
+  .shoko-project-switcher {
+    gap: 10px;
+    padding-left: 14px;
+  }
+
+  .shoko-project-select-box select {
+    max-width: 170px;
+  }
+
+  .shoko-topbar-actions {
+    gap: 8px;
+    padding-right: 14px;
+  }
+
+  .shoko-primary-button {
+    padding-inline: 16px;
+  }
+
+  .shoko-icon-button {
+    width: 42px;
+  }
+
+  .shoko-workspace.timeline-active .shoko-workspace-inner {
+    padding: 10px;
+  }
+
+  .compact-timeline-header {
+    gap: 12px;
+    padding-inline: 14px;
+  }
+
+  .compact-no-feedback {
+    padding-inline: 18px;
+  }
+
+  .lower-context-panels {
+    grid-template-columns: minmax(220px, 0.72fr) minmax(330px, 1.2fr) minmax(270px, 0.95fr);
+    gap: 12px;
+    padding: 14px 16px 16px;
+  }
+
+  .clip-preview-panel {
+    padding-inline: 14px;
+  }
+}
+
+@media (max-width: 1180px) {
+  :root {
+    --timeline-strip-height: clamp(292px, 34vh, 320px);
+    --timeline-context-height: clamp(300px, 42vh, 420px);
+  }
+
+  .shoko-topbar {
+    grid-template-columns: 150px minmax(170px, 1fr) auto;
+  }
+
+  .shoko-brand strong {
+    font-size: 17px;
+  }
+
+  .saved-state {
+    display: none;
+  }
+
+  .shoko-left-rail {
+    width: 74px;
+    flex-basis: 74px;
+  }
+
+  .rail-item {
+    min-height: 66px;
+    gap: 7px;
+  }
+
+  .rail-item span {
+    max-width: 62px;
+    font-size: 11px;
+  }
+
+  .timeline-title-group {
+    gap: 10px;
+  }
+
+  .timeline-title-group h2 {
+    font-size: 16px;
+  }
+
+  .compact-timeline-actions {
+    gap: 8px;
+  }
+
+  .timeline-zoom-group {
+    min-width: 96px;
+  }
+
+  .compact-no-feedback {
+    min-height: 42px;
+    padding-block: 6px;
+  }
+
+  .compact-no-feedback div {
+    font-size: 12px;
+  }
+
+  .compact-action {
+    min-height: 32px;
+    padding-inline: 10px;
+  }
+
+  .clip-preview-media {
+    width: min(180px, 76%);
+    max-height: 260px;
+  }
+}
+
+@media (max-width: 1080px) {
+  .lower-context-panels {
+    grid-template-columns: minmax(220px, 0.78fr) minmax(0, 1.22fr);
+    min-height: 300px;
+    overflow-y: auto;
+  }
+
+  .dock-chat-panel {
+    grid-column: 1 / -1;
+    min-height: 220px;
+  }
+}
+
+@media (max-height: 850px) {
+  :root {
+    --timeline-strip-height: clamp(292px, 35vh, 320px);
+    --timeline-context-height: clamp(250px, 38vh, 360px);
+  }
+
+  .shoko-workspace.timeline-active .shoko-workspace-inner {
+    padding: 8px;
+  }
+
+  .compact-timeline-header {
+    min-height: 50px;
+  }
+
+  .compact-no-feedback {
+    min-height: 40px;
+  }
+
+  .compact-timeline-scroll {
+    min-height: 292px;
+  }
+
+  .lower-context-panels {
+    min-height: 230px;
+    padding-block: 12px;
+  }
+
+  .clip-tab-body {
+    padding-block: 12px;
+  }
+}
+
+@media (max-height: 780px) {
+  :root {
+    --timeline-strip-height: 292px;
+    --timeline-context-height: 300px;
+  }
+
+  .rail-item {
+    min-height: 62px;
+  }
+
+  .compact-timeline-header {
+    min-height: 48px;
+  }
+
+  .timeline-title-group span {
+    font-size: 11px;
+  }
+
+  .compact-no-feedback {
+    min-height: 38px;
+  }
+
+  .compact-no-feedback .shoko-ghost-button {
+    min-height: 30px;
+  }
+
+  .lower-context-panels {
+    min-height: 220px;
+    padding: 10px 14px 12px;
+  }
+
+  .clip-preview-media {
+    width: min(150px, 70%);
+    max-height: 220px;
+    margin-block: 8px;
+  }
 }

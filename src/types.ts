@@ -97,6 +97,9 @@ export type PromptVersion = {
   initial_frame_image_path?: string;
   initial_frame_prompt?: string;
   clip_frame_paths?: string[];
+  referenced_frames?: ReferencedFrameState[];
+  referenced_frame_paths?: string[];
+  referenced_frame_labels?: string[];
   audio_used?: string | null;
   audio_path?: string | null;
   audio_url?: string | null;

@@ -1,6 +1,6 @@
 import { Icon } from "../Icon";
 
-export type RailItemId = "project" | "timeline" | "feedback" | "workflow" | "exports" | "settings";
+export type RailItemId = "project" | "timeline" | "feedback" | "settings";
 
 type RailItem = {
   id: RailItemId;
@@ -12,8 +12,6 @@ const RAIL_ITEMS: RailItem[] = [
   { id: "project", icon: "folder", label: "Project" },
   { id: "timeline", icon: "timeline", label: "Timeline" },
   { id: "feedback", icon: "comments", label: "Feedback" },
-  { id: "workflow", icon: "magic", label: "AI Workflow" },
-  { id: "exports", icon: "export", label: "Exports" },
   { id: "settings", icon: "settings", label: "Settings" },
 ];
 

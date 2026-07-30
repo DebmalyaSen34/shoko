@@ -4,7 +4,6 @@ import { Icon } from "../Icon";
 type TopBarProps = {
   activeProject: string;
   projects: string[];
-  onExport: () => void;
   onOpenSettings: () => void;
   onRunWorkflow: () => void;
   onProjectChange: (project: string) => void;
@@ -13,7 +12,6 @@ type TopBarProps = {
 export function TopBar({
   activeProject,
   projects,
-  onExport,
   onOpenSettings,
   onRunWorkflow,
   onProjectChange,
@@ -54,9 +52,6 @@ export function TopBar({
       <div className="shoko-topbar-actions">
         <button className="shoko-primary-button" type="button" onClick={onRunWorkflow}>
           <Icon name="play" /> Run Workflow
-        </button>
-        <button className="shoko-ghost-button" type="button" title="Export" onClick={onExport}>
-          <Icon name="export" /> Export
         </button>
         <button className="shoko-icon-button" title="Settings" type="button" onClick={onOpenSettings}>
           <Icon name="settings" />

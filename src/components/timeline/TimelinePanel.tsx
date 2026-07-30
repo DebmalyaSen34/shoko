@@ -18,7 +18,7 @@ export type TimelinePanelProps = {
   refEl: RefObject<HTMLDivElement | null>;
   runningIndexes: Set<number>;
   zoom: number;
-  executeWorkflow: (feedbackIndex: number) => void;
+  executeWorkflow: (feedbackIndex: number) => Promise<void> | void;
   findPrompt: (clipName: string, clipOccurrence?: number) => PromptRecord | null;
   openResultFromVersion: (version: PromptVersion) => void;
   generatingVideoKeys: Set<string>;
@@ -175,7 +175,7 @@ function CompactTimeline({
   refEl: RefObject<HTMLDivElement | null>;
   runningIndexes: Set<number>;
   zoom: number;
-  executeWorkflow: (feedbackIndex: number) => void;
+  executeWorkflow: (feedbackIndex: number) => Promise<void> | void;
   findPrompt: (clipName: string, clipOccurrence?: number) => PromptRecord | null;
   openResultFromVersion: (version: PromptVersion) => void;
   generatingVideoKeys: Set<string>;
@@ -190,6 +190,16 @@ function CompactTimeline({
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [filmstrips, setFilmstrips] = useState<Record<number, FilmstripLoadState>>({});
   const [waveform, setWaveform] = useState<WaveformLoadState>({ status: "idle", segments: [] });
+  const promptStateKey = useMemo(
+    () => (projectData?.prompts || [])
+      .map((prompt) => {
+        const versions = getVersions(prompt);
+        const latest = versions[versions.length - 1];
+        return `${prompt.clip_used || ""}:${prompt.clip_occurrence ?? ""}:${versions.length}:${latest?.prompt_version_id || latest?.timestamp || ""}`;
+      })
+      .join("|"),
+    [projectData?.prompts],
+  );
 
   const { layouts, contentWidth, pxPerSecond, totalSeconds } = useMemo(() => {
     const clips = projectData?.timeline || [];
@@ -255,7 +265,7 @@ function CompactTimeline({
       });
 
     return () => controller.abort();
-  }, [projectData?.project_name, projectData?.timeline.length, selectedClipIndex]);
+  }, [projectData?.project_name, projectData?.timeline.length, selectedClipIndex, promptStateKey]);
 
   useEffect(() => {
     if (!projectData?.project_name) return;
@@ -710,7 +720,7 @@ function SelectedClipDock({
   selectedVersionIndex: number;
   runningIndexes: Set<number>;
   externalGeneratingVideo: boolean;
-  executeWorkflow: (feedbackIndex: number) => void;
+  executeWorkflow: (feedbackIndex: number) => Promise<void> | void;
   onAddManualFeedback: (clipName: string) => void;
   onGenerateVideo: (clipIndex: number, promptVersionIndex?: number) => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
   onOpenDetails: (version: PromptVersion) => void;

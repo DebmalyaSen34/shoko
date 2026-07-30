@@ -1216,12 +1216,8 @@ def matching_feedback(project_data: dict, clip: dict, clip_index: int) -> Option
 def latest_prompt_version(prompt: Optional[dict]) -> Optional[dict]:
     if not prompt:
         return None
-    history = prompt.get("history")
-    if isinstance(history, list) and history:
-        return history[-1]
-    if prompt.get("video_model_prompt"):
-        return prompt
-    return None
+    versions = prompt_versions_for_record(prompt)
+    return versions[-1] if versions else None
 
 
 def stable_state_id(prefix: str, *parts: Any) -> str:
@@ -1370,6 +1366,72 @@ def _prompt_versions_for_state(prompt: Optional[dict], project_name: str, clip_i
     return normalized
 
 
+def query_requests_latest_prompt(query: str = "") -> bool:
+    lower = str(query or "").lower()
+    has_prompt = "prompt" in lower or "prompts" in lower
+    has_latest = any(token in lower for token in ["latest", "newest", "recent", "current", "last generated"])
+    return has_prompt and has_latest
+
+
+def has_word(text: str, word: str) -> bool:
+    return bool(re.search(rf"\b{re.escape(word)}\b", text, flags=re.IGNORECASE))
+
+
+def wants_prompt_display(text: str) -> bool:
+    lower = text.lower()
+    has_prompt = has_word(lower, "prompt") or has_word(lower, "prompts")
+    has_display = any(has_word(lower, word) for word in ["show", "view", "display", "see", "give", "tell", "paste", "what"])
+    return has_prompt and (has_display or query_requests_latest_prompt(text))
+
+
+def format_latest_prompt_reply(context: dict) -> str:
+    active_prompt = (context.get("clip_state") or {}).get("active_prompt") or {}
+    latest_version = context.get("latest_version") or {}
+    versions = active_prompt.get("versions") or []
+    version_index = latest_version.get("version_index")
+    if version_index is None and versions:
+        version_index = len(versions) - 1
+    prompt_text = str(latest_version.get("video_model_prompt") or "").strip()
+    if not prompt_text:
+        return "No generated prompt exists for this clip yet."
+    label = f"v{int(version_index) + 1}" if version_index is not None else "latest"
+    return f"Latest Prompt ({label})\n\n{prompt_text}"
+
+
+def user_explicitly_requests_video_generation(text: str) -> bool:
+    lower = text.lower()
+    if wants_prompt_display(text):
+        return False
+    has_video_target = any(has_word(lower, word) for word in ["video", "clip", "render", "seedance"])
+    has_generation_verb = any(has_word(lower, word) for word in ["generate", "render", "create", "make", "start"])
+    return has_video_target and has_generation_verb
+
+
+def promote_latest_prompt_selection(project_name: str, clip_index: Optional[int]) -> Optional[dict]:
+    if clip_index is None:
+        return None
+    try:
+        project_data = get_project_data(project_name)
+        timeline = project_data.get("timeline", [])
+        if clip_index < 0 or clip_index >= len(timeline):
+            return None
+        clip = timeline[clip_index]
+        prompt = matching_prompt(project_data, clip, clip_index)
+        prompt_versions = _prompt_versions_for_state(prompt, project_name, clip_index)
+        if not prompt_versions:
+            return None
+        latest_version = prompt_versions[-1]
+        clip_key = clip_chat_key(clip.get("clip", ""), clip_index)
+        return update_clip_selection(
+            project_name,
+            clip_key,
+            {"active_prompt_version_id": latest_version.get("prompt_version_id")},
+        )
+    except Exception as exc:
+        print(f"Warning: could not promote latest prompt selection for {project_name} clip {clip_index}: {exc}")
+        return None
+
+
 def build_clip_freshness(
     project_name: str,
     *,
@@ -1484,6 +1546,9 @@ def build_clip_state(project_name: str, clip_index: int, query: str = "") -> dic
     prompt_versions = _prompt_versions_for_state(prompt, project_name, clip_index)
     default_version = prompt_versions[-1] if prompt_versions else None
     selected_prompt_version_id = selection.get("active_prompt_version_id")
+    if selected_prompt_version_id and query_requests_latest_prompt(query):
+        selection_stale_reasons.append("active_prompt_version_overridden_by_latest_query")
+        selected_prompt_version_id = None
     selected_version = next(
         (version for version in prompt_versions if version.get("prompt_version_id") == selected_prompt_version_id),
         None,
@@ -2381,10 +2446,8 @@ def infer_action_suggestions(text: str, context: dict) -> list[dict]:
         if wants_autonomous_execution(text):
             action["autonomous"] = True
         suggestions.append(action)
-    if any(word in lower for word in ["video", "generate", "seedance", "render"]) and latest_version.get("video_model_prompt"):
+    if user_explicitly_requests_video_generation(text) and latest_version.get("video_model_prompt"):
         action = {"type": "generate_video", "label": "Generate Video"}
-        if "generate" in lower or "render" in lower or "seedance" in lower:
-            action["autonomous"] = True
         suggestions.append(action)
     return suggestions
 
@@ -2529,9 +2592,10 @@ def plan_chat_agent_run(message: str, context: dict, explicit_actions: list[dict
         action for action in explicit_actions
         if action.get("type") in {"execute_workflow", "generate_video"}
     ]
-    direct_execution = not _asks_for_permission_or_advice(message) and (
+    has_generate_video_action = any(action.get("type") == "generate_video" for action in risky_actions)
+    direct_execution = not has_generate_video_action and not _asks_for_permission_or_advice(message) and (
         wants_autonomous_execution(message)
-        or any(word in lower for word in ["generate", "render", "seedance"])
+        or any(has_word(lower, word) for word in ["render", "seedance"])
     )
     if risky_actions and direct_execution:
         autonomy_level = "full_autopilot"
@@ -3372,6 +3436,9 @@ def _run_reference_frame_tool_call(project_name: str, context: dict, arguments: 
 
 
 async def generate_chat_reply_with_tools(provider: str, message: str, context: dict, messages: list[dict]) -> tuple[str, list[dict]]:
+    if wants_prompt_display(message):
+        return format_latest_prompt_reply(context), []
+
     if wants_clip_summary_or_analysis(message):
         if context.get("clip_context"):
             return summarize_clip_context(context.get("clip_context")), []
@@ -3790,6 +3857,9 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
         "audio_used",
         "audio_path",
         "audio_url",
+        "referenced_frames",
+        "referenced_frame_paths",
+        "referenced_frame_labels",
         "is_dialogue_active",
         "generate_audio",
         "ratio",
@@ -3903,6 +3973,9 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
                     p_item["initial_frame_image_path"] = gen_item.get("initial_frame_image_path")
                     p_item["initial_frame_prompt"] = gen_item.get("initial_frame_prompt")
                     p_item["clip_frame_paths"] = gen_item.get("clip_frame_paths", [])
+                    p_item["referenced_frames"] = gen_item.get("referenced_frames", [])
+                    p_item["referenced_frame_paths"] = gen_item.get("referenced_frame_paths", [])
+                    p_item["referenced_frame_labels"] = gen_item.get("referenced_frame_labels", [])
                     copy_handoff_fields(p_item, gen_item)
                     updated = True
                 break
@@ -3937,6 +4010,9 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
                     "initial_frame_image_path": gen_item.get("initial_frame_image_path"),
                     "initial_frame_prompt": gen_item.get("initial_frame_prompt"),
                     "clip_frame_paths": gen_item.get("clip_frame_paths", []),
+                    "referenced_frames": gen_item.get("referenced_frames", []),
+                    "referenced_frame_paths": gen_item.get("referenced_frame_paths", []),
+                    "referenced_frame_labels": gen_item.get("referenced_frame_labels", []),
                     "history": [new_entry]
                 }
                 copy_handoff_fields(prompt_record, gen_item)
@@ -4115,17 +4191,24 @@ async def execute_workflow_job(project: str, job_id: str) -> None:
 
         if rc == 0:
             save_output_to_prompts(project, provider)
+            clip_index = clip_index_for_feedback_index(project, feedback_index)
+            promoted_selection = promote_latest_prompt_selection(project, clip_index)
             update_project_job(
                 project,
                 job_id,
                 {
                     "status": "succeeded",
                     "finished_at": now_iso(),
-                    "result": {"exit_code": rc, "duration_ms": duration_ms},
+                    "result": {
+                        "exit_code": rc,
+                        "duration_ms": duration_ms,
+                        "clip_index": clip_index,
+                        "active_prompt_version_id": (promoted_selection or {}).get("active_prompt_version_id"),
+                    },
                 },
             )
             append_project_job_log(project, job_id, f"[SUCCESS] Workflow execution finished with exit code {rc}.")
-            record_self_evaluation_after_job(project, job_id, clip_index_for_feedback_index(project, feedback_index), "workflow_job")
+            record_self_evaluation_after_job(project, job_id, clip_index, "workflow_job")
             log_event("workflow.job.finish", project=project, index=feedback_index, provider=provider, job_id=job_id, status="success", exit_code=rc, duration_ms=duration_ms)
         else:
             update_project_job(
@@ -4345,13 +4428,42 @@ def prepare_continuity_reference_from_intent(project_name: str, feedback_index: 
     return frame_path, note
 
 
+def _prompt_version_signature(version: dict) -> tuple:
+    return (
+        str(version.get("video_model_prompt") or "").strip(),
+        str(version.get("initial_frame_prompt") or "").strip(),
+        str(version.get("initial_frame_image_path") or ""),
+        json.dumps(version.get("selected_assets") or [], sort_keys=True, ensure_ascii=False),
+        json.dumps(version.get("referenced_frames") or [], sort_keys=True, ensure_ascii=False),
+        json.dumps(version.get("referenced_frame_paths") or [], sort_keys=True, ensure_ascii=False),
+    )
+
+
+def _top_level_prompt_version(prompt: dict) -> Optional[dict]:
+    if not prompt.get("video_model_prompt"):
+        return None
+    entry = {
+        key: value
+        for key, value in prompt.items()
+        if key not in {"history"}
+    }
+    if not entry.get("timestamp"):
+        entry["timestamp"] = prompt.get("updated_at") or prompt.get("created_at")
+    return entry
+
+
 def prompt_versions_for_record(prompt: dict) -> list[dict]:
     history = prompt.get("history")
+    versions = []
     if isinstance(history, list) and history:
-        return history
-    if prompt.get("video_model_prompt"):
-        return [prompt]
-    return []
+        versions = [version for version in history if isinstance(version, dict)]
+    top_level_version = _top_level_prompt_version(prompt)
+    if top_level_version:
+        if not versions or _prompt_version_signature(versions[-1]) != _prompt_version_signature(top_level_version):
+            versions.append(top_level_version)
+        else:
+            versions[-1] = {**versions[-1], **top_level_version}
+    return versions
 
 
 def _safe_video_stem(clip_name: str) -> str:
@@ -4441,7 +4553,7 @@ def generate_clip_video(
     payload = None
     try:
         payload = build_segmind_payload(
-            item={**prompt_record, **selected_version},
+            item={**prompt_record, **selected_version, "duration": duration, "generate_audio": generate_audio},
             api_key=api_key,
             cache=cache,
             use_local_initial_frame=True,

@@ -484,8 +484,10 @@ def _reference_descriptions_from_item(item: dict[str, Any]) -> list[str]:
 
 def _normalize_prepared_payload(item: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(payload)
-    normalized["duration"] = SEGMIND_DURATION_SECONDS
-    normalized["generate_audio"] = False
+    normalized["duration"] = clamp_duration(item.get("duration") if item.get("duration") is not None else SEGMIND_DURATION_SECONDS)
+    normalized["generate_audio"] = bool(item.get("generate_audio", False))
+    if not bool(item.get("allow_reference_audio", False)):
+        normalized.pop("reference_audios", None)
     prompt = str(normalized.get("prompt") or item.get("video_model_prompt") or "").strip()
     prompt = re.sub(
         r"(referenced cutaway/reaction frame) for @[\w-]+ from",
@@ -656,15 +658,16 @@ def build_segmind_payload(
         )
         prompt_text = _reference_map_block(reference_descriptions, first_frame_url) + prompt_text
 
-    audio_ref = (
-        item.get("audio_reference_path")
-        or item.get("trimmed_audio_path")
-        or item.get("audio_url")
-        or item.get("audio_path")
-    )
-    audio_url = _cached_supabase_audio_url(audio_ref, cache=cache) if audio_ref else None
-    if audio_url:
-        reference_audios.append(audio_url)
+    if bool(item.get("generate_audio", False)) and bool(item.get("allow_reference_audio", False)):
+        audio_ref = (
+            item.get("audio_reference_path")
+            or item.get("trimmed_audio_path")
+            or item.get("audio_url")
+            or item.get("audio_path")
+        )
+        audio_url = _cached_supabase_audio_url(audio_ref, cache=cache) if audio_ref else None
+        if audio_url:
+            reference_audios.append(audio_url)
 
     payload = {
         "prompt": prompt_text,

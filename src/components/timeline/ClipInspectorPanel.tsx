@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import type { AssetFile, ClipAssetReference, ClipState, FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptVersion, TimelineClip } from "../../types";
+import type { AssetFile, ClipAssetReference, ClipState, FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptVersion, ReferencedFrameState, TimelineClip } from "../../types";
 import { staticUrl } from "../../lib/api";
 import { basename, versionLabel } from "../../lib/format";
 import { Icon } from "../Icon";
 
-export type ClipInspectorTab = "feedback" | "prompts" | "assets" | "videos";
+export type ClipInspectorTab = "feedback" | "prompts" | "references" | "assets" | "videos";
 
 type ClipInspectorPanelProps = {
   activeTab: ClipInspectorTab;
@@ -48,6 +48,7 @@ export function ClipInspectorPanel({
     promptVersions[promptVersions.length - 1];
   const videoPromptSection = selectedPromptVersion?.sections.find((section) => section.kind === "video");
   const supportingPromptSections = selectedPromptVersion?.sections.filter((section) => section.kind !== "video") || [];
+  const referenceItems = selectedPromptVersion ? referenceItemsForVersion(selectedPromptVersion.version, clipState?.asset_state.referenced_frames || []) : [];
   const projectAssets = flattenProjectAssets(projectData);
   const backendAssets = clipState?.asset_state.selected_assets || [];
   const assets = clipState
@@ -72,12 +73,20 @@ export function ClipInspectorPanel({
 
   return (
     <section className="clip-inspector-panel">
-      <div className={`clip-inspector-tabs ${generatedVideos.length > 0 ? "has-videos" : ""}`} role="tablist" aria-label="Clip context">
+      <div
+        className={`clip-inspector-tabs ${generatedVideos.length > 0 ? "has-videos" : ""}`}
+        role="tablist"
+        aria-label="Clip context"
+        style={{ gridTemplateColumns: `repeat(${4 + (generatedVideos.length > 0 ? 1 : 0)}, 1fr)` }}
+      >
         <button className={activeTab === "feedback" ? "active" : ""} type="button" onClick={() => setActiveTab("feedback")}>
           Feedback ({feedbackItems.length})
         </button>
         <button className={activeTab === "prompts" ? "active" : ""} type="button" onClick={() => setActiveTab("prompts")}>
           Prompt ({promptVersions.length})
+        </button>
+        <button className={activeTab === "references" ? "active" : ""} type="button" onClick={() => setActiveTab("references")}>
+          References ({referenceItems.length})
         </button>
         <button className={activeTab === "assets" ? "active" : ""} type="button" onClick={() => setActiveTab("assets")}>
           Assets ({assets.length})
@@ -157,6 +166,60 @@ export function ClipInspectorPanel({
           ) : (
             <div className="compact-feedback-empty">
               <Icon name="file" /> No generated prompts for this clip
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === "references" && (
+        <div className="clip-tab-body references-tab-body">
+          {promptVersions.length ? (
+            <>
+              <div className="prompt-version-toolbar">
+                <label>
+                  <span>Version</span>
+                  <select value={selectedPromptVersion.index} onChange={(event) => setPromptVersionIndex(Number(event.target.value))}>
+                    {promptVersions.map(({ version, index }) => (
+                      <option value={index} key={`${version.prompt_version_id || version.timestamp || "prompt"}-${index}`}>
+                        {versionLabel(version, index)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {selectedPromptVersion.index === selectedVersionIndex && (
+                  <span className="prompt-version-status" title="Selected version" aria-label="Selected version">
+                    <Icon name="check" />
+                  </span>
+                )}
+              </div>
+              <div className="clip-references-grid">
+                {referenceItems.length ? referenceItems.map((item) => (
+                  <button
+                    className="clip-reference-tile"
+                    key={`${item.source}-${item.path || item.url}-${item.label}`}
+                    type="button"
+                    title={`Preview ${item.label}`}
+                    onClick={() => onPreview({ file: referenceItemToAsset(item) })}
+                  >
+                    <div className="clip-reference-thumb">
+                      <img src={staticUrl(item.url || item.path)} alt="" loading="lazy" onError={(event) => { event.currentTarget.hidden = true; }} />
+                      <Icon name="image" className="asset-fallback-icon" />
+                    </div>
+                    <div className="clip-reference-meta">
+                      <strong>{item.label}</strong>
+                      <span>{item.meta}</span>
+                    </div>
+                  </button>
+                )) : (
+                  <div className="compact-feedback-empty">
+                    <Icon name="image" /> No extracted or reference frames for this prompt version
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="compact-feedback-empty">
+              <Icon name="file" /> No prompt versions available yet
             </div>
           )}
         </div>
@@ -269,6 +332,54 @@ function promptSections(version: PromptVersion) {
 
 function normalizePromptText(value?: string | null) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+type ReferenceItem = {
+  label: string;
+  meta: string;
+  path: string;
+  url: string;
+  source: "clip_frames" | "referenced_frames";
+};
+
+function referenceItemsForVersion(version: PromptVersion, fallbackReferencedFrames: ReferencedFrameState[]): ReferenceItem[] {
+  const clipFrames = (version.clip_frame_paths || []).map((path, index) => ({
+    label: `Extracted frame ${index + 1}`,
+    meta: basename(path),
+    path,
+    url: path,
+    source: "clip_frames" as const,
+  }));
+  const versionReferencedFrames: ReferencedFrameState[] = version.referenced_frames?.length
+    ? version.referenced_frames
+    : (version.referenced_frame_paths || []).map((path, index) => ({
+        reference_id: `${path}-${index}`,
+        frame_path: path,
+        reason: version.referenced_frame_labels?.[index],
+      }));
+  const referencedFrames = (versionReferencedFrames.length ? versionReferencedFrames : fallbackReferencedFrames).map((frame, index) => {
+    const path = frame.frame_path || frame.url || "";
+    return {
+      label: frame.timestamp ? `Reference ${frame.timestamp}` : `Reference frame ${index + 1}`,
+      meta: frame.reason || frame.clip_used || basename(path),
+      path,
+      url: frame.url || path,
+      source: "referenced_frames" as const,
+    };
+  }).filter((item) => item.path || item.url);
+  return [...clipFrames, ...referencedFrames];
+}
+
+function referenceItemToAsset(item: ReferenceItem): AssetFile {
+  const path = item.path || item.url;
+  return {
+    name: item.label,
+    path,
+    url: item.url || path,
+    type: "image",
+    size: item.meta,
+    source: item.source,
+  };
 }
 
 function collectGeneratedVideos(versions: PromptVersion[]) {

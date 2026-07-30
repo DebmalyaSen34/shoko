@@ -11,7 +11,6 @@ import type {
   GeneratedVideo,
   ClipChatSnapshot,
   FeedbackGroup,
-  ProjectEvent,
   PromptRecord,
   PromptVersion,
   PreviewState,
@@ -21,6 +20,7 @@ import type {
 import { getVersions } from "../../lib/format";
 import { apiUrl, staticUrl } from "../../lib/api";
 import { Icon } from "../Icon";
+import { WorkflowRunningLabel } from "../WorkflowRunningLabel";
 import { PromptInputBox } from "../ui/ai-prompt-box";
 
 type ClipChatPanelProps = {
@@ -33,7 +33,7 @@ type ClipChatPanelProps = {
   runningIndexes: Set<number>;
   externalGeneratingVideo?: boolean;
   onClose?: () => void;
-  onExecuteWorkflow: (feedbackIndex: number) => void;
+  onExecuteWorkflow: (feedbackIndex: number) => Promise<void> | void;
   onOpenPromptDetails: (version: PromptVersion) => void;
   onGenerateVideo: (clipIndex: number, promptVersionIndex?: number) => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
   onPreview: (preview: PreviewState) => void;
@@ -83,7 +83,6 @@ export function ClipChatPanel({
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ClipChatMessage[]>([]);
   const [clipState, setClipState] = useState<ClipState | null>(null);
-  const [events, setEvents] = useState<ProjectEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [generatingVideo, setGeneratingVideo] = useState(false);
@@ -109,19 +108,10 @@ export function ClipChatPanel({
   const videoBusy = generatingVideo || externalGeneratingVideo || videoJobs.length > 0;
   const activeVideo = clipState?.video_state.active_video || clipState?.video_state.latest_video;
   const selectedAssets = clipState?.asset_state.selected_assets || [];
-  const staleRuns = clipState?.agent_state.recent_runs.filter((run) => run.freshness?.is_stale) || [];
-  const selfEvaluation = clipState?.agent_state.recent_runs.find((run) => run.self_evaluation)?.self_evaluation;
   const promptStatus = activePrompt?.prompt_ready ? `Prompt v${(activePrompt.version_index ?? 0) + 1}` : "Prompt missing";
   const videoStatus = activeVideo ? activeVideo.label || `Video v${activeVideo.version}` : "Video missing";
   const assetStatus = `${selectedAssets.length} asset${selectedAssets.length === 1 ? "" : "s"}`;
   const jobStatus = activeJobs.length ? `${activeJobs.length} active job${activeJobs.length === 1 ? "" : "s"}` : recentJobs[0]?.status || "Idle";
-  const staleStatus = clipState && (clipState.freshness.stale_reasons.length > 0 || staleRuns.length > 0)
-    ? clipState.freshness.stale_reasons.length > 0
-      ? `Stale: ${clipState.freshness.stale_reasons.join(", ")}`
-      : `${staleRuns.length} stale run${staleRuns.length === 1 ? "" : "s"}`
-    : null;
-  const eventStatus = events.length ? `#${events[events.length - 1].sequence} ${events[events.length - 1].type.replace(/_/g, " ")}` : "No events";
-  const selfEvaluationStatus = selfEvaluation ? formatSelfEvaluation(selfEvaluation) : "";
   const clearStorageKey = useMemo(
     () => `loka15.clip-chat.cleared-at:${projectData.project_name}:${clipIndex}`,
     [clipIndex, projectData.project_name],
@@ -153,7 +143,6 @@ export function ClipChatPanel({
         if (cancelled) return;
         setMessages(data.messages);
         setClipState(data.context.clip_state);
-        void loadEvents(data.context.clip_state.clip_key);
       } catch (loadError) {
         if (cancelled) return;
         const message = loadError instanceof Error ? loadError.message : "Failed to load clip chat.";
@@ -190,21 +179,8 @@ export function ClipChatPanel({
       if (!response.ok) throw new Error(await response.text());
       const state = (await response.json()) as ClipState;
       setClipState(state);
-      void loadEvents(state.clip_key);
     } catch {
       // Keep the last known state visible.
-    }
-  }
-
-  async function loadEvents(clipKey?: string) {
-    const query = clipKey ? `?limit=8&clip_key=${encodeURIComponent(clipKey)}` : "?limit=8";
-    try {
-      const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectData.project_name)}/events${query}`));
-      if (!response.ok) return;
-      const data = (await response.json()) as { events: ProjectEvent[] };
-      setEvents(data.events || []);
-    } catch {
-      // Event history is helpful but non-blocking.
     }
   }
 
@@ -245,7 +221,7 @@ export function ClipChatPanel({
     }
 
     if (command === "/workflow") {
-      runWorkflowFromChat();
+      void runWorkflowFromChat();
       return true;
     }
 
@@ -295,7 +271,6 @@ export function ClipChatPanel({
       const data = (await response.json()) as ClipChatResponse;
       setMessages(data.messages);
       setClipState(data.clip_state);
-      void loadEvents(data.clip_state.clip_key);
     } catch (sendError) {
       const message = sendError instanceof Error ? sendError.message : "Failed to send message.";
       setError(message);
@@ -305,16 +280,22 @@ export function ClipChatPanel({
     }
   }
 
-  function runWorkflowFromChat(feedbackIndex?: number) {
+  async function runWorkflowFromChat(feedbackIndex?: number) {
     const index = feedbackIndex ?? runnableFeedback?.raw_index;
     if (typeof index !== "number") {
       setMessages((current) => [...current, localToolMessage("No feedback item is available for this clip yet.")]);
       return;
     }
 
-    onExecuteWorkflow(index);
     setMessages((current) => [...current, localToolMessage(`Workflow started for feedback index ${index} using ${provider.toUpperCase()}.`)]);
-    window.setTimeout(() => void refreshClipState(), 800);
+    try {
+      await onExecuteWorkflow(index);
+      await refreshClipState();
+      setMessages((current) => [...current, localToolMessage(`Workflow finished for feedback index ${index}. The latest prompt and references are ready.`)]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Workflow execution failed.";
+      setMessages((current) => [...current, localToolMessage(message)]);
+    }
   }
 
   function prepareVideoGeneration() {
@@ -374,7 +355,7 @@ export function ClipChatPanel({
 
   function handleAction(action: ClipChatAction) {
     if (action.type === "execute_workflow") {
-      runWorkflowFromChat(action.feedback_index);
+      void runWorkflowFromChat(action.feedback_index);
     } else if (action.type === "generate_video" || (action.type === "prepare_video" && action.label.toLowerCase().includes("generate"))) {
       void generateVideoFromChat();
     } else if (action.type === "prepare_video") {
@@ -403,7 +384,6 @@ export function ClipChatPanel({
       if (!response.ok) throw new Error(await response.text());
       const data = (await response.json()) as { clip_state: ClipState };
       setClipState(data.clip_state);
-      void loadEvents(data.clip_state.clip_key);
       setMessages((current) => [...current, localToolMessage(`Active prompt switched to version ${(version.version_index ?? 0) + 1}.`)]);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Failed to switch prompt version.");
@@ -426,7 +406,6 @@ export function ClipChatPanel({
       if (!response.ok) throw new Error(await response.text());
       const data = (await response.json()) as { clip_state: ClipState };
       setClipState(data.clip_state);
-      void loadEvents(data.clip_state.clip_key);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Failed to detach asset.");
     }
@@ -492,9 +471,6 @@ export function ClipChatPanel({
           <span className={!activeVideo ? "warning" : ""} title={activeVideo?.path || activeVideo?.url || undefined}>{videoStatus}</span>
           <span title={selectedAssets.map((asset) => `${asset.role || "asset"}: ${asset.name}`).join("\n") || undefined}>{assetStatus}</span>
           <span title={recentJobs[0]?.logs?.[recentJobs[0].logs.length - 1]?.message || undefined}>{jobStatus}</span>
-          {staleStatus && <span className="warning" title={staleStatus}>{staleStatus}</span>}
-          {selfEvaluationStatus && <span title={selfEvaluationStatus}>Self-evaluated</span>}
-          <span title={events.slice(-3).map((event) => `#${event.sequence} ${event.type.replace(/_/g, " ")}`).join("\n") || undefined}>{eventStatus}</span>
         </div>
         {onClose && (
           <button className="icon-btn" type="button" title="Close Chat" onClick={onClose}>
@@ -504,8 +480,8 @@ export function ClipChatPanel({
       </div>
 
       <div className="clip-chat-actions">
-        <button className="premium-btn secondary" type="button" disabled={!runnableFeedback || running} onClick={() => runWorkflowFromChat()}>
-          <Icon name="refresh" /> {running ? "Running..." : "Run Workflow"}
+        <button className={`premium-btn secondary ${running ? "workflow-running-button" : ""}`} type="button" disabled={!runnableFeedback || running} onClick={() => void runWorkflowFromChat()}>
+          {running ? <WorkflowRunningLabel /> : <><Icon name="refresh" /> Run Workflow</>}
         </button>
         <button className="premium-btn" type="button" disabled={videoBusy} onClick={() => void generateVideoFromChat()}>
           <Icon name="video" /> {videoBusy ? "Generating..." : "Generate Video"}

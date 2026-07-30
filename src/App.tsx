@@ -88,7 +88,9 @@ function App() {
       setActiveProject(projectName);
       setLoadingProject(true);
       setLoadError("");
-      setProjectData(null);
+      if (!options?.preserveTimelineScroll) {
+        setProjectData(null);
+      }
 
       try {
         const response = await fetch(apiUrl(`/api/project/${encodeURIComponent(projectName)}`));
@@ -323,46 +325,41 @@ function App() {
   );
 
   const executeWorkflow = useCallback(
-    (feedbackIndex: number) => {
+    async (feedbackIndex: number) => {
       if (!activeProject) return;
 
       setRunningIndexes((current) => new Set(current).add(feedbackIndex));
       notify(`Workflow job queued for feedback index ${feedbackIndex}...`);
 
-      void (async () => {
-        try {
-          const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(activeProject)}/jobs/workflow`), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ feedback_index: feedbackIndex, provider }),
-          });
-          if (!response.ok) throw new Error(await response.text());
-          const queuedJob = (await response.json()) as ProjectJob;
-          const job = await waitForProjectJob(queuedJob.id);
-          setRunningIndexes((current) => {
-            const next = new Set(current);
-            next.delete(feedbackIndex);
-            return next;
-          });
-          const selfEval = (job.result || {}).self_evaluation as { verdict?: string; next_action?: { type?: string } } | undefined;
-          notify(
-            selfEval?.verdict
-              ? `Prompt plan generated. Self-evaluation: ${selfEval.verdict}.`
-              : "Prompt plan generated successfully.",
-            "success",
-          );
-          void loadProject(activeProject, { preserveTimelineScroll: true });
-        } catch (error) {
-          setRunningIndexes((current) => {
-            const next = new Set(current);
-            next.delete(feedbackIndex);
-            return next;
-          });
-          const message = error instanceof Error ? error.message : "Workflow execution failed.";
-          setErrorLog(message);
-          notify(`Workflow execution failed for feedback index ${feedbackIndex}`, "error");
-        }
-      })();
+      try {
+        const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(activeProject)}/jobs/workflow`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ feedback_index: feedbackIndex, provider }),
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const queuedJob = (await response.json()) as ProjectJob;
+        const job = await waitForProjectJob(queuedJob.id);
+        const selfEval = (job.result || {}).self_evaluation as { verdict?: string; next_action?: { type?: string } } | undefined;
+        notify(
+          selfEval?.verdict
+            ? `Prompt plan generated. Self-evaluation: ${selfEval.verdict}.`
+            : "Prompt plan generated successfully.",
+          "success",
+        );
+        await loadProject(activeProject, { preserveTimelineScroll: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Workflow execution failed.";
+        setErrorLog(message);
+        notify(`Workflow execution failed for feedback index ${feedbackIndex}`, "error");
+        throw error;
+      } finally {
+        setRunningIndexes((current) => {
+          const next = new Set(current);
+          next.delete(feedbackIndex);
+          return next;
+        });
+      }
     },
     [activeProject, loadProject, notify, provider, waitForProjectJob],
   );
@@ -385,7 +382,7 @@ function App() {
       notify("Upload feedback before running the workflow.", "info");
       return;
     }
-    executeWorkflow(firstFeedback.raw_index);
+    void executeWorkflow(firstFeedback.raw_index).catch(() => undefined);
   }, [executeWorkflow, notify, projectData]);
 
   return (
@@ -398,7 +395,6 @@ function App() {
         projects={projects}
         provider={provider}
         workflowDrawerOpen={timelineWorkflowOpen}
-        onExport={() => notify("Export workflow will be added in a later implementation step.", "info")}
         onOpenSettings={() => setShowSettings(true)}
         onRunWorkflow={runFirstAvailableWorkflow}
         onProjectChange={(project) => void loadProject(project)}
@@ -418,18 +414,6 @@ function App() {
             setActiveRailItem("project");
             setTimelineWorkflowOpen(false);
             setShowUploadFeedback(true);
-            return;
-          }
-          if (item === "workflow") {
-            setActiveRailItem("timeline");
-            setTimelineWorkflowOpen(false);
-            runFirstAvailableWorkflow();
-            return;
-          }
-          if (item === "exports") {
-            setActiveRailItem("exports");
-            setTimelineWorkflowOpen(false);
-            notify("Export workflow will be added in a later implementation step.", "info");
             return;
           }
           setActiveRailItem(item);

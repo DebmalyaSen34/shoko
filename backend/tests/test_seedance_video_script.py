@@ -230,7 +230,7 @@ class SeedanceVideoScriptTests(unittest.TestCase):
         self.assertIn("REFERENCE IMAGE MAP:", payload["prompt"])
         self.assertTrue(payload["prompt"].endswith("use image 1 and image 2"))
         self.assertEqual(["https://example.com/character.jpg", "https://example.com/frame.jpg"], payload["reference_images"])
-        self.assertEqual(["https://example.com/audio.mp3"], payload["reference_audios"])
+        self.assertNotIn("reference_audios", payload)
         self.assertEqual(5, payload["duration"])
         self.assertEqual("9:16", payload["aspect_ratio"])
         self.assertFalse(payload["generate_audio"])
@@ -264,7 +264,7 @@ class SeedanceVideoScriptTests(unittest.TestCase):
             ["https://example.com/character.jpg", "https://example.com/frame.jpg"],
             enriched["segmind_reference_images"],
         )
-        self.assertEqual(["https://example.com/audio.mp3"], enriched["segmind_reference_audios"])
+        self.assertEqual([], enriched["segmind_reference_audios"])
         self.assertEqual(enriched["segmind_payload"], build_segmind_payload(item=enriched, api_key="test-key", cache=None))
 
     def test_attach_prepared_segmind_payload_marks_missing_key_as_skipped(self):
@@ -325,6 +325,27 @@ class SeedanceVideoScriptTests(unittest.TestCase):
         self.assertIn("image 1: character sheet from character.png", payload["prompt"])
         self.assertIn("image 2: referenced cutaway/reaction frame from ref.jpg", payload["prompt"])
         self.assertNotIn("@ref1", payload["prompt"])
+
+    def test_prepared_payload_drops_reference_audio_when_audio_generation_off(self):
+        payload = build_segmind_payload(
+            item={
+                "video_model_prompt": "prompt",
+                "generate_audio": False,
+                "segmind_payload_status": "ready",
+                "segmind_payload": {
+                    "prompt": "prompt",
+                    "duration": 1,
+                    "generate_audio": True,
+                    "reference_audios": ["https://example.com/short-audio.mp3"],
+                },
+            },
+            api_key="test-key",
+            cache=None,
+        )
+
+        self.assertEqual(5, payload["duration"])
+        self.assertFalse(payload["generate_audio"])
+        self.assertNotIn("reference_audios", payload)
 
     @mock.patch("scripts.generate_seedance_video.SegmindClient")
     def test_create_seedance_task_uses_segmind_sdk_and_downloads_output(self, mock_client_class):

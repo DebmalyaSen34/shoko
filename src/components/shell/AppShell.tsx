@@ -12,7 +12,6 @@ type AppShellProps = {
   projects: string[];
   provider: Provider;
   workflowDrawerOpen: boolean;
-  onExport: () => void;
   onOpenSettings: () => void;
   onProjectChange: (project: string) => void;
   onRailSelect: (item: RailItemId) => void;
@@ -29,7 +28,6 @@ export function AppShell({
   projects,
   provider,
   workflowDrawerOpen,
-  onExport,
   onOpenSettings,
   onProjectChange,
   onRailSelect,
@@ -43,7 +41,6 @@ export function AppShell({
       <TopBar
         activeProject={activeProject}
         projects={projects}
-        onExport={onExport}
         onOpenSettings={onOpenSettings}
         onRunWorkflow={onRunWorkflow}
         onProjectChange={onProjectChange}

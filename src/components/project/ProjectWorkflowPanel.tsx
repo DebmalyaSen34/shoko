@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { ProjectData } from "../../types";
 import { formatProjectName } from "../../lib/format";
 import { Icon } from "../Icon";
+import { WorkflowRunningLabel } from "../WorkflowRunningLabel";
 
 type ProjectWorkflowPanelProps = {
   activeProject: string;
@@ -101,8 +102,8 @@ export function ProjectWorkflowPanel({
             <Icon name={promptCount ? "check" : assignmentRunning ? "refresh" : "clock"} />
             <span>{promptCount ? "Completed" : assignmentRunning ? "Running" : "Ready"}</span>
           </div>
-          <button className="shoko-primary-button" type="button" onClick={onRunAssignment} disabled={!hasProject || assignmentRunning}>
-            {promptCount ? "Run Again" : "Run Assignment"}
+          <button className={`shoko-primary-button ${assignmentRunning ? "workflow-running-button" : ""}`} type="button" onClick={onRunAssignment} disabled={!hasProject || assignmentRunning}>
+            {assignmentRunning ? <WorkflowRunningLabel /> : promptCount ? "Run Again" : "Run Assignment"}
           </button>
           <button className="shoko-ghost-button" type="button" onClick={onViewResults} disabled={!hasProject}>
             View Results

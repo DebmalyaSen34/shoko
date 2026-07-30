@@ -172,61 +172,86 @@ button {
   border-right: 1px solid rgba(250, 251, 252, 0.08);
 }
 
-.shoko-logo-tile {
-  width: 28px;
-  height: 28px;
-  border-radius: 3px;
-  display: grid;
-  place-items: center;
-  background: var(--accent-primary);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  color: #ffffff;
-  box-shadow: none;
-}
-
-.shoko-logo-tile span {
-  font-size: 17px;
-  line-height: 1;
-  font-weight: 800;
-}
-
 .shoko-brand strong {
   font-size: 19px;
   line-height: 1;
   font-weight: 650;
+  letter-spacing: -0.2px;
 }
 
 .shoko-project-switcher {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   padding-left: 18px;
   min-width: 0;
 }
 
-.shoko-project-switcher label {
-  min-width: 0;
+.shoko-project-select-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  background-color: var(--bg-secondary, #f6f8fa);
+  border: 1px solid var(--border-color, #d0d7de);
+  border-radius: 6px;
+  padding: 0 10px;
+  height: 32px;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
-.shoko-project-switcher select {
+.shoko-project-select-box:hover {
+  background-color: var(--bg-hover, #eff2f5);
+  border-color: var(--border-color-hover, #afb5bc);
+}
+
+.shoko-project-select-box:focus-within {
+  border-color: var(--accent-primary, #0969da);
+  box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.18);
+}
+
+.shoko-project-select-box.disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background-color: var(--bg-secondary, #f6f8fa);
+}
+
+.project-select-folder-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-secondary, #57606a);
+  flex-shrink: 0;
+  margin-right: 6px;
+  pointer-events: none;
+}
+
+.shoko-project-select-box select {
   appearance: none;
   background: transparent;
   border: 0;
-  color: var(--text-primary);
-  outline: none;
-}
-
-.shoko-project-switcher select {
-  max-width: 220px;
+  color: var(--text-primary, #1f2328);
   font-size: 13px;
   font-weight: 600;
-  padding: 8px 0;
+  padding-right: 22px;
+  outline: none;
+  cursor: pointer;
+  max-width: 220px;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
-.project-chevron {
-  color: var(--text-secondary);
-  font-size: 14px;
-  margin-left: -6px;
+.shoko-project-select-box select:disabled {
+  cursor: not-allowed;
+}
+
+.project-select-chevron {
+  position: absolute;
+  right: 10px;
+  width: 14px;
+  height: 14px;
+  color: var(--text-secondary, #57606a);
+  pointer-events: none;
 }
 
 .saved-state {

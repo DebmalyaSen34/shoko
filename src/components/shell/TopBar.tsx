@@ -21,22 +21,20 @@ export function TopBar({
   return (
     <header className="shoko-topbar">
       <div className="shoko-brand">
-        <div className="shoko-logo-tile">
-          <span>S</span>
-        </div>
         <strong>Shoko</strong>
       </div>
 
       <div className="shoko-project-switcher">
-        <label>
-          <span className="sr-only">Active Project</span>
+        <div className={`shoko-project-select-box ${projects.length === 0 ? "disabled" : ""}`}>
+          <Icon name="folder" className="project-select-folder-icon" />
           <select
+            aria-label="Active Project"
             value={activeProject}
             onChange={(event) => onProjectChange(event.target.value)}
             disabled={projects.length === 0}
           >
             {projects.length === 0 ? (
-              <option>No projects found</option>
+              <option value="">No projects found</option>
             ) : (
               projects.map((project) => (
                 <option key={project} value={project}>
@@ -45,10 +43,8 @@ export function TopBar({
               ))
             )}
           </select>
-        </label>
-        <span className="project-chevron" aria-hidden="true">
-          <Icon name="chevronDown" />
-        </span>
+          <Icon name="chevronDown" className="project-select-chevron" />
+        </div>
         <span className="saved-state">
           <span />
           Saved

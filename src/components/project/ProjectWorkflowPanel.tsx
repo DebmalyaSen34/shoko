@@ -120,14 +120,20 @@ export function ProjectHomePanel({
   duration,
   loading,
   projectData,
+  projects,
+  onImportProject,
   onOpenTimeline,
+  onProjectChange,
 }: {
   activeProject: string;
   assetTotal: number;
   duration: string;
   loading: boolean;
   projectData: ProjectData | null;
+  projects: string[];
+  onImportProject: () => void;
   onOpenTimeline: () => void;
+  onProjectChange: (project: string) => void;
 }) {
   const feedbackCount = projectData?.feedback.reduce((count, group) => count + group.feedback_items.length, 0) || 0;
   const promptCount = projectData?.prompts.length || 0;
@@ -136,41 +142,80 @@ export function ProjectHomePanel({
     <section className="project-home-panel" aria-label="Project workspace">
       <div className="project-home-header">
         <div>
-          <span className="project-home-kicker">Project Workspace</span>
+          <span className="project-home-kicker">Home</span>
           <h2>{projectData?.sequence_name || activeProject || "No project selected"}</h2>
           <p>
-            Review project status, confirm feedback readiness, then open the timeline to work clip by clip.
+            Choose a project, import new work, and keep an eye on the current project before moving into the timeline.
           </p>
         </div>
-        <button className="shoko-primary-button" type="button" onClick={onOpenTimeline} disabled={!projectData}>
-          <Icon name="timeline" /> Open Timeline
-        </button>
+        <div className="project-home-header-actions">
+          <button className="shoko-primary-button" type="button" onClick={onImportProject}>
+            <Icon name="plus" /> New Project
+          </button>
+          <button className="shoko-ghost-button" type="button" onClick={onOpenTimeline} disabled={!projectData}>
+            <Icon name="timeline" /> Open Timeline
+          </button>
+        </div>
       </div>
 
-      <div className="project-home-stats">
-        <StatBlock label="Duration" value={duration} />
-        <StatBlock label="Timeline Clips" value={String(projectData?.timeline.length || 0)} />
-        <StatBlock label="Feedback Items" value={String(feedbackCount)} />
-        <StatBlock label="Assets" value={String(assetTotal)} />
-      </div>
+      <div className="project-home-content-grid">
+        <section className="project-list-panel" aria-label="All projects">
+          <div className="project-list-header">
+            <div>
+              <h3>Projects</h3>
+              <p>{projects.length ? `${projects.length} project${projects.length === 1 ? "" : "s"} available` : "No projects imported yet"}</p>
+            </div>
+            <button className="shoko-icon-button" type="button" title="New Project" onClick={onImportProject}>
+              <Icon name="plus" />
+            </button>
+          </div>
+          <div className="project-list">
+            {projects.length ? projects.map((project) => (
+              <button
+                className={`project-list-item ${project === activeProject ? "active" : ""}`}
+                type="button"
+                key={project}
+                onClick={() => onProjectChange(project)}
+              >
+                <Icon name="folder" />
+                <span>{formatProjectName(project)}</span>
+                {project === activeProject && <Icon name="check" />}
+              </button>
+            )) : (
+              <div className="project-list-empty">
+                <Icon name="folder" />
+                <span>Import a project to begin.</span>
+              </div>
+            )}
+          </div>
+        </section>
 
-      <div className="project-overview-panel">
-        <div>
-          <h3>Workflow Readiness</h3>
-          <p>
-            {loading
-              ? "Loading project state..."
-              : projectData
-                ? `${formatProjectName(activeProject)} has ${feedbackCount} feedback items and ${promptCount} generated prompt records.`
-                : "Import a project to begin the Shoko workflow."}
-          </p>
-        </div>
-        <div className="readiness-list">
-          <ReadinessItem ready={Boolean(projectData)} label="Project imported" />
-          <ReadinessItem ready={assetTotal > 0} label="Assets available" />
-          <ReadinessItem ready={feedbackCount > 0} label="Feedback loaded" />
-          <ReadinessItem ready={promptCount > 0} label="AI assignment run" />
-        </div>
+        <section className="current-project-panel" aria-label="Current project">
+          <div>
+            <h3>Current Project</h3>
+            <p>
+              {loading
+                ? "Loading project state..."
+                : projectData
+                  ? `${formatProjectName(activeProject)} has ${feedbackCount} feedback items and ${promptCount} generated prompt records.`
+                  : "Select or import a project to begin the Shoko workflow."}
+            </p>
+          </div>
+
+          <div className="project-home-stats">
+            <StatBlock label="Duration" value={duration} />
+            <StatBlock label="Timeline Clips" value={String(projectData?.timeline.length || 0)} />
+            <StatBlock label="Feedback Items" value={String(feedbackCount)} />
+            <StatBlock label="Assets" value={String(assetTotal)} />
+          </div>
+
+          <div className="readiness-list">
+            <ReadinessItem ready={Boolean(projectData)} label="Project imported" />
+            <ReadinessItem ready={assetTotal > 0} label="Assets available" />
+            <ReadinessItem ready={feedbackCount > 0} label="Feedback loaded" />
+            <ReadinessItem ready={promptCount > 0} label="Prompt workflow run" />
+          </div>
+        </section>
       </div>
     </section>
   );

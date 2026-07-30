@@ -52,7 +52,6 @@ export function AppShell({
           collapsedPanelOpen={workflowDrawerOpen}
           collapsedPanelOpenLabel={workflowDrawerOpen ? "Collapse project workflow" : "Open project workflow"}
           onCollapsedPanelOpen={activeRailItem === "timeline" ? onToggleWorkflowDrawer : undefined}
-          projectContextActive={activeRailItem === "timeline"}
           onSelect={onRailSelect}
         />
 

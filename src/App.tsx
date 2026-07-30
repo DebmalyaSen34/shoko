@@ -65,7 +65,7 @@ function App() {
   const [showAddManualFeedback, setShowAddManualFeedback] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [activeClipForManualFeedback, setActiveClipForManualFeedback] = useState("");
-  const [activeRailItem, setActiveRailItem] = useState<RailItemId>("project");
+  const [activeRailItem, setActiveRailItem] = useState<RailItemId>("home");
   const [timelineWorkflowOpen, setTimelineWorkflowOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [runningIndexes, setRunningIndexes] = useState<Set<number>>(new Set());
@@ -400,10 +400,6 @@ function App() {
         onProjectChange={(project) => void loadProject(project)}
         onToggleWorkflowDrawer={() => setTimelineWorkflowOpen((open) => !open)}
         onRailSelect={(item) => {
-          if (item === "project" && timelineOpen) {
-            setTimelineWorkflowOpen((open) => !open);
-            return;
-          }
           if (item === "settings") {
             setActiveRailItem("settings");
             setTimelineWorkflowOpen(false);
@@ -411,7 +407,7 @@ function App() {
             return;
           }
           if (item === "feedback") {
-            setActiveRailItem("project");
+            setActiveRailItem("feedback");
             setTimelineWorkflowOpen(false);
             setShowUploadFeedback(true);
             return;
@@ -475,7 +471,10 @@ function App() {
             duration={duration}
             loading={loadingProject}
             projectData={projectData}
+            projects={projects}
+            onImportProject={() => setShowNewProject(true)}
             onOpenTimeline={() => setActiveRailItem("timeline")}
+            onProjectChange={(project) => void loadProject(project)}
           />
         )}
       </AppShell>

@@ -21,6 +21,7 @@ import type {
 import { getVersions } from "../../lib/format";
 import { apiUrl, staticUrl } from "../../lib/api";
 import { Icon } from "../Icon";
+import { PromptInputBox } from "../ui/ai-prompt-box";
 
 type ClipChatPanelProps = {
   variant?: "panel" | "dock";
@@ -304,11 +305,6 @@ export function ClipChatPanel({
     }
   }
 
-  function submitInput() {
-    if (executeSlashCommand(input)) return;
-    void sendMessage(input);
-  }
-
   function runWorkflowFromChat(feedbackIndex?: number) {
     const index = feedbackIndex ?? runnableFeedback?.raw_index;
     if (typeof index !== "number") {
@@ -573,42 +569,33 @@ export function ClipChatPanel({
 
       {error && <div className="clip-chat-error"><Icon name="warning" /> {error}</div>}
 
-      <form
-        className="clip-chat-input"
-        onSubmit={(event) => {
-          event.preventDefault();
-          submitInput();
-        }}
-      >
-        <div className="clip-chat-input-field">
-          {matchingCommands.length > 0 && (
-            <div className="slash-command-menu">
-              {matchingCommands.map((command) => (
-                <button type="button" key={command.name} onClick={() => setInput(command.name)}>
-                  <code>{command.name}</code>
-                  <span>{command.description}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          <textarea
-            value={input}
-            disabled={sending}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                submitInput();
-              }
-            }}
-            placeholder="Ask about feedback, assets, timeline, memory, workflow... Type /help for commands."
-            rows={2}
-          />
-        </div>
-        <button className="icon-btn chat-send-btn" type="submit" title="Send Message" disabled={sending || !input.trim()}>
-          <Icon name="send" />
-        </button>
-      </form>
+      <div className="clip-chat-input-wrapper">
+        <PromptInputBox
+          value={input}
+          onValueChange={setInput}
+          isLoading={sending}
+          onSend={(messageText) => {
+            if (executeSlashCommand(messageText)) return;
+            void sendMessage(messageText);
+          }}
+          topAddon={
+            matchingCommands.length > 0 && (
+              <div className="slash-command-menu">
+                {matchingCommands.map((command) => (
+                  <button
+                    type="button"
+                    key={command.name}
+                    onClick={() => setInput(command.name)}
+                  >
+                    <code>{command.name}</code>
+                    <span>{command.description}</span>
+                  </button>
+                ))}
+              </div>
+            )
+          }
+        />
+      </div>
     </aside>
   );
 }

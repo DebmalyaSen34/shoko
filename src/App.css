@@ -3959,6 +3959,13 @@ button {
   color: var(--accent-secondary);
 }
 
+.clip-chat-input-wrapper {
+  position: relative;
+  border-top: 1px solid var(--border-color);
+  padding: 12px;
+  background: var(--bg-secondary);
+}
+
 .clip-chat-input {
   border-top: 1px solid var(--border-color);
   padding: 12px;

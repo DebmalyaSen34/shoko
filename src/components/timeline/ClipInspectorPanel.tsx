@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AssetFile, ClipAssetReference, ClipState, FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptVersion, ReferencedFrameState, TimelineClip } from "../../types";
+import type { AssetFile, ClipAssetReference, ClipState, FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptFeedbackTarget, PromptVersion, ReferencedFrameState, TimelineClip } from "../../types";
 import { staticUrl } from "../../lib/api";
 import { basename, versionLabel } from "../../lib/format";
 import { Icon } from "../Icon";
@@ -17,6 +17,7 @@ type ClipInspectorPanelProps = {
   selectedVersionIndex: number;
   setActiveTab: (tab: ClipInspectorTab) => void;
   onAddManualFeedback: (clipName: string) => void;
+  onPromptFeedback: (target: PromptFeedbackTarget) => void;
   onPreview: (preview: PreviewState) => void;
 };
 
@@ -35,6 +36,7 @@ export function ClipInspectorPanel({
   selectedVersionIndex,
   setActiveTab,
   onAddManualFeedback,
+  onPromptFeedback,
   onPreview,
 }: ClipInspectorPanelProps) {
   const [showAllAssets, setShowAllAssets] = useState(false);
@@ -47,6 +49,7 @@ export function ClipInspectorPanel({
     promptVersions.find((item) => item.index === selectedVersionIndex) ||
     promptVersions[promptVersions.length - 1];
   const videoPromptSection = selectedPromptVersion?.sections.find((section) => section.kind === "video");
+  const selectedFeedbackSummary = selectedPromptVersion?.version.feedback_summary;
   const supportingPromptSections = selectedPromptVersion?.sections.filter((section) => section.kind !== "video") || [];
   const referenceItems = selectedPromptVersion ? referenceItemsForVersion(selectedPromptVersion.version, clipState?.asset_state.referenced_frames || []) : [];
   const projectAssets = flattenProjectAssets(projectData);
@@ -146,7 +149,40 @@ export function ClipInspectorPanel({
 
               <article className="clip-prompt-card single">
                 <section className="clip-prompt-section video-prompt-section">
-                  <h4>Video Prompt</h4>
+                  <div className="clip-prompt-section-heading">
+                    <h4>Video Prompt</h4>
+                    <div className="prompt-feedback-actions">
+                      <span className={`prompt-feedback-badge ${selectedFeedbackSummary?.status || "unreviewed"}`}>
+                        {promptFeedbackStatusLabel(selectedFeedbackSummary?.status)}
+                      </span>
+                      {Boolean(selectedFeedbackSummary?.open_negative_count) && (
+                        <span className="prompt-feedback-issue-count">
+                          {selectedFeedbackSummary?.open_negative_count} {selectedFeedbackSummary?.open_negative_count === 1 ? "issue" : "issues"}
+                        </span>
+                      )}
+                      <button
+                        className="shoko-ghost-button compact-action"
+                        type="button"
+                        onClick={() => {
+                          if (!selectedPromptVersion) return;
+                          onPromptFeedback({
+                            clip_index: clipState?.clip_index ?? selectedPromptVersion.version.clip_index ?? 0,
+                            clip_key: clipState?.clip_key || `${clip.clip}::${clipState?.clip_index ?? selectedPromptVersion.version.clip_index ?? 0}`,
+                            prompt_id: selectedPromptVersion.version.prompt_id || "",
+                            prompt_version_id: selectedPromptVersion.version.prompt_version_id || "",
+                            prompt_version_index: selectedPromptVersion.index,
+                            prompt_label: versionLabel(selectedPromptVersion.version, selectedPromptVersion.index),
+                            prompt_text: videoPromptSection?.text || "",
+                            feedback_summary: selectedFeedbackSummary,
+                          });
+                        }}
+                        disabled={!selectedPromptVersion.version.prompt_id || !selectedPromptVersion.version.prompt_version_id}
+                        title="Give feedback on this prompt version"
+                      >
+                        <Icon name="comments" /> Feedback
+                      </button>
+                    </div>
+                  </div>
                   <pre>{videoPromptSection?.text || "No video prompt was generated for this version."}</pre>
                 </section>
                 {supportingPromptSections.length > 0 && (
@@ -332,6 +368,13 @@ function promptSections(version: PromptVersion) {
 
 function normalizePromptText(value?: string | null) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function promptFeedbackStatusLabel(status?: string) {
+  if (status === "approved") return "Approved";
+  if (status === "needs_revision") return "Needs revision";
+  if (status === "rejected") return "Rejected";
+  return "Unreviewed";
 }
 
 type ReferenceItem = {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, MouseEvent, RefObject, SetStateAction } from "react";
-import type { ClipState, FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptRecord, PromptVersion, Provider, TimelineClip, TimelineFilmstripFrame, TimelineWaveformSegment } from "../../types";
+import type { ClipState, FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptFeedbackTarget, PromptRecord, PromptVersion, Provider, TimelineClip, TimelineFilmstripFrame, TimelineWaveformSegment } from "../../types";
 import { basename, formatSeconds, formatTimecode, getVersions } from "../../lib/format";
 import { apiUrl, staticUrl } from "../../lib/api";
 import { EmptyState } from "../EmptyState";
@@ -187,6 +187,7 @@ function CompactTimeline({
   const requestedFilmstrips = useRef<Set<string>>(new Set());
   const [selectedClipIndex, setSelectedClipIndex] = useState(REFERENCE_SELECTED_CLIP_INDEX);
   const [selectedClipState, setSelectedClipState] = useState<ClipState | null>(null);
+  const [promptFeedbackTarget, setPromptFeedbackTarget] = useState<PromptFeedbackTarget | null>(null);
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [filmstrips, setFilmstrips] = useState<Record<number, FilmstripLoadState>>({});
   const [waveform, setWaveform] = useState<WaveformLoadState>({ status: "idle", segments: [] });
@@ -241,10 +242,15 @@ function CompactTimeline({
   }, [projectData?.timeline.length]);
 
   useEffect(() => {
+    setPromptFeedbackTarget(null);
+  }, [selectedClipIndex]);
+
+  useEffect(() => {
     requestedFilmstrips.current.clear();
     setFilmstrips({});
     setWaveform({ status: "idle", segments: [] });
     setSelectedClipState(null);
+    setPromptFeedbackTarget(null);
   }, [projectData?.project_name]);
 
   useEffect(() => {
@@ -531,6 +537,10 @@ function CompactTimeline({
         onGenerateVideo={onGenerateVideo}
         onOpenDetails={openResultFromVersion}
         onPreview={onPreview}
+        promptFeedbackTarget={promptFeedbackTarget}
+        onPromptFeedback={setPromptFeedbackTarget}
+        onClosePromptFeedback={() => setPromptFeedbackTarget(null)}
+        onPromptFeedbackSaved={setSelectedClipState}
         playheadOffsetSeconds={playheadOffsetForSelectedClip}
       />
     </div>
@@ -706,6 +716,10 @@ function SelectedClipDock({
   onGenerateVideo,
   onOpenDetails,
   onPreview,
+  promptFeedbackTarget,
+  onPromptFeedback,
+  onClosePromptFeedback,
+  onPromptFeedbackSaved,
   playheadOffsetSeconds,
 }: {
   projectData: ProjectData;
@@ -725,6 +739,10 @@ function SelectedClipDock({
   onGenerateVideo: (clipIndex: number, promptVersionIndex?: number) => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
   onOpenDetails: (version: PromptVersion) => void;
   onPreview: (preview: PreviewState) => void;
+  promptFeedbackTarget: PromptFeedbackTarget | null;
+  onPromptFeedback: (target: PromptFeedbackTarget) => void;
+  onClosePromptFeedback: () => void;
+  onPromptFeedbackSaved: (state: ClipState) => void;
   playheadOffsetSeconds?: number;
 }) {
   const feedbackItems = feedback?.feedback_items || [];
@@ -744,6 +762,7 @@ function SelectedClipDock({
         selectedVersionIndex={selectedVersionIndex}
         setActiveTab={setActiveTab}
         onAddManualFeedback={onAddManualFeedback}
+        onPromptFeedback={onPromptFeedback}
         onPreview={onPreview}
       />
       <ClipChatPanel
@@ -759,6 +778,9 @@ function SelectedClipDock({
         onOpenPromptDetails={onOpenDetails}
         onGenerateVideo={onGenerateVideo}
         onPreview={onPreview}
+        promptFeedbackTarget={promptFeedbackTarget}
+        onClosePromptFeedback={onClosePromptFeedback}
+        onPromptFeedbackSaved={onPromptFeedbackSaved}
       />
     </aside>
   );

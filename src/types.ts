@@ -72,6 +72,80 @@ export type QualityReport = {
   suggestions?: string[];
 };
 
+export type PromptFeedbackCategory =
+  | "missed_feedback"
+  | "wrong_visual_detail"
+  | "wrong_character_or_wardrobe"
+  | "continuity_error"
+  | "bad_camera_instruction"
+  | "bad_audio_or_dialogue"
+  | "unsupported_assumption"
+  | "format_error"
+  | "too_vague"
+  | "too_verbose"
+  | "provider_incompatible"
+  | "other";
+
+export type PromptFeedbackRating = "positive" | "negative";
+export type PromptFeedbackStatus = "open" | "approved" | "rejected" | "resolved";
+export type PromptFeedbackDerivedStatus = "unreviewed" | "approved" | "needs_revision" | "rejected";
+
+export type PromptFeedbackSummary = {
+  prompt_version_id: string;
+  status: PromptFeedbackDerivedStatus;
+  total_count: number;
+  positive_count: number;
+  negative_count: number;
+  open_negative_count: number;
+  rejected_count: number;
+  latest_feedback_at?: string | null;
+};
+
+export type PromptFeedbackItem = {
+  id: string;
+  project_name: string;
+  clip_index: number;
+  clip_key: string;
+  prompt_id: string;
+  prompt_version_id: string;
+  rating: PromptFeedbackRating;
+  categories: PromptFeedbackCategory[];
+  severity: number;
+  comment: string;
+  correction: string;
+  remember_note: string;
+  create_eval_case: boolean;
+  status: PromptFeedbackStatus;
+  created_at: string;
+  updated_at?: string;
+};
+
+export type PromptFeedbackPayload = {
+  clip_index: number;
+  clip_key: string;
+  prompt_id: string;
+  prompt_version_id: string;
+  rating: PromptFeedbackRating;
+  categories: PromptFeedbackCategory[];
+  severity: number;
+  comment: string;
+  correction: string;
+  remember_note: string;
+  create_eval_case: boolean;
+  status?: PromptFeedbackStatus;
+};
+
+export type PromptFeedbackTarget = {
+  clip_index: number;
+  clip_key: string;
+  prompt_id: string;
+  prompt_version_id: string;
+  prompt_version_index?: number | null;
+  prompt_label: string;
+  prompt_text: string;
+  feedback_summary?: PromptFeedbackSummary;
+};
+
 export type PromptVersion = {
   prompt_id?: string;
   prompt_version_id?: string;
@@ -122,6 +196,7 @@ export type PromptVersion = {
   video_generation_attempts?: VideoGenerationAttempt[];
   latest_video_generation_attempt?: VideoGenerationAttempt;
   latest_generated_video?: GeneratedVideo;
+  feedback_summary?: PromptFeedbackSummary;
 };
 
 export type PromptRecord = PromptVersion & {

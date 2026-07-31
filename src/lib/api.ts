@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ClipState, PromptFeedbackItem, PromptFeedbackPayload } from "../types";
 
 export let API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
@@ -47,4 +48,37 @@ export function staticUrl(path?: string | null) {
     cleanPath = `/${cleanPath}`;
   }
   return apiUrl(cleanPath);
+}
+
+export async function listPromptFeedback(projectName: string, clipIndex?: number) {
+  const params = typeof clipIndex === "number" ? `?clip_index=${encodeURIComponent(String(clipIndex))}` : "";
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectName)}/prompt-feedback${params}`));
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<{
+    schema_version: number;
+    project_name: string;
+    clip_index?: number | null;
+    items: PromptFeedbackItem[];
+    summaries: Record<string, unknown>;
+  }>;
+}
+
+export async function createPromptFeedback(projectName: string, payload: PromptFeedbackPayload) {
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectName)}/prompt-feedback`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<{ item: PromptFeedbackItem; clip_state: ClipState }>;
+}
+
+export async function updatePromptFeedback(projectName: string, feedbackId: string, patch: Partial<PromptFeedbackPayload> & { status?: PromptFeedbackItem["status"] }) {
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectName)}/prompt-feedback/${encodeURIComponent(feedbackId)}`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<{ item: PromptFeedbackItem; clip_state: ClipState }>;
 }

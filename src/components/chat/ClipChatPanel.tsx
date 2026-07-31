@@ -11,6 +11,9 @@ import type {
   GeneratedVideo,
   ClipChatSnapshot,
   FeedbackGroup,
+  PromptFeedbackCategory,
+  PromptFeedbackPayload,
+  PromptFeedbackTarget,
   PromptRecord,
   PromptVersion,
   PreviewState,
@@ -18,7 +21,7 @@ import type {
   Provider,
 } from "../../types";
 import { getVersions } from "../../lib/format";
-import { apiUrl, staticUrl } from "../../lib/api";
+import { apiUrl, createPromptFeedback, staticUrl } from "../../lib/api";
 import { Icon } from "../Icon";
 import { WorkflowRunningLabel } from "../WorkflowRunningLabel";
 import { PromptInputBox } from "../ui/ai-prompt-box";
@@ -37,6 +40,9 @@ type ClipChatPanelProps = {
   onOpenPromptDetails: (version: PromptVersion) => void;
   onGenerateVideo: (clipIndex: number, promptVersionIndex?: number) => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
   onPreview: (preview: PreviewState) => void;
+  promptFeedbackTarget?: PromptFeedbackTarget | null;
+  onClosePromptFeedback?: () => void;
+  onPromptFeedbackSaved?: (clipState: ClipState) => void;
 };
 
 function localToolMessage(content: string): ClipChatMessage {
@@ -79,6 +85,9 @@ export function ClipChatPanel({
   onOpenPromptDetails,
   onGenerateVideo,
   onPreview,
+  promptFeedbackTarget,
+  onClosePromptFeedback,
+  onPromptFeedbackSaved,
 }: ClipChatPanelProps) {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ClipChatMessage[]>([]);
@@ -440,6 +449,44 @@ export function ClipChatPanel({
 
   const panelStyle = variant === "panel" && window.innerWidth > 900 ? { width: panelWidth, minWidth: panelWidth } : undefined;
 
+  if (promptFeedbackTarget) {
+    return (
+      <aside className={`clip-chat-panel prompt-feedback-panel ${variant === "dock" ? "dock-chat-panel" : ""}`} style={panelStyle} aria-label="Prompt feedback">
+        {variant === "panel" && (
+          <div
+            className="clip-chat-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize feedback"
+            tabIndex={0}
+            onPointerDown={(event) => {
+              event.currentTarget.setPointerCapture(event.pointerId);
+              resizePanel(event.clientX);
+            }}
+            onPointerMove={(event) => {
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                resizePanel(event.clientX);
+              }
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowLeft") setPanelWidth((width) => Math.min(760, width + 24));
+              if (event.key === "ArrowRight") setPanelWidth((width) => Math.max(320, width - 24));
+            }}
+          />
+        )}
+        <PromptFeedbackPanel
+          projectName={projectData.project_name}
+          target={promptFeedbackTarget}
+          onBack={onClosePromptFeedback || (() => undefined)}
+          onSaved={(state) => {
+            setClipState(state);
+            onPromptFeedbackSaved?.(state);
+          }}
+        />
+      </aside>
+    );
+  }
+
   return (
     <aside className={`clip-chat-panel ${variant === "dock" ? "dock-chat-panel" : ""}`} style={panelStyle} aria-label="Clip chat">
       {variant === "panel" && (
@@ -601,6 +648,195 @@ function FilmThinkingLoader({ provider }: { provider: Provider }) {
       </div>
     </div>
   );
+}
+
+const PROMPT_FEEDBACK_CATEGORIES: Array<{ value: PromptFeedbackCategory; label: string }> = [
+  { value: "missed_feedback", label: "Missed feedback" },
+  { value: "wrong_visual_detail", label: "Wrong visual detail" },
+  { value: "wrong_character_or_wardrobe", label: "Character or wardrobe" },
+  { value: "continuity_error", label: "Continuity" },
+  { value: "bad_camera_instruction", label: "Camera" },
+  { value: "bad_audio_or_dialogue", label: "Audio or dialogue" },
+  { value: "unsupported_assumption", label: "Unsupported assumption" },
+  { value: "format_error", label: "Format" },
+  { value: "too_vague", label: "Too vague" },
+  { value: "too_verbose", label: "Too verbose" },
+  { value: "provider_incompatible", label: "Provider incompatible" },
+  { value: "other", label: "Other" },
+];
+
+function PromptFeedbackPanel({
+  projectName,
+  target,
+  onBack,
+  onSaved,
+}: {
+  projectName: string;
+  target: PromptFeedbackTarget;
+  onBack: () => void;
+  onSaved: (clipState: ClipState) => void;
+}) {
+  const [rating, setRating] = useState<"positive" | "negative">("negative");
+  const [categories, setCategories] = useState<PromptFeedbackCategory[]>([]);
+  const [severity, setSeverity] = useState(3);
+  const [comment, setComment] = useState("");
+  const [correction, setCorrection] = useState("");
+  const [rememberNote, setRememberNote] = useState("");
+  const [createEvalCase, setCreateEvalCase] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [savedMessage, setSavedMessage] = useState("");
+  const issueCount = target.feedback_summary?.open_negative_count || 0;
+
+  useEffect(() => {
+    setRating("negative");
+    setCategories([]);
+    setSeverity(3);
+    setComment("");
+    setCorrection("");
+    setRememberNote("");
+    setCreateEvalCase(false);
+    setError("");
+    setSavedMessage("");
+  }, [target.prompt_version_id]);
+
+  function toggleCategory(category: PromptFeedbackCategory) {
+    setCategories((current) => current.includes(category) ? current.filter((item) => item !== category) : [...current, category]);
+  }
+
+  async function submitFeedback() {
+    setError("");
+    setSavedMessage("");
+    if (rating === "negative" && !comment.trim() && !correction.trim() && !rememberNote.trim()) {
+      setError("Add a comment, correction, or remember note before saving negative feedback.");
+      return;
+    }
+    const payload: PromptFeedbackPayload = {
+      clip_index: target.clip_index,
+      clip_key: target.clip_key,
+      prompt_id: target.prompt_id,
+      prompt_version_id: target.prompt_version_id,
+      rating,
+      categories,
+      severity,
+      comment,
+      correction,
+      remember_note: rememberNote,
+      create_eval_case: createEvalCase,
+      status: rating === "positive" ? "approved" : "open",
+    };
+    setSubmitting(true);
+    try {
+      const result = await createPromptFeedback(projectName, payload);
+      onSaved(result.clip_state);
+      setSavedMessage(rating === "positive" ? "Prompt approved." : "Feedback saved. This version now needs revision.");
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Failed to save prompt feedback.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="clip-chat-header prompt-feedback-header">
+        <button className="icon-btn" type="button" title="Back to chat" onClick={onBack}>
+          <Icon name="chevronLeft" />
+        </button>
+        <div className="prompt-feedback-title">
+          <span>Prompt Feedback</span>
+          <strong>{target.prompt_label}</strong>
+        </div>
+      </div>
+
+      <div className="prompt-feedback-context">
+        <div>
+          <span>Status</span>
+          <strong>{promptFeedbackStatusLabel(target.feedback_summary?.status)}</strong>
+        </div>
+        <div>
+          <span>Open issues</span>
+          <strong>{issueCount}</strong>
+        </div>
+      </div>
+
+      <div className="prompt-feedback-form">
+        <div className="prompt-feedback-field">
+          <span>Review</span>
+          <div className="prompt-rating-toggle" role="group" aria-label="Prompt rating">
+            <button className={rating === "positive" ? "active positive" : ""} type="button" onClick={() => setRating("positive")}>
+              <Icon name="check" /> Works well
+            </button>
+            <button className={rating === "negative" ? "active negative" : ""} type="button" onClick={() => setRating("negative")}>
+              <Icon name="warning" /> Needs changes
+            </button>
+          </div>
+        </div>
+
+        <div className="prompt-feedback-field">
+          <span>Issue categories</span>
+          <div className="prompt-category-grid">
+            {PROMPT_FEEDBACK_CATEGORIES.map((category) => (
+              <button
+                className={categories.includes(category.value) ? "active" : ""}
+                type="button"
+                key={category.value}
+                onClick={() => toggleCategory(category.value)}
+              >
+                {category.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <label className="prompt-feedback-field">
+          <span>Severity</span>
+          <select value={severity} onChange={(event) => setSeverity(Number(event.target.value))}>
+            {[1, 2, 3, 4, 5].map((value) => (
+              <option value={value} key={value}>{value}</option>
+            ))}
+          </select>
+        </label>
+
+        <label className="prompt-feedback-field">
+          <span>What should change?</span>
+          <textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Describe what did not work in this prompt..." />
+        </label>
+
+        <label className="prompt-feedback-field">
+          <span>Correction</span>
+          <textarea value={correction} onChange={(event) => setCorrection(event.target.value)} placeholder="Write the preferred direction or replacement..." />
+        </label>
+
+        <label className="prompt-feedback-field">
+          <span>Remember this</span>
+          <textarea value={rememberNote} onChange={(event) => setRememberNote(event.target.value)} placeholder="A reusable note for future prompts..." />
+        </label>
+
+        <label className="prompt-feedback-check">
+          <input type="checkbox" checked={createEvalCase} onChange={(event) => setCreateEvalCase(event.target.checked)} />
+          <span>Create eval case from this later</span>
+        </label>
+
+        {savedMessage && <div className="prompt-feedback-success"><Icon name="check" /> {savedMessage}</div>}
+        {error && <div className="clip-chat-error"><Icon name="warning" /> {error}</div>}
+
+        <div className="prompt-feedback-submit-row">
+          <button className="premium-btn secondary" type="button" onClick={onBack}>Back to Chat</button>
+          <button className="premium-btn" type="button" disabled={submitting} onClick={() => void submitFeedback()}>
+            <Icon name="comments" /> {submitting ? "Saving..." : "Save Feedback"}
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function promptFeedbackStatusLabel(status?: string) {
+  if (status === "approved") return "Approved";
+  if (status === "needs_revision") return "Needs revision";
+  if (status === "rejected") return "Rejected";
+  return "Unreviewed";
 }
 
 function formatAgentRunStatus(value: string) {

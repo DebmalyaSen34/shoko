@@ -18,7 +18,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import set_key, unset_key
 
 from config.settings import (
@@ -530,6 +530,50 @@ class WorkflowJobRequest(BaseModel):
     agent_run_id: Optional[str] = None
 
 
+PROMPT_FEEDBACK_CATEGORIES = {
+    "missed_feedback",
+    "wrong_visual_detail",
+    "wrong_character_or_wardrobe",
+    "continuity_error",
+    "bad_camera_instruction",
+    "bad_audio_or_dialogue",
+    "unsupported_assumption",
+    "format_error",
+    "too_vague",
+    "too_verbose",
+    "provider_incompatible",
+    "other",
+}
+PROMPT_FEEDBACK_RATINGS = {"positive", "negative"}
+PROMPT_FEEDBACK_STATUSES = {"open", "approved", "rejected", "resolved"}
+
+
+class PromptFeedbackCreateRequest(BaseModel):
+    clip_index: int
+    clip_key: str
+    prompt_id: str
+    prompt_version_id: str
+    rating: Literal["positive", "negative"]
+    categories: list[str] = Field(default_factory=list)
+    severity: int = 3
+    comment: str = ""
+    correction: str = ""
+    remember_note: str = ""
+    create_eval_case: bool = False
+    status: Optional[Literal["open", "approved", "rejected", "resolved"]] = None
+
+
+class PromptFeedbackPatchRequest(BaseModel):
+    rating: Optional[Literal["positive", "negative"]] = None
+    categories: Optional[list[str]] = None
+    severity: Optional[int] = None
+    comment: Optional[str] = None
+    correction: Optional[str] = None
+    remember_note: Optional[str] = None
+    create_eval_case: Optional[bool] = None
+    status: Optional[Literal["open", "approved", "rejected", "resolved"]] = None
+
+
 class ClipSelectionUpdate(BaseModel):
     active_prompt_version_id: Optional[str] = None
     active_generated_video_id: Optional[str] = None
@@ -565,6 +609,19 @@ def write_json_file(path: Path, data: Any) -> None:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+def atomic_write_json_file(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump(data, file, indent=2, ensure_ascii=False)
+            file.write("\n")
+        os.replace(tmp_name, path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+
 def chat_history_path(project_name: str) -> Path:
     return project_data_dir(project_name) / "clip_chats.json"
 
@@ -579,6 +636,10 @@ def chat_workflow_intents_path(project_name: str) -> Path:
 
 def chat_agent_runs_path(project_name: str) -> Path:
     return project_data_dir(project_name) / "chat_agent_runs.json"
+
+
+def prompt_feedback_path(project_name: str) -> Path:
+    return project_data_dir(project_name) / "prompt_feedback.json"
 
 
 def project_jobs_path(project_name: str) -> Path:
@@ -701,6 +762,132 @@ def save_clip_selections(project_name: str, data: dict) -> None:
     data.setdefault("schema_version", 1)
     data.setdefault("clips", {})
     write_json_file(clip_selections_path(project_name), data)
+
+
+def load_prompt_feedback(project_name: str) -> dict:
+    data = read_json_file(prompt_feedback_path(project_name), {"schema_version": 1, "items": []})
+    if not isinstance(data, dict):
+        return {"schema_version": 1, "items": []}
+    items = data.get("items")
+    if not isinstance(items, list):
+        items = []
+    return {"schema_version": 1, "items": [item for item in items if isinstance(item, dict)]}
+
+
+def save_prompt_feedback(project_name: str, data: dict) -> None:
+    data.setdefault("schema_version", 1)
+    data.setdefault("items", [])
+    atomic_write_json_file(prompt_feedback_path(project_name), data)
+
+
+def _clean_prompt_feedback_categories(categories: list[str]) -> list[str]:
+    cleaned = []
+    for category in categories or []:
+        if category not in PROMPT_FEEDBACK_CATEGORIES:
+            raise HTTPException(status_code=400, detail=f"Invalid prompt feedback category: {category}")
+        if category not in cleaned:
+            cleaned.append(category)
+    return cleaned
+
+
+def _validate_prompt_feedback_payload(payload: dict) -> dict:
+    rating = payload.get("rating")
+    if rating not in PROMPT_FEEDBACK_RATINGS:
+        raise HTTPException(status_code=400, detail="Invalid prompt feedback rating")
+    status = payload.get("status")
+    if status and status not in PROMPT_FEEDBACK_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid prompt feedback status")
+
+    try:
+        severity = int(payload.get("severity", 3))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Severity must be a number from 1 to 5") from exc
+    if severity < 1 or severity > 5:
+        raise HTTPException(status_code=400, detail="Severity must be from 1 to 5")
+
+    categories = _clean_prompt_feedback_categories(list(payload.get("categories") or []))
+    comment = str(payload.get("comment") or "").strip()
+    correction = str(payload.get("correction") or "").strip()
+    remember_note = str(payload.get("remember_note") or "").strip()
+    if rating == "negative" and not any([comment, correction, remember_note]):
+        raise HTTPException(status_code=400, detail="Negative feedback needs a comment, correction, or remember note")
+
+    prompt_version_id = str(payload.get("prompt_version_id") or "").strip()
+    prompt_id = str(payload.get("prompt_id") or "").strip()
+    clip_key = str(payload.get("clip_key") or "").strip()
+    if not prompt_version_id:
+        raise HTTPException(status_code=400, detail="Prompt version id is required")
+    if not prompt_id:
+        raise HTTPException(status_code=400, detail="Prompt id is required")
+    if not clip_key:
+        raise HTTPException(status_code=400, detail="Clip key is required")
+    clip_index = payload.get("clip_index")
+    if not isinstance(clip_index, int) or clip_index < 0:
+        raise HTTPException(status_code=400, detail="Valid clip index is required")
+
+    return {
+        **payload,
+        "clip_index": clip_index,
+        "clip_key": clip_key,
+        "prompt_id": prompt_id,
+        "prompt_version_id": prompt_version_id,
+        "rating": rating,
+        "categories": categories,
+        "severity": severity,
+        "comment": comment,
+        "correction": correction,
+        "remember_note": remember_note,
+        "create_eval_case": bool(payload.get("create_eval_case", False)),
+        "status": status or ("approved" if rating == "positive" else "open"),
+    }
+
+
+def prompt_feedback_items_for_clip(project_name: str, clip_index: Optional[int] = None) -> list[dict]:
+    items = load_prompt_feedback(project_name).get("items", [])
+    if clip_index is None:
+        return items
+    return [item for item in items if item.get("clip_index") == clip_index]
+
+
+def prompt_feedback_summary_by_version(project_name: str, clip_index: int) -> dict[str, dict]:
+    summaries: dict[str, dict] = {}
+    for item in prompt_feedback_items_for_clip(project_name, clip_index):
+        version_id = str(item.get("prompt_version_id") or "")
+        if not version_id:
+            continue
+        summary = summaries.setdefault(version_id, {
+            "prompt_version_id": version_id,
+            "status": "unreviewed",
+            "total_count": 0,
+            "positive_count": 0,
+            "negative_count": 0,
+            "open_negative_count": 0,
+            "rejected_count": 0,
+            "latest_feedback_at": None,
+        })
+        summary["total_count"] += 1
+        if item.get("rating") == "positive":
+            summary["positive_count"] += 1
+        if item.get("rating") == "negative":
+            summary["negative_count"] += 1
+            if item.get("status") == "open":
+                summary["open_negative_count"] += 1
+        if item.get("status") == "rejected":
+            summary["rejected_count"] += 1
+        updated_at = item.get("updated_at") or item.get("created_at")
+        if updated_at and (not summary.get("latest_feedback_at") or updated_at > summary["latest_feedback_at"]):
+            summary["latest_feedback_at"] = updated_at
+
+    for summary in summaries.values():
+        if summary["rejected_count"]:
+            summary["status"] = "rejected"
+        elif summary["open_negative_count"]:
+            summary["status"] = "needs_revision"
+        elif summary["positive_count"] and not summary["open_negative_count"]:
+            summary["status"] = "approved"
+        else:
+            summary["status"] = "unreviewed"
+    return summaries
 
 
 def clip_selection_for_key(project_name: str, clip_key: str) -> dict:
@@ -1341,6 +1528,7 @@ def _prompt_versions_for_state(prompt: Optional[dict], project_name: str, clip_i
     if not prompt:
         return []
     versions = prompt_versions_for_record(prompt)
+    feedback_summaries = prompt_feedback_summary_by_version(project_name, clip_index)
     prompt_id = stable_state_id(
         "prompt",
         project_name,
@@ -1362,6 +1550,31 @@ def _prompt_versions_for_state(prompt: Optional[dict], project_name: str, clip_i
             "version_index": index,
             "is_latest": index == len(versions) - 1,
             "clip_index": clip_index,
+            "feedback_summary": feedback_summaries.get(
+                stable_state_id(
+                    "version",
+                    prompt_id,
+                    index,
+                    version.get("timestamp"),
+                    version.get("video_model_prompt"),
+                ),
+                {
+                    "prompt_version_id": stable_state_id(
+                        "version",
+                        prompt_id,
+                        index,
+                        version.get("timestamp"),
+                        version.get("video_model_prompt"),
+                    ),
+                    "status": "unreviewed",
+                    "total_count": 0,
+                    "positive_count": 0,
+                    "negative_count": 0,
+                    "open_negative_count": 0,
+                    "rejected_count": 0,
+                    "latest_feedback_at": None,
+                },
+            ),
         })
     return normalized
 
@@ -1456,6 +1669,7 @@ def build_clip_freshness(
         "clip_selections": clip_selections_path(project_name),
         "agent_runs": chat_agent_runs_path(project_name),
         "memory": chat_memory_path(project_name),
+        "prompt_feedback": prompt_feedback_path(project_name),
         "events": project_events_path(project_name),
     }
     fingerprints = {
@@ -1490,6 +1704,7 @@ def build_clip_freshness(
             "active_generated_video_id": selection.get("active_generated_video_id"),
             "selected_assets": normalize_selection_asset_refs(selection),
         }),
+        "prompt_feedback": stable_json_hash(prompt_feedback_summary_by_version(project_name, active_version.get("clip_index", -1) if active_version else -1)),
     }
     fingerprints["state"] = stable_json_hash({
         key: value
@@ -1500,7 +1715,7 @@ def build_clip_freshness(
     return {
         "source_files": {key: str(path) for key, path in source_paths.items()},
         "source_mtimes": {key: file_mtime_iso(path) for key, path in source_paths.items()},
-        "derived_from": ["timeline", "feedback", "assets", "prompts", "clip_selections", "memory", "agent_runs", "events"],
+        "derived_from": ["timeline", "feedback", "assets", "prompts", "clip_selections", "prompt_feedback", "memory", "agent_runs", "events"],
         "fingerprints": fingerprints,
         "state_hash": fingerprints["state"],
         "stale_reasons": selection_stale_reasons,
@@ -4855,6 +5070,103 @@ def get_project_audio_waveform(project_name: str, bins: int = 600, mode: str = "
 def get_clip_state(project_name: str, clip_index: int):
     project_name = safe_project_name(project_name)
     return build_clip_state(project_name, clip_index)
+
+
+@app.get("/api/projects/{project_name}/prompt-feedback")
+def get_prompt_feedback(project_name: str, clip_index: Optional[int] = None):
+    project_name = safe_project_name(project_name)
+    items = prompt_feedback_items_for_clip(project_name, clip_index)
+    return {
+        "schema_version": 1,
+        "project_name": project_name,
+        "clip_index": clip_index,
+        "items": items,
+        "summaries": prompt_feedback_summary_by_version(project_name, clip_index) if clip_index is not None else {},
+    }
+
+
+@app.post("/api/projects/{project_name}/prompt-feedback")
+def create_prompt_feedback(project_name: str, request: PromptFeedbackCreateRequest):
+    project_name = safe_project_name(project_name)
+    payload = _validate_prompt_feedback_payload(request.model_dump())
+    created_at = now_iso()
+    item = {
+        "id": str(uuid.uuid4()),
+        "project_name": project_name,
+        **payload,
+        "created_at": created_at,
+        "updated_at": created_at,
+    }
+    data = load_prompt_feedback(project_name)
+    data.setdefault("items", []).append(item)
+    save_prompt_feedback(project_name, data)
+    append_project_event(
+        project_name,
+        "prompt_feedback_created",
+        actor="user",
+        clip_index=item.get("clip_index"),
+        clip_key=item.get("clip_key"),
+        entity="prompt_feedback",
+        entity_id=item.get("id"),
+        payload={
+            "prompt_id": item.get("prompt_id"),
+            "prompt_version_id": item.get("prompt_version_id"),
+            "rating": item.get("rating"),
+            "status": item.get("status"),
+            "categories": item.get("categories", []),
+        },
+    )
+    return {
+        "item": item,
+        "clip_state": build_clip_state(project_name, item["clip_index"]),
+    }
+
+
+@app.patch("/api/projects/{project_name}/prompt-feedback/{feedback_id}")
+def patch_prompt_feedback(project_name: str, feedback_id: str, request: PromptFeedbackPatchRequest):
+    project_name = safe_project_name(project_name)
+    data = load_prompt_feedback(project_name)
+    items = data.setdefault("items", [])
+    item = next((candidate for candidate in items if candidate.get("id") == feedback_id), None)
+    if not item:
+        raise HTTPException(status_code=404, detail="Prompt feedback was not found")
+
+    updates = request.model_dump(exclude_none=True)
+    allowed = {
+        "rating",
+        "categories",
+        "severity",
+        "comment",
+        "correction",
+        "remember_note",
+        "create_eval_case",
+        "status",
+    }
+    next_item = {**item, **{key: value for key, value in updates.items() if key in allowed}}
+    validated = _validate_prompt_feedback_payload(next_item)
+    item.update(validated)
+    item["updated_at"] = now_iso()
+    save_prompt_feedback(project_name, data)
+    append_project_event(
+        project_name,
+        "prompt_feedback_updated",
+        actor="user",
+        clip_index=item.get("clip_index"),
+        clip_key=item.get("clip_key"),
+        entity="prompt_feedback",
+        entity_id=item.get("id"),
+        payload={
+            "prompt_id": item.get("prompt_id"),
+            "prompt_version_id": item.get("prompt_version_id"),
+            "rating": item.get("rating"),
+            "status": item.get("status"),
+            "categories": item.get("categories", []),
+        },
+    )
+    return {
+        "item": item,
+        "clip_state": build_clip_state(project_name, item["clip_index"]),
+    }
 
 
 @app.get("/api/projects/{project_name}/events")

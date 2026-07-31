@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { motion, useReducedMotion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
@@ -12,8 +13,10 @@ import type {
   ClipChatSnapshot,
   FeedbackGroup,
   PromptFeedbackCategory,
+  PromptFeedbackItem,
   PromptFeedbackPayload,
   PromptFeedbackTarget,
+  PromptLessonScope,
   PromptRecord,
   PromptVersion,
   PreviewState,
@@ -21,7 +24,7 @@ import type {
   Provider,
 } from "../../types";
 import { getVersions } from "../../lib/format";
-import { apiUrl, createPromptFeedback, staticUrl } from "../../lib/api";
+import { apiUrl, createPromptFeedback, createPromptLesson, staticUrl, suggestPromptLesson } from "../../lib/api";
 import { Icon } from "../Icon";
 import { WorkflowRunningLabel } from "../WorkflowRunningLabel";
 import { PromptInputBox } from "../ui/ai-prompt-box";
@@ -102,6 +105,7 @@ export function ClipChatPanel({
     const saved = window.localStorage.getItem("loka15.clip-chat.width");
     return saved ? Number(saved) || 420 : 420;
   });
+  const prefersReducedMotion = useReducedMotion();
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const feedbackItems = feedback?.feedback_items || [];
@@ -448,10 +452,44 @@ export function ClipChatPanel({
   }
 
   const panelStyle = variant === "panel" && window.innerWidth > 900 ? { width: panelWidth, minWidth: panelWidth } : undefined;
+  const panelMotion = prefersReducedMotion
+    ? {
+        initial: { opacity: 0 },
+        animate: { opacity: 1 },
+        transition: { duration: 0.16, ease: "easeOut" as const },
+      }
+    : {
+        initial: {
+          opacity: 0,
+          rotateY: promptFeedbackTarget ? -72 : 72,
+          scale: 0.985,
+          x: promptFeedbackTarget ? 18 : -18,
+          transformPerspective: 1200,
+        },
+        animate: {
+          opacity: 1,
+          rotateY: 0,
+          scale: 1,
+          x: 0,
+          transformPerspective: 1200,
+        },
+        transition: {
+          type: "spring" as const,
+          stiffness: 360,
+          damping: 34,
+          mass: 0.8,
+        },
+      };
 
   if (promptFeedbackTarget) {
     return (
-      <aside className={`clip-chat-panel prompt-feedback-panel ${variant === "dock" ? "dock-chat-panel" : ""}`} style={panelStyle} aria-label="Prompt feedback">
+      <motion.aside
+        key="prompt-feedback-panel"
+        className={`clip-chat-panel prompt-feedback-panel ${variant === "dock" ? "dock-chat-panel" : ""}`}
+        style={panelStyle}
+        aria-label="Prompt feedback"
+        {...panelMotion}
+      >
         {variant === "panel" && (
           <div
             className="clip-chat-resize-handle"
@@ -476,6 +514,7 @@ export function ClipChatPanel({
         )}
         <PromptFeedbackPanel
           projectName={projectData.project_name}
+          provider={provider}
           target={promptFeedbackTarget}
           onBack={onClosePromptFeedback || (() => undefined)}
           onSaved={(state) => {
@@ -483,12 +522,18 @@ export function ClipChatPanel({
             onPromptFeedbackSaved?.(state);
           }}
         />
-      </aside>
+      </motion.aside>
     );
   }
 
   return (
-    <aside className={`clip-chat-panel ${variant === "dock" ? "dock-chat-panel" : ""}`} style={panelStyle} aria-label="Clip chat">
+    <motion.aside
+      key="clip-chat-panel"
+      className={`clip-chat-panel ${variant === "dock" ? "dock-chat-panel" : ""}`}
+      style={panelStyle}
+      aria-label="Clip chat"
+      {...panelMotion}
+    >
       {variant === "panel" && (
         <div
           className="clip-chat-resize-handle"
@@ -619,7 +664,7 @@ export function ClipChatPanel({
           }
         />
       </div>
-    </aside>
+    </motion.aside>
   );
 }
 
@@ -667,11 +712,13 @@ const PROMPT_FEEDBACK_CATEGORIES: Array<{ value: PromptFeedbackCategory; label: 
 
 function PromptFeedbackPanel({
   projectName,
+  provider,
   target,
   onBack,
   onSaved,
 }: {
   projectName: string;
+  provider: Provider;
   target: PromptFeedbackTarget;
   onBack: () => void;
   onSaved: (clipState: ClipState) => void;
@@ -684,9 +731,21 @@ function PromptFeedbackPanel({
   const [rememberNote, setRememberNote] = useState("");
   const [createEvalCase, setCreateEvalCase] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [suggestingLesson, setSuggestingLesson] = useState(false);
+  const [savingLesson, setSavingLesson] = useState(false);
   const [error, setError] = useState("");
   const [savedMessage, setSavedMessage] = useState("");
+  const [savedFeedback, setSavedFeedback] = useState<PromptFeedbackItem | null>(null);
+  const [lessonText, setLessonText] = useState("");
+  const [lessonCategory, setLessonCategory] = useState<PromptFeedbackCategory>("other");
+  const [lessonScope, setLessonScope] = useState<PromptLessonScope>("project");
+  const [lessonConfidence, setLessonConfidence] = useState(0.8);
+  const [lessonReasoning, setLessonReasoning] = useState("");
+  const [lessonMessage, setLessonMessage] = useState("");
   const issueCount = target.feedback_summary?.open_negative_count || 0;
+  const canWorkWithLesson = Boolean(
+    savedFeedback && (savedFeedback.comment || savedFeedback.correction || savedFeedback.remember_note || lessonText),
+  );
 
   useEffect(() => {
     setRating("negative");
@@ -698,6 +757,13 @@ function PromptFeedbackPanel({
     setCreateEvalCase(false);
     setError("");
     setSavedMessage("");
+    setSavedFeedback(null);
+    setLessonText("");
+    setLessonCategory("other");
+    setLessonScope("project");
+    setLessonConfidence(0.8);
+    setLessonReasoning("");
+    setLessonMessage("");
   }, [target.prompt_version_id]);
 
   function toggleCategory(category: PromptFeedbackCategory) {
@@ -729,11 +795,71 @@ function PromptFeedbackPanel({
     try {
       const result = await createPromptFeedback(projectName, payload);
       onSaved(result.clip_state);
+      setSavedFeedback(result.item);
+      const initialLesson = (rememberNote || correction || comment).trim();
+      if (initialLesson) {
+        setLessonText(initialLesson);
+        setLessonCategory(categories[0] || "other");
+        setLessonConfidence(rating === "positive" ? 0.72 : 0.82);
+      }
       setSavedMessage(rating === "positive" ? "Prompt approved." : "Feedback saved. This version now needs revision.");
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Failed to save prompt feedback.");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function requestLessonSuggestion() {
+    if (!savedFeedback) {
+      setError("Save prompt feedback before suggesting a lesson.");
+      return;
+    }
+    setError("");
+    setLessonMessage("");
+    setSuggestingLesson(true);
+    try {
+      const result = await suggestPromptLesson(projectName, savedFeedback.id, provider);
+      setLessonText(result.suggestion.lesson);
+      setLessonCategory((result.suggestion.category as PromptFeedbackCategory) || "other");
+      setLessonConfidence(result.suggestion.confidence);
+      setLessonReasoning(result.suggestion.reasoning);
+    } catch (suggestError) {
+      setError(suggestError instanceof Error ? suggestError.message : "Failed to suggest a lesson.");
+    } finally {
+      setSuggestingLesson(false);
+    }
+  }
+
+  async function saveLesson() {
+    if (!savedFeedback) {
+      setError("Save prompt feedback before saving a lesson.");
+      return;
+    }
+    if (!lessonText.trim()) {
+      setError("Lesson text cannot be empty.");
+      return;
+    }
+    setError("");
+    setLessonMessage("");
+    setSavingLesson(true);
+    try {
+      const result = await createPromptLesson(projectName, {
+        scope: lessonScope,
+        clip_key: lessonScope === "clip" ? target.clip_key : null,
+        category: lessonCategory,
+        lesson: lessonText,
+        source_feedback_ids: [savedFeedback.id],
+        confidence: lessonConfidence,
+        positive_examples: [],
+        negative_examples: [savedFeedback.comment, savedFeedback.correction].filter(Boolean),
+      });
+      if (result.clip_state) onSaved(result.clip_state);
+      setLessonMessage("Lesson saved for future prompts.");
+    } catch (lessonError) {
+      setError(lessonError instanceof Error ? lessonError.message : "Failed to save lesson.");
+    } finally {
+      setSavingLesson(false);
     }
   }
 
@@ -819,6 +945,61 @@ function PromptFeedbackPanel({
         </label>
 
         {savedMessage && <div className="prompt-feedback-success"><Icon name="check" /> {savedMessage}</div>}
+
+        {canWorkWithLesson && (
+          <section className="prompt-lesson-box" aria-label="Prompt lesson">
+            <div className="prompt-lesson-header">
+              <div>
+                <span>Project Learning</span>
+                <strong>Save a reusable lesson</strong>
+              </div>
+              <button className="premium-btn secondary" type="button" disabled={suggestingLesson} onClick={() => void requestLessonSuggestion()}>
+                <Icon name="magic" /> {suggestingLesson ? "Suggesting..." : "Suggest Lesson"}
+              </button>
+            </div>
+
+            <label className="prompt-feedback-field">
+              <span>Lesson</span>
+              <textarea value={lessonText} onChange={(event) => setLessonText(event.target.value)} placeholder="Write what future prompts should remember..." />
+            </label>
+
+            {lessonReasoning && <p className="prompt-lesson-reasoning">{lessonReasoning}</p>}
+
+            <div className="prompt-lesson-grid">
+              <label className="prompt-feedback-field">
+                <span>Scope</span>
+                <select value={lessonScope} onChange={(event) => setLessonScope(event.target.value as PromptLessonScope)}>
+                  <option value="project">Project</option>
+                  <option value="clip">Clip only</option>
+                </select>
+              </label>
+              <label className="prompt-feedback-field">
+                <span>Category</span>
+                <select value={lessonCategory} onChange={(event) => setLessonCategory(event.target.value as PromptFeedbackCategory)}>
+                  {PROMPT_FEEDBACK_CATEGORIES.map((category) => (
+                    <option value={category.value} key={category.value}>{category.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="prompt-feedback-field">
+                <span>Confidence</span>
+                <select value={lessonConfidence} onChange={(event) => setLessonConfidence(Number(event.target.value))}>
+                  <option value={0.6}>0.60</option>
+                  <option value={0.7}>0.70</option>
+                  <option value={0.8}>0.80</option>
+                  <option value={0.9}>0.90</option>
+                  <option value={1}>1.00</option>
+                </select>
+              </label>
+            </div>
+
+            {lessonMessage && <div className="prompt-feedback-success"><Icon name="check" /> {lessonMessage}</div>}
+
+            <button className="premium-btn" type="button" disabled={savingLesson} onClick={() => void saveLesson()}>
+              <Icon name="memory" /> {savingLesson ? "Saving..." : "Save as Lesson"}
+            </button>
+          </section>
+        )}
         {error && <div className="clip-chat-error"><Icon name="warning" /> {error}</div>}
 
         <div className="prompt-feedback-submit-row">

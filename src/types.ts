@@ -146,6 +146,52 @@ export type PromptFeedbackTarget = {
   feedback_summary?: PromptFeedbackSummary;
 };
 
+export type PromptLessonScope = "project" | "clip";
+
+export type PromptLesson = {
+  id: string;
+  scope: PromptLessonScope;
+  clip_key?: string | null;
+  category: string;
+  lesson: string;
+  source_feedback_ids: string[];
+  confidence: number;
+  positive_examples: string[];
+  negative_examples: string[];
+  created_at: string;
+  updated_at?: string;
+  last_accessed_at?: string | null;
+  access_count?: number;
+  archived: boolean;
+  relevance_score?: number;
+  relevance_reasons?: string[];
+};
+
+export type PromptLessonPayload = {
+  scope: PromptLessonScope;
+  clip_key?: string | null;
+  category: string;
+  lesson: string;
+  source_feedback_ids: string[];
+  confidence: number;
+  positive_examples: string[];
+  negative_examples: string[];
+};
+
+export type PromptLessonSuggestion = {
+  lesson: string;
+  category: string;
+  confidence: number;
+  reasoning: string;
+  source_feedback_id?: string;
+};
+
+export type LearningState = {
+  project: PromptLesson[];
+  clip: PromptLesson[];
+  relevant: PromptLesson[];
+};
+
 export type PromptVersion = {
   prompt_id?: string;
   prompt_version_id?: string;
@@ -524,6 +570,7 @@ export type ClipState = {
     clip_context_ready: boolean;
   };
   memory_state: ClipChatMemory;
+  learning_state: LearningState;
   agent_state: {
     recent_runs: ClipAgentRun[];
     pending_actions: ClipChatAction[];

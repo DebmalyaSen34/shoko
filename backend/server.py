@@ -37,10 +37,12 @@ from src.workflows.prompt_generation import extract_last_frame, get_video_durati
 from src.workflows.clip_context import analyze_clip_context, clip_context_dir
 from src.workflows.referenced_frames import extract_frame_at_offset
 from src.generator.media import _frame_offsets_for_duration
+from src.generator.client import _default_model_for_provider, generate_structured
 from src.clustering import find_matching_clip_occurrence
 from src.utils import parse_timestamp_to_seconds
 from src.logging_utils import log_event
 from src.chat_memory import ChatMemoryStore
+from src.prompt_learning import PromptLearningStore
 from scripts.generate_seedance_video import (
     SeedanceGenerationRecoveryError,
     SupabaseAssetUrlCache,
@@ -574,6 +576,40 @@ class PromptFeedbackPatchRequest(BaseModel):
     status: Optional[Literal["open", "approved", "rejected", "resolved"]] = None
 
 
+class PromptLessonCreateRequest(BaseModel):
+    scope: Literal["project", "clip"] = "project"
+    clip_key: Optional[str] = None
+    category: str = "other"
+    lesson: str
+    source_feedback_ids: list[str] = Field(default_factory=list)
+    confidence: float = 0.8
+    positive_examples: list[str] = Field(default_factory=list)
+    negative_examples: list[str] = Field(default_factory=list)
+
+
+class PromptLessonPatchRequest(BaseModel):
+    scope: Optional[Literal["project", "clip"]] = None
+    clip_key: Optional[str] = None
+    category: Optional[str] = None
+    lesson: Optional[str] = None
+    source_feedback_ids: Optional[list[str]] = None
+    confidence: Optional[float] = None
+    positive_examples: Optional[list[str]] = None
+    negative_examples: Optional[list[str]] = None
+    archived: Optional[bool] = None
+
+
+class PromptLessonSuggestRequest(BaseModel):
+    provider: Literal["openai", "gemini"] = "openai"
+
+
+class PromptLessonSuggestionResult(BaseModel):
+    lesson: str
+    category: str = "other"
+    confidence: float = 0.75
+    reasoning: str = ""
+
+
 class ClipSelectionUpdate(BaseModel):
     active_prompt_version_id: Optional[str] = None
     active_generated_video_id: Optional[str] = None
@@ -640,6 +676,10 @@ def chat_agent_runs_path(project_name: str) -> Path:
 
 def prompt_feedback_path(project_name: str) -> Path:
     return project_data_dir(project_name) / "prompt_feedback.json"
+
+
+def prompt_lessons_path(project_name: str) -> Path:
+    return project_data_dir(project_name) / "prompt_lessons.json"
 
 
 def project_jobs_path(project_name: str) -> Path:
@@ -888,6 +928,98 @@ def prompt_feedback_summary_by_version(project_name: str, clip_index: int) -> di
         else:
             summary["status"] = "unreviewed"
     return summaries
+
+
+def find_prompt_feedback_item(project_name: str, feedback_id: str) -> Optional[dict]:
+    return next((item for item in load_prompt_feedback(project_name).get("items", []) if item.get("id") == feedback_id), None)
+
+
+def clip_state_for_lesson_sources(project_name: str, source_feedback_ids: list[str]) -> Optional[dict]:
+    for feedback_id in source_feedback_ids or []:
+        item = find_prompt_feedback_item(project_name, feedback_id)
+        if item and isinstance(item.get("clip_index"), int):
+            return build_clip_state(project_name, item["clip_index"])
+    return None
+
+
+def _prompt_context_for_feedback(project_name: str, feedback_item: dict) -> dict:
+    clip_index = feedback_item.get("clip_index")
+    if not isinstance(clip_index, int):
+        return {}
+    state = build_clip_state(project_name, clip_index)
+    versions = (state.get("active_prompt") or {}).get("versions") or []
+    version = next(
+        (candidate for candidate in versions if candidate.get("prompt_version_id") == feedback_item.get("prompt_version_id")),
+        None,
+    )
+    return {
+        "clip": ((state.get("timeline") or {}).get("clip") or {}),
+        "feedback_state": state.get("feedback_state"),
+        "prompt_version": version or {},
+    }
+
+
+def _suggest_prompt_lesson(project_name: str, feedback_item: dict, provider: Literal["openai", "gemini"]) -> dict:
+    if provider == "openai":
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise HTTPException(status_code=400, detail="OPENAI_API_KEY is not configured.")
+        from openai import OpenAI
+
+        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+    else:
+        if not os.environ.get("GEMINI_API_KEY"):
+            raise HTTPException(status_code=400, detail="GEMINI_API_KEY is not configured.")
+        from google import genai
+
+        client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+
+    context = _prompt_context_for_feedback(project_name, feedback_item)
+    prompt_version = context.get("prompt_version") or {}
+    prompt_text = str(prompt_version.get("video_model_prompt") or "")[:2400]
+    prompt = (
+        "Create one durable lesson from this prompt feedback. The lesson must help future prompt generation avoid "
+        "repeating the same kind of mistake. Avoid copying the raw complaint, avoid overgeneralizing from one clip, "
+        "and write a rule that is useful across similar prompt-generation tasks.\n\n"
+        f"PROJECT: {project_name}\n"
+        f"FEEDBACK CATEGORY: {json.dumps(feedback_item.get('categories') or [], ensure_ascii=False)}\n"
+        f"RATING: {feedback_item.get('rating')}\n"
+        f"SEVERITY: {feedback_item.get('severity')}\n"
+        f"COMMENT: {feedback_item.get('comment') or ''}\n"
+        f"CORRECTION: {feedback_item.get('correction') or ''}\n"
+        f"REMEMBER NOTE: {feedback_item.get('remember_note') or ''}\n"
+        f"CLIP: {json.dumps(context.get('clip') or {}, ensure_ascii=False)}\n"
+        f"PROMPT EXCERPT:\n{prompt_text}"
+    )
+    try:
+        suggestion = generate_structured(
+            provider=provider,
+            client=client,
+            model=_default_model_for_provider(provider),
+            contents=[prompt],
+            schema=PromptLessonSuggestionResult,
+            system_instruction=(
+                "You convert user prompt feedback into one concise, editable lesson. "
+                "Return only a reusable rule, a category, confidence, and brief reasoning."
+            ),
+            temperature=0.1,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to suggest lesson: {exc}") from exc
+
+    category = suggestion.get("category") or (feedback_item.get("categories") or ["other"])[0]
+    if category not in PROMPT_FEEDBACK_CATEGORIES:
+        category = (feedback_item.get("categories") or ["other"])[0]
+    try:
+        confidence = max(0.0, min(1.0, float(suggestion.get("confidence", 0.75))))
+    except Exception:
+        confidence = 0.75
+    return {
+        "lesson": str(suggestion.get("lesson") or "").strip(),
+        "category": category,
+        "confidence": confidence,
+        "reasoning": str(suggestion.get("reasoning") or "").strip(),
+        "source_feedback_id": feedback_item.get("id"),
+    }
 
 
 def clip_selection_for_key(project_name: str, clip_key: str) -> dict:
@@ -1372,6 +1504,10 @@ def memory_store(project_name: str) -> ChatMemoryStore:
     return ChatMemoryStore(chat_memory_path(project_name))
 
 
+def prompt_learning_store(project_name: str) -> PromptLearningStore:
+    return PromptLearningStore(prompt_lessons_path(project_name))
+
+
 def matching_prompt(project_data: dict, clip: dict, clip_index: int) -> Optional[dict]:
     clip_name = clip.get("clip", "")
     basename = os.path.basename(clip_name)
@@ -1670,6 +1806,7 @@ def build_clip_freshness(
         "agent_runs": chat_agent_runs_path(project_name),
         "memory": chat_memory_path(project_name),
         "prompt_feedback": prompt_feedback_path(project_name),
+        "prompt_lessons": prompt_lessons_path(project_name),
         "events": project_events_path(project_name),
     }
     fingerprints = {
@@ -1705,6 +1842,7 @@ def build_clip_freshness(
             "selected_assets": normalize_selection_asset_refs(selection),
         }),
         "prompt_feedback": stable_json_hash(prompt_feedback_summary_by_version(project_name, active_version.get("clip_index", -1) if active_version else -1)),
+        "prompt_lessons": stable_json_hash(prompt_learning_store(project_name).list_lessons(clip_key=clip_key, include_archived=True, limit=500)),
     }
     fingerprints["state"] = stable_json_hash({
         key: value
@@ -1715,7 +1853,7 @@ def build_clip_freshness(
     return {
         "source_files": {key: str(path) for key, path in source_paths.items()},
         "source_mtimes": {key: file_mtime_iso(path) for key, path in source_paths.items()},
-        "derived_from": ["timeline", "feedback", "assets", "prompts", "clip_selections", "prompt_feedback", "memory", "agent_runs", "events"],
+        "derived_from": ["timeline", "feedback", "assets", "prompts", "clip_selections", "prompt_feedback", "prompt_lessons", "memory", "agent_runs", "events"],
         "fingerprints": fingerprints,
         "state_hash": fingerprints["state"],
         "stale_reasons": selection_stale_reasons,
@@ -1729,7 +1867,7 @@ def annotate_agent_run_freshness(run: dict, current_freshness: dict) -> dict:
     current_fingerprints = current_freshness.get("fingerprints") or {}
     stale_reasons = []
 
-    for key in ["timeline", "feedback", "prompts", "assets", "videos", "selection"]:
+    for key in ["timeline", "feedback", "prompts", "assets", "videos", "selection", "prompt_feedback", "prompt_lessons"]:
         if previous_fingerprints.get(key) and previous_fingerprints.get(key) != current_fingerprints.get(key):
             stale_reasons.append(f"{key}_changed")
 
@@ -1805,6 +1943,7 @@ def build_clip_state(project_name: str, clip_index: int, query: str = "") -> dic
     latest_video = selected_video or default_video
     clip_context = load_clip_context(project_name, clip, clip_index)
     store = memory_store(project_name)
+    learning_store = prompt_learning_store(project_name)
     feedback_items = (feedback or {}).get("feedback_items", [])
     feedback_indexes = {item.get("raw_index") for item in feedback_items}
     recent_jobs = [
@@ -1923,6 +2062,10 @@ def build_clip_state(project_name: str, clip_index: int, query: str = "") -> dic
             "clip_context_ready": bool(clip_context),
         },
         "memory_state": store.for_clip(clip_key, query=query),
+        "learning_state": learning_store.for_clip(
+            clip_key,
+            query=query,
+        ),
         "agent_state": {
             "recent_runs": agent_runs,
             "pending_actions": [
@@ -5085,6 +5228,94 @@ def get_prompt_feedback(project_name: str, clip_index: Optional[int] = None):
     }
 
 
+@app.get("/api/projects/{project_name}/prompt-lessons")
+def get_prompt_lessons(
+    project_name: str,
+    clip_key: Optional[str] = None,
+    category: Optional[str] = None,
+    include_archived: bool = False,
+):
+    project_name = safe_project_name(project_name)
+    lessons = prompt_learning_store(project_name).list_lessons(
+        clip_key=clip_key,
+        category=category,
+        include_archived=include_archived,
+    )
+    return {
+        "schema_version": 1,
+        "project_name": project_name,
+        "clip_key": clip_key,
+        "category": category,
+        "lessons": lessons,
+    }
+
+
+@app.post("/api/projects/{project_name}/prompt-lessons")
+def create_prompt_lesson(project_name: str, request: PromptLessonCreateRequest):
+    project_name = safe_project_name(project_name)
+    try:
+        lesson = prompt_learning_store(project_name).add_lesson(
+            request.lesson,
+            scope=request.scope,
+            clip_key=request.clip_key,
+            category=request.category,
+            source_feedback_ids=request.source_feedback_ids,
+            confidence=request.confidence,
+            positive_examples=request.positive_examples,
+            negative_examples=request.negative_examples,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    append_project_event(
+        project_name,
+        "prompt_lesson_created",
+        actor="user",
+        clip_key=lesson.get("clip_key"),
+        entity="prompt_lesson",
+        entity_id=lesson.get("id"),
+        payload={
+            "scope": lesson.get("scope"),
+            "category": lesson.get("category"),
+            "source_feedback_ids": lesson.get("source_feedback_ids", []),
+        },
+    )
+    return {
+        "lesson": lesson,
+        "clip_state": clip_state_for_lesson_sources(project_name, lesson.get("source_feedback_ids", [])),
+    }
+
+
+@app.patch("/api/projects/{project_name}/prompt-lessons/{lesson_id}")
+def patch_prompt_lesson(project_name: str, lesson_id: str, request: PromptLessonPatchRequest):
+    project_name = safe_project_name(project_name)
+    try:
+        lesson = prompt_learning_store(project_name).update_lesson(
+            lesson_id,
+            request.model_dump(exclude_none=True),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Prompt lesson was not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    append_project_event(
+        project_name,
+        "prompt_lesson_updated",
+        actor="user",
+        clip_key=lesson.get("clip_key"),
+        entity="prompt_lesson",
+        entity_id=lesson.get("id"),
+        payload={
+            "scope": lesson.get("scope"),
+            "category": lesson.get("category"),
+            "archived": lesson.get("archived"),
+        },
+    )
+    return {
+        "lesson": lesson,
+        "clip_state": clip_state_for_lesson_sources(project_name, lesson.get("source_feedback_ids", [])),
+    }
+
+
 @app.post("/api/projects/{project_name}/prompt-feedback")
 def create_prompt_feedback(project_name: str, request: PromptFeedbackCreateRequest):
     project_name = safe_project_name(project_name)
@@ -5119,6 +5350,20 @@ def create_prompt_feedback(project_name: str, request: PromptFeedbackCreateReque
     return {
         "item": item,
         "clip_state": build_clip_state(project_name, item["clip_index"]),
+    }
+
+
+@app.post("/api/projects/{project_name}/prompt-feedback/{feedback_id}/suggest-lesson")
+def suggest_prompt_lesson(project_name: str, feedback_id: str, request: PromptLessonSuggestRequest):
+    project_name = safe_project_name(project_name)
+    item = find_prompt_feedback_item(project_name, feedback_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Prompt feedback was not found")
+    suggestion = _suggest_prompt_lesson(project_name, item, request.provider)
+    return {
+        "project_name": project_name,
+        "feedback_id": feedback_id,
+        "suggestion": suggestion,
     }
 
 

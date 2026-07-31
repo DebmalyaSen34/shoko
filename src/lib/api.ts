@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ClipState, PromptFeedbackItem, PromptFeedbackPayload } from "../types";
+import type { ClipState, PromptFeedbackItem, PromptFeedbackPayload, PromptLesson, PromptLessonPayload, PromptLessonSuggestion, Provider } from "../types";
 
 export let API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
@@ -81,4 +81,55 @@ export async function updatePromptFeedback(projectName: string, feedbackId: stri
   });
   if (!response.ok) throw new Error(await response.text());
   return response.json() as Promise<{ item: PromptFeedbackItem; clip_state: ClipState }>;
+}
+
+export async function listPromptLessons(projectName: string, options: { clipKey?: string; category?: string; includeArchived?: boolean } = {}) {
+  const params = new URLSearchParams();
+  if (options.clipKey) params.set("clip_key", options.clipKey);
+  if (options.category) params.set("category", options.category);
+  if (options.includeArchived) params.set("include_archived", "true");
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectName)}/prompt-lessons${suffix}`));
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<{
+    schema_version: number;
+    project_name: string;
+    clip_key?: string | null;
+    category?: string | null;
+    lessons: PromptLesson[];
+  }>;
+}
+
+export async function createPromptLesson(projectName: string, payload: PromptLessonPayload) {
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectName)}/prompt-lessons`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<{ lesson: PromptLesson; clip_state?: ClipState | null }>;
+}
+
+export async function updatePromptLesson(projectName: string, lessonId: string, patch: Partial<PromptLessonPayload> & { archived?: boolean }) {
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectName)}/prompt-lessons/${encodeURIComponent(lessonId)}`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<{ lesson: PromptLesson; clip_state?: ClipState | null }>;
+}
+
+export async function suggestPromptLesson(projectName: string, feedbackId: string, provider: Provider) {
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectName)}/prompt-feedback/${encodeURIComponent(feedbackId)}/suggest-lesson`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<{
+    project_name: string;
+    feedback_id: string;
+    suggestion: PromptLessonSuggestion;
+  }>;
 }

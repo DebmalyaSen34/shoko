@@ -3,6 +3,7 @@ import type { AssetFile } from "../types";
 export function Icon({ name, className = "" }: { name: string; className?: string }) {
   const paths: Record<string, string> = {
     board: "M4 5h16v12H4z M8 21h8 M12 17v4",
+    home: "M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1V9.5z",
     folder: "M3 6h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
     box: "M4 8l8-4 8 4-8 4-8-4z M4 8v8l8 4 8-4V8 M12 12v8",
     search: "M11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14z M20 20l-4-4",

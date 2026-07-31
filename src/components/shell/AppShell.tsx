@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { Provider } from "../../types";
 import { TopBar } from "./TopBar";
-import { LeftRail, type RailItemId } from "./LeftRail";
+import type { RailItemId } from "./LeftRail";
 
 type AppShellProps = {
   activeProject: string;
@@ -14,9 +14,8 @@ type AppShellProps = {
   workflowDrawerOpen: boolean;
   onOpenSettings: () => void;
   onProjectChange: (project: string) => void;
-  onRailSelect: (item: RailItemId) => void;
+  onGoHome?: () => void;
   onRunWorkflow: () => void;
-  onToggleWorkflowDrawer: () => void;
 };
 
 export function AppShell({
@@ -30,9 +29,8 @@ export function AppShell({
   workflowDrawerOpen,
   onOpenSettings,
   onProjectChange,
-  onRailSelect,
+  onGoHome,
   onRunWorkflow,
-  onToggleWorkflowDrawer,
 }: AppShellProps) {
   const providerLabel = provider === "openai" ? "OpenAI" : "Gemini";
 
@@ -44,17 +42,10 @@ export function AppShell({
         onOpenSettings={onOpenSettings}
         onRunWorkflow={onRunWorkflow}
         onProjectChange={onProjectChange}
+        onGoHome={onGoHome}
       />
 
       <div className="shoko-desktop-frame">
-        <LeftRail
-          activeItem={activeRailItem}
-          collapsedPanelOpen={workflowDrawerOpen}
-          collapsedPanelOpenLabel={workflowDrawerOpen ? "Collapse project workflow" : "Open project workflow"}
-          onCollapsedPanelOpen={activeRailItem === "timeline" ? onToggleWorkflowDrawer : undefined}
-          onSelect={onRailSelect}
-        />
-
         <main className={`shoko-workspace ${activeRailItem === "timeline" ? "timeline-active" : ""} ${workflowDrawerOpen ? "workflow-drawer-open" : ""}`}>
           <div className="shoko-workspace-inner">{children}</div>
 

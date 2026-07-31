@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
+import { Icon } from "./components/Icon";
 import { AppShell } from "./components/shell/AppShell";
 import type { RailItemId } from "./components/shell/LeftRail";
 import { ProjectHomePanel, ProjectWorkflowPanel } from "./components/project/ProjectWorkflowPanel";
@@ -398,26 +399,19 @@ function App() {
         onOpenSettings={() => setShowSettings(true)}
         onRunWorkflow={runFirstAvailableWorkflow}
         onProjectChange={(project) => void loadProject(project)}
-        onToggleWorkflowDrawer={() => setTimelineWorkflowOpen((open) => !open)}
-        onRailSelect={(item) => {
-          if (item === "settings") {
-            setActiveRailItem("settings");
-            setTimelineWorkflowOpen(false);
-            setShowSettings(true);
-            return;
-          }
-          if (item === "feedback") {
-            setActiveRailItem("feedback");
-            setTimelineWorkflowOpen(false);
-            setShowUploadFeedback(true);
-            return;
-          }
-          setActiveRailItem(item);
-          if (item === "timeline") {
-            setTimelineWorkflowOpen(false);
-          }
-        }}
+        onGoHome={() => setActiveRailItem("home")}
       >
+        {timelineOpen && !timelineWorkflowOpen && (
+          <button
+            className="workflow-drawer-expand-button"
+            type="button"
+            title="Open project workflow"
+            onClick={() => setTimelineWorkflowOpen(true)}
+          >
+            <Icon name="chevronRight" />
+          </button>
+        )}
+
         {(!timelineOpen || timelineWorkflowOpen) && (
           <ProjectWorkflowPanel
             activeProject={activeProject}

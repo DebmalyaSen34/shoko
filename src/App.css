@@ -166,11 +166,29 @@ button {
   height: 100%;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding-left: 24px;
+  gap: 10px;
+  padding-left: 20px;
   background: #24292e;
   color: #ffffff;
   border-right: 1px solid rgba(250, 251, 252, 0.08);
+  user-select: none;
+}
+
+.shoko-brand.clickable {
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.shoko-brand.clickable:hover {
+  background-color: #2c3238;
+}
+
+.shoko-brand .shoko-home-icon {
+  font-size: 20px;
+  width: 20px;
+  height: 20px;
+  color: #fafbfc;
+  flex-shrink: 0;
 }
 
 .shoko-brand strong {
@@ -507,6 +525,37 @@ button {
   margin: -14px 0 -14px -14px;
   padding-top: 12px;
   background: rgba(36, 41, 46, 0.96);
+}
+
+.workflow-drawer-expand-button {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 52px;
+  border-radius: 0 4px 4px 0;
+  border: 1px solid rgba(250, 251, 252, 0.1);
+  border-left: 0;
+  background: #24292e;
+  color: #fafbfc;
+  display: grid;
+  place-items: center;
+  z-index: 20;
+  box-shadow: 2px 0 6px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.workflow-drawer-expand-button .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.workflow-drawer-expand-button:hover {
+  background: #2b3137;
+  border-color: rgba(250, 251, 252, 0.18);
+  color: #ffffff;
 }
 
 .workflow-drawer-topline {

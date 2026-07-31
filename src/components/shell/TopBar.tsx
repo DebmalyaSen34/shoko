@@ -7,6 +7,7 @@ type TopBarProps = {
   onOpenSettings: () => void;
   onRunWorkflow: () => void;
   onProjectChange: (project: string) => void;
+  onGoHome?: () => void;
 };
 
 export function TopBar({
@@ -15,10 +16,24 @@ export function TopBar({
   onOpenSettings,
   onRunWorkflow,
   onProjectChange,
+  onGoHome,
 }: TopBarProps) {
   return (
     <header className="shoko-topbar">
-      <div className="shoko-brand">
+      <div
+        className={`shoko-brand ${onGoHome ? "clickable" : ""}`}
+        onClick={onGoHome}
+        role={onGoHome ? "button" : undefined}
+        tabIndex={onGoHome ? 0 : undefined}
+        onKeyDown={(e) => {
+          if (onGoHome && (e.key === "Enter" || e.key === " ")) {
+            e.preventDefault();
+            onGoHome();
+          }
+        }}
+        title={onGoHome ? "Go to Home" : undefined}
+      >
+        <Icon name="home" className="shoko-home-icon" />
         <strong>Shoko</strong>
       </div>
 
@@ -43,10 +58,6 @@ export function TopBar({
           </select>
           <Icon name="chevronDown" className="project-select-chevron" />
         </div>
-        <span className="saved-state">
-          <span />
-          Saved
-        </span>
       </div>
 
       <div className="shoko-topbar-actions">

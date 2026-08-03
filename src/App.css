@@ -39,7 +39,8 @@
   --border-color: rgba(36, 41, 46, 0.14);
   --border-hover: rgba(45, 186, 78, 0.5);
   --accent-primary: #2dba4e;
-  --accent-primary-hover: #2dba4e;
+  --accent-primary-hover: #269e42;
+  --accent-primary-active: #1f8837;
   --accent-primary-strong: #2dba4e;
   --accent-primary-glow: rgba(45, 186, 78, 0.18);
   --accent-secondary: #2dba4e;
@@ -338,18 +339,53 @@ button {
   border: 1px solid var(--border-color);
 }
 
-.shoko-primary-button:hover,
-.shoko-ghost-button:hover,
-.shoko-icon-button:hover {
-  border-color: var(--border-hover);
+.shoko-primary-button:hover {
+  background: var(--accent-primary-hover);
+  border-color: var(--accent-primary-hover);
+  color: #ffffff;
   transform: none;
 }
 
+.shoko-primary-button:active {
+  background: var(--accent-primary-active);
+  border-color: var(--accent-primary-active);
+  color: #ffffff;
+}
+
 .shoko-primary-button:disabled,
-.shoko-ghost-button:disabled,
-.shoko-icon-button:disabled {
-  opacity: 0.45;
+.shoko-primary-button:disabled:hover {
+  opacity: 0.5;
   cursor: not-allowed;
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #ffffff;
+  transform: none;
+}
+
+.shoko-ghost-button:hover,
+.shoko-icon-button:hover {
+  background: rgba(45, 186, 78, 0.08);
+  border-color: rgba(45, 186, 78, 0.42);
+  color: var(--text-primary);
+  transform: none;
+}
+
+.shoko-ghost-button:active,
+.shoko-icon-button:active {
+  background: rgba(45, 186, 78, 0.16);
+  border-color: rgba(45, 186, 78, 0.6);
+  color: var(--text-primary);
+}
+
+.shoko-ghost-button:disabled,
+.shoko-ghost-button:disabled:hover,
+.shoko-icon-button:disabled,
+.shoko-icon-button:disabled:hover {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: #fafbfc;
+  border-color: var(--border-color);
+  color: var(--text-muted);
   transform: none;
 }
 
@@ -3128,7 +3164,12 @@ button {
 
 .icon-btn:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(45, 186, 78, 0.08);
+}
+
+.icon-btn:active {
+  color: var(--text-primary);
+  background: rgba(45, 186, 78, 0.16);
 }
 
 .premium-slider {
@@ -4690,8 +4731,8 @@ button {
 .premium-btn {
   background: var(--accent-primary);
   color: #ffffff;
-  border: 0;
-  border-radius: 6px;
+  border: 1px solid var(--accent-primary);
+  border-radius: 3px;
   padding: 8px 14px;
   font-size: 12px;
   font-weight: 700;
@@ -4700,31 +4741,58 @@ button {
   justify-content: center;
   gap: 8px;
   text-decoration: none;
-  box-shadow: 0 4px 12px var(--accent-primary-glow);
+  box-shadow: none;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
 
 .premium-btn:hover {
   background: var(--accent-primary-hover);
+  border-color: var(--accent-primary-hover);
+  color: #ffffff;
+}
+
+.premium-btn:active {
+  background: var(--accent-primary-active);
+  border-color: var(--accent-primary-active);
+  color: #ffffff;
 }
 
 .premium-btn:disabled,
 .premium-btn:disabled:hover {
   cursor: not-allowed;
-  opacity: 0.48;
-  background: var(--bg-tertiary);
+  opacity: 0.5;
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #ffffff;
   box-shadow: none;
 }
 
 .premium-btn.secondary {
-  background: var(--bg-primary);
+  background: #ffffff;
   border: 1px solid var(--border-color);
   box-shadow: none;
   color: var(--text-primary);
 }
 
 .premium-btn.secondary:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: var(--text-muted);
+  background: rgba(45, 186, 78, 0.08);
+  border-color: rgba(45, 186, 78, 0.42);
+  color: var(--text-primary);
+}
+
+.premium-btn.secondary:active {
+  background: rgba(45, 186, 78, 0.16);
+  border-color: rgba(45, 186, 78, 0.6);
+  color: var(--text-primary);
+}
+
+.premium-btn.secondary:disabled,
+.premium-btn.secondary:disabled:hover {
+  cursor: not-allowed;
+  opacity: 0.5;
+  background: #fafbfc;
+  border-color: var(--border-color);
+  color: var(--text-muted);
 }
 
 .header-action-btn {
@@ -6599,13 +6667,33 @@ button {
   box-shadow: none;
 }
 
-.premium-btn,
-.premium-btn:hover {
-  border: 1px solid var(--border-hover);
+.premium-btn {
+  border: 1px solid var(--accent-primary);
   border-radius: 3px;
   background: var(--accent-primary);
   color: #ffffff;
   box-shadow: none;
+}
+
+.premium-btn:hover {
+  background: var(--accent-primary-hover);
+  border-color: var(--accent-primary-hover);
+  color: #ffffff;
+}
+
+.premium-btn:active {
+  background: var(--accent-primary-active);
+  border-color: var(--accent-primary-active);
+  color: #ffffff;
+}
+
+.premium-btn:disabled,
+.premium-btn:disabled:hover {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #ffffff;
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .uploaded-asset-card,
@@ -6888,6 +6976,39 @@ button {
   border-color: var(--accent-primary);
 }
 
+.shoko-primary-button:hover,
+.timeline-chat-actions .shoko-primary-button:hover,
+.premium-btn:hover,
+.chat-send-btn:hover {
+  background: var(--accent-primary-hover);
+  color: #ffffff;
+  border-color: var(--accent-primary-hover);
+}
+
+.shoko-primary-button:active,
+.timeline-chat-actions .shoko-primary-button:active,
+.premium-btn:active,
+.chat-send-btn:active {
+  background: var(--accent-primary-active);
+  color: #ffffff;
+  border-color: var(--accent-primary-active);
+}
+
+.shoko-primary-button:disabled,
+.shoko-primary-button:disabled:hover,
+.timeline-chat-actions .shoko-primary-button:disabled,
+.timeline-chat-actions .shoko-primary-button:disabled:hover,
+.premium-btn:disabled,
+.premium-btn:disabled:hover,
+.chat-send-btn:disabled,
+.chat-send-btn:disabled:hover {
+  background: var(--accent-primary);
+  color: #ffffff;
+  border-color: var(--accent-primary);
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .shoko-ghost-button,
 .shoko-icon-button,
 .timeline-fit-button,
@@ -6895,6 +7016,39 @@ button {
   background: #ffffff;
   color: var(--text-primary);
   border-color: var(--border-color);
+}
+
+.shoko-ghost-button:hover,
+.shoko-icon-button:hover,
+.timeline-fit-button:hover,
+.timeline-zoom-icon:hover {
+  background: rgba(45, 186, 78, 0.08);
+  border-color: rgba(45, 186, 78, 0.42);
+  color: var(--text-primary);
+}
+
+.shoko-ghost-button:active,
+.shoko-icon-button:active,
+.timeline-fit-button:active,
+.timeline-zoom-icon:active {
+  background: rgba(45, 186, 78, 0.16);
+  border-color: rgba(45, 186, 78, 0.6);
+  color: var(--text-primary);
+}
+
+.shoko-ghost-button:disabled,
+.shoko-ghost-button:disabled:hover,
+.shoko-icon-button:disabled,
+.shoko-icon-button:disabled:hover,
+.timeline-fit-button:disabled,
+.timeline-fit-button:disabled:hover,
+.timeline-zoom-icon:disabled,
+.timeline-zoom-icon:disabled:hover {
+  background: #fafbfc;
+  color: var(--text-muted);
+  border-color: var(--border-color);
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .shoko-brand,
@@ -7181,7 +7335,12 @@ button {
 .close-btn:hover,
 .close-btn:focus-visible {
   color: #24292e;
-  background: #fafbfc;
+  background: rgba(45, 186, 78, 0.08);
+}
+
+.close-btn:active {
+  color: #24292e;
+  background: rgba(45, 186, 78, 0.16);
 }
 
 .error-header,
@@ -7211,7 +7370,12 @@ button {
 
 .slash-command-menu button:hover,
 .slash-command-menu button:focus-visible {
-  background: #fafbfc;
+  background: rgba(45, 186, 78, 0.08);
+  color: #24292e;
+}
+
+.slash-command-menu button:active {
+  background: rgba(45, 186, 78, 0.16);
   color: #24292e;
 }
 

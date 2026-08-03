@@ -13,6 +13,8 @@ if str(BACKEND_ROOT) not in sys.path:
 
 os.environ.setdefault("LOKA_STORAGE_DIR", tempfile.mkdtemp(prefix="loka-lifecycle-test-"))
 server = importlib.import_module("server")
+from config import settings as settings_module
+from src import config as config_module
 
 
 def test_health_endpoint_reports_backend_status():
@@ -59,13 +61,13 @@ def test_shutdown_rejects_when_no_token_is_configured(monkeypatch):
 
 
 def test_runtime_config_reports_secret_status_without_values(tmp_path, monkeypatch):
-    for key in server.SECRET_ENV_KEYS:
+    for key in settings_module.SECRET_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "secret-openai-key")
-    monkeypatch.setattr(server, "APP_STORAGE_DIR", tmp_path / "app-storage")
-    monkeypatch.setattr(server, "DATA_DIR", tmp_path / "app-storage" / "data")
-    monkeypatch.setattr(server, "ASSETS_DIR", tmp_path / "app-storage" / "assets")
-    monkeypatch.setattr(server, "OS_ENV_KEYS_AT_START", frozenset({"OPENAI_API_KEY"}))
+    monkeypatch.setattr(config_module, "APP_STORAGE_DIR", tmp_path / "app-storage")
+    monkeypatch.setattr(config_module, "DATA_DIR", tmp_path / "app-storage" / "data")
+    monkeypatch.setattr(config_module, "ASSETS_DIR", tmp_path / "app-storage" / "assets")
+    monkeypatch.setattr(config_module, "OS_ENV_KEYS_AT_START", frozenset({"OPENAI_API_KEY"}))
     client = TestClient(server.app)
 
     response = client.get("/api/config/runtime")
@@ -78,10 +80,10 @@ def test_runtime_config_reports_secret_status_without_values(tmp_path, monkeypat
 
 
 def test_update_runtime_secrets_writes_installed_app_env_file(tmp_path, monkeypatch):
-    for key in server.SECRET_ENV_KEYS:
+    for key in settings_module.SECRET_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(server, "APP_STORAGE_DIR", tmp_path / "app-storage")
-    monkeypatch.setattr(server, "OS_ENV_KEYS_AT_START", frozenset())
+    monkeypatch.setattr(config_module, "APP_STORAGE_DIR", tmp_path / "app-storage")
+    monkeypatch.setattr(config_module, "OS_ENV_KEYS_AT_START", frozenset())
     client = TestClient(server.app)
 
     response = client.post(
@@ -102,8 +104,8 @@ def test_update_runtime_secrets_writes_installed_app_env_file(tmp_path, monkeypa
 
 
 def test_update_runtime_secrets_rejects_os_controlled_keys(tmp_path, monkeypatch):
-    monkeypatch.setattr(server, "APP_STORAGE_DIR", tmp_path / "app-storage")
-    monkeypatch.setattr(server, "OS_ENV_KEYS_AT_START", frozenset({"OPENAI_API_KEY"}))
+    monkeypatch.setattr(config_module, "APP_STORAGE_DIR", tmp_path / "app-storage")
+    monkeypatch.setattr(config_module, "OS_ENV_KEYS_AT_START", frozenset({"OPENAI_API_KEY"}))
     client = TestClient(server.app)
 
     response = client.post("/api/config/secrets", json={"openai_api_key": "new-openai-key"})

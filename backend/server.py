@@ -1,9 +1,3 @@
-"""FastAPI application assembly.
-
-All route handlers live in src/routers/; server.py only builds the app,
-registers the routers, and serves the static mounts.
-"""
-
 import os
 import time
 

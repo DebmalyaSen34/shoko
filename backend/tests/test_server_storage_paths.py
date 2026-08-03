@@ -15,6 +15,16 @@ if str(BACKEND_ROOT) not in sys.path:
 
 os.environ.setdefault("LOKA_STORAGE_DIR", tempfile.mkdtemp(prefix="loka-server-test-"))
 server = importlib.import_module("server")
+from tests.conftest import patch_storage_dirs
+# Refactor shim: the monolith's functions now live in src modules; re-export
+# them onto the server module so tests can keep calling server.<fn>.
+from src import clip_chat, clip_state, job_manager, project_manager, prompt_feedback  # noqa: E402
+for _mod in (clip_chat, clip_state, job_manager, project_manager, prompt_feedback):
+    for _attr in dir(_mod):
+        if not _attr.startswith("_"):
+            setattr(server, _attr, getattr(_mod, _attr))
+
+from src.routers.projects import list_projects
 
 
 def test_list_projects_reads_configured_data_dir(tmp_path, monkeypatch):
@@ -24,10 +34,10 @@ def test_list_projects_reads_configured_data_dir(tmp_path, monkeypatch):
     (project_dir / "timeline.json").write_text("{}", encoding="utf-8")
     (project_dir / "feedback.json").write_text("[]", encoding="utf-8")
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    patch_storage_dirs(monkeypatch, data_dir)
     monkeypatch.chdir(tmp_path)
 
-    assert server.list_projects() == ["project-a"]
+    assert list_projects() == ["project-a"]
 
 
 def test_list_projects_includes_timeline_without_feedback(tmp_path, monkeypatch):
@@ -39,10 +49,10 @@ def test_list_projects_includes_timeline_without_feedback(tmp_path, monkeypatch)
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    patch_storage_dirs(monkeypatch, data_dir)
     monkeypatch.chdir(tmp_path)
 
-    assert server.list_projects() == ["project-draft"]
+    assert list_projects() == ["project-draft"]
 
 
 def test_get_project_data_allows_missing_feedback(tmp_path, monkeypatch):
@@ -56,8 +66,7 @@ def test_get_project_data_allows_missing_feedback(tmp_path, monkeypatch):
     )
     (assets_dir / "project-draft" / "06_clips" / "_raw").mkdir(parents=True)
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     monkeypatch.chdir(tmp_path)
 
     data = server.get_project_data("project-draft")
@@ -74,7 +83,7 @@ def test_get_assets_list_builds_urls_from_configured_assets_dir(tmp_path, monkey
     character_dir.mkdir(parents=True)
     (character_dir / "hero.png").write_bytes(b"image")
 
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, assets_dir.parent / "data", assets_dir)
     monkeypatch.chdir(tmp_path)
 
     assets = server.get_assets_list(project_assets_dir, "project-a")
@@ -85,8 +94,7 @@ def test_get_assets_list_builds_urls_from_configured_assets_dir(tmp_path, monkey
 def test_create_project_creates_required_asset_tree(tmp_path, monkeypatch):
     data_dir = tmp_path / "app-storage" / "data"
     assets_dir = tmp_path / "app-storage" / "assets"
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     monkeypatch.chdir(tmp_path)
     client = TestClient(server.app)
 
@@ -111,14 +119,13 @@ def test_create_project_creates_required_asset_tree(tmp_path, monkeypatch):
 def test_import_premiere_package_extracts_timeline(tmp_path, monkeypatch):
     data_dir = tmp_path / "app-storage" / "data"
     assets_dir = tmp_path / "app-storage" / "assets"
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     monkeypatch.chdir(tmp_path)
     client = TestClient(server.app)
 
     with (
-        mock.patch("server.setup_project_workspace") as setup,
-        mock.patch("server.extract_timeline_from_project") as extract,
+        mock.patch("src.routers.projects.setup_project_workspace") as setup,
+        mock.patch("src.routers.projects.extract_timeline_from_project") as extract,
     ):
         setup.return_value = (
             str(assets_dir / "project-new"),
@@ -151,14 +158,13 @@ def test_upload_feedback_parses_and_aligns(tmp_path, monkeypatch):
     timeline_path = project_dir / "timeline.json"
     timeline_path.write_text("{}", encoding="utf-8")
     
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.chdir(tmp_path)
     client = TestClient(server.app)
 
     with (
-        mock.patch("server.parse_and_align_feedback") as parse_mock,
+        mock.patch("src.routers.projects.parse_and_align_feedback") as parse_mock,
         mock.patch("openai.OpenAI") as openai_mock,
     ):
         parse_mock.return_value = str(project_dir / "feedback.json")
@@ -201,7 +207,7 @@ def test_ensure_raw_feedback_preserves_group_context(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    patch_storage_dirs(monkeypatch, data_dir)
     monkeypatch.chdir(tmp_path)
 
     raw_path = Path(server.ensure_raw_feedback("project-a"))
@@ -220,7 +226,7 @@ def test_add_manual_feedback(tmp_path, monkeypatch):
     project_dir.mkdir(parents=True)
     
     # 1. Start with no feedback file
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    patch_storage_dirs(monkeypatch, data_dir)
     monkeypatch.chdir(tmp_path)
     client = TestClient(server.app)
 

@@ -13,6 +13,15 @@ if str(BACKEND_ROOT) not in sys.path:
 
 os.environ.setdefault("LOKA_STORAGE_DIR", tempfile.mkdtemp(prefix="loka-prompt-learning-test-"))
 server = importlib.import_module("server")
+from tests.conftest import patch_storage_dirs
+# Refactor shim: the monolith's functions now live in src modules; re-export
+# them onto the server module so tests can keep calling server.<fn>.
+from src import clip_chat, clip_state, job_manager, project_manager, prompt_feedback  # noqa: E402
+for _mod in (clip_chat, clip_state, job_manager, project_manager, prompt_feedback):
+    for _attr in dir(_mod):
+        if not _attr.startswith("_"):
+            setattr(server, _attr, getattr(_mod, _attr))
+
 
 from src.prompt_learning import PromptEvalCaseStore, PromptLearningStore
 
@@ -57,8 +66,7 @@ def _seed_project(tmp_path, monkeypatch):
         """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     monkeypatch.chdir(tmp_path)
     state = server.build_clip_state("project-a", 0)
     version = state["active_prompt"]["version"]
@@ -171,8 +179,16 @@ def test_suggest_prompt_lesson_returns_mocked_suggestion(tmp_path, monkeypatch):
 
     monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
     monkeypatch.setattr(
-        server,
-        "generate_structured",
+        "src.generator.client.generate_structured",
+        lambda **_kwargs: {
+            "lesson": "When continuity is mentioned, preserve wardrobe and body motion explicitly.",
+            "category": "continuity_error",
+            "confidence": 0.88,
+            "reasoning": "The feedback was about wardrobe continuity.",
+        },
+    )
+    monkeypatch.setattr(
+        "src.prompt_feedback.generate_structured",
         lambda **_kwargs: {
             "lesson": "When continuity is mentioned, preserve wardrobe and body motion explicitly.",
             "category": "continuity_error",
@@ -384,22 +400,21 @@ def test_revise_prompt_from_feedback_creates_new_prompt_version(tmp_path, monkey
             self.api_key = api_key
 
     monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
+    for module in ("src.generator.client", "src.prompt_feedback"):
+        monkeypatch.setattr(
+            f"{module}.generate_structured",
+            lambda **_kwargs: {
+                "video_model_prompt": "A revised detailed prompt preserving wardrobe continuity, original clip reference images, and slow deliberate hand movement. " * 12,
+                "explanation": "Applied feedback and lessons.",
+            },
+        )
+    for module in ("src.generator.validator", "src.prompt_feedback"):
+        monkeypatch.setattr(
+            f"{module}.run_quality_check",
+            lambda **_kwargs: {"passed": True, "suggestions": [], "feedback_adherence": "ok", "clothing_consistency": "ok"},
+        )
     monkeypatch.setattr(
-        server,
-        "generate_structured",
-        lambda **_kwargs: {
-            "video_model_prompt": "A revised detailed prompt preserving wardrobe continuity, original clip reference images, and slow deliberate hand movement. " * 12,
-            "explanation": "Applied feedback and lessons.",
-        },
-    )
-    monkeypatch.setattr(
-        server,
-        "run_quality_check",
-        lambda **_kwargs: {"passed": True, "suggestions": [], "feedback_adherence": "ok", "clothing_consistency": "ok"},
-    )
-    monkeypatch.setattr(
-        server,
-        "run_learning_eval",
+        "src.prompt_feedback.run_learning_eval",
         lambda **_kwargs: {"passed": True, "score": 1, "failed_cases": [], "case_results": [], "suggestions": []},
     )
 

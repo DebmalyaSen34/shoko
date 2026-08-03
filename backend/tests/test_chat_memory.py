@@ -17,6 +17,15 @@ if str(BACKEND_ROOT) not in sys.path:
 os.environ.setdefault("LOKA_STORAGE_DIR", tempfile.mkdtemp(prefix="loka-memory-test-"))
 
 server = importlib.import_module("server")
+from tests.conftest import patch_storage_dirs
+# Refactor shim: the monolith's functions now live in src modules; re-export
+# them onto the server module so tests can keep calling server.<fn>.
+from src import clip_chat, clip_state, job_manager, project_manager, prompt_feedback  # noqa: E402
+for _mod in (clip_chat, clip_state, job_manager, project_manager, prompt_feedback):
+    for _attr in dir(_mod):
+        if not _attr.startswith("_"):
+            setattr(server, _attr, getattr(_mod, _attr))
+
 from src.chat_memory import ChatMemoryStore
 
 
@@ -87,8 +96,7 @@ def test_chat_memory_endpoint_persists_scoped_memory(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     client = TestClient(server.app)
 
     response = client.post(
@@ -227,7 +235,7 @@ def test_agent_run_persistence_round_trips_project_json(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     project_dir = data_dir / "project-a"
     project_dir.mkdir(parents=True)
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    patch_storage_dirs(monkeypatch, data_dir)
 
     run = server.create_chat_agent_run(
         "project-a",
@@ -376,8 +384,7 @@ def test_chat_endpoint_persists_agent_run_and_keeps_suggestions(tmp_path, monkey
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     client = TestClient(server.app)
 
     response = client.post(
@@ -418,8 +425,7 @@ def test_chat_endpoint_executes_asset_review_agent_tool(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     client = TestClient(server.app)
 
     response = client.post(
@@ -499,8 +505,7 @@ def test_clip_state_endpoint_returns_stable_prompt_asset_and_video_ids(tmp_path,
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     client = TestClient(server.app)
 
     response = client.get("/api/projects/project-a/clips/0/state")
@@ -578,8 +583,7 @@ def test_clip_selection_persists_active_prompt_video_and_assets(tmp_path, monkey
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     client = TestClient(server.app)
 
     default_state = client.get("/api/projects/project-a/clips/0/state").json()
@@ -644,8 +648,7 @@ def test_clip_selection_accepts_structured_asset_references(tmp_path, monkeypatc
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     client = TestClient(server.app)
 
     response = client.patch(
@@ -704,8 +707,7 @@ def test_clip_selection_marks_missing_saved_ids_stale(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     client = TestClient(server.app)
 
     response = client.patch(
@@ -760,8 +762,7 @@ def test_chat_agent_mutates_active_prompt_and_asset_selection(tmp_path, monkeypa
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     client = TestClient(server.app)
 
     response = client.post(
@@ -825,8 +826,7 @@ def test_chat_agent_detaches_asset_and_marks_feedback_resolved(tmp_path, monkeyp
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     server.update_clip_selection("project-a", "clip.mp4::0", {"selected_asset_paths": [str(asset_path)]})
     client = TestClient(server.app)
 
@@ -878,9 +878,9 @@ def test_chat_agent_add_reference_frame_reuses_existing_tool_result(tmp_path, mo
             "message": f"Extracted frame at {timestamp}.",
         }
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
-    monkeypatch.setattr(server, "extract_reference_frame", fake_extract_reference_frame)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
+    monkeypatch.setattr("src.clip_chat.extract_reference_frame", fake_extract_reference_frame)
+    monkeypatch.setattr("src.reference_frames.extract_reference_frame", fake_extract_reference_frame)
     client = TestClient(server.app)
 
     response = client.post(
@@ -951,8 +951,7 @@ def test_clip_state_marks_agent_runs_stale_after_state_changes(tmp_path, monkeyp
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
 
     initial_state = server.build_clip_state("project-a", 0)
     run = server.create_chat_agent_run(
@@ -1053,8 +1052,7 @@ def test_chat_snapshot_uses_same_canonical_clip_state(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     client = TestClient(server.app)
 
     state = client.get("/api/projects/project-a/clips/0/state").json()
@@ -1086,8 +1084,7 @@ def test_clip_chat_context_includes_compact_learning_summary(tmp_path, monkeypat
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     server.append_prompt_version(
         "project-a",
         0,
@@ -1172,8 +1169,7 @@ def test_chat_learning_actions_are_planned_with_approval(tmp_path, monkeypatch):
         }),
         encoding="utf-8",
     )
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     server.append_prompt_version("project-a", 0, {"video_model_prompt": "Vir moves through the doorway."}, provider="openai")
 
     context = server.build_clip_chat_context("project-a", 0, query="save this as feedback: wardrobe continuity is missing")
@@ -1207,8 +1203,7 @@ def test_chat_learning_action_endpoint_saves_feedback_and_lesson(tmp_path, monke
         }),
         encoding="utf-8",
     )
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     server.append_prompt_version("project-a", 0, {"video_model_prompt": "Vir moves through the doorway."}, provider="openai")
     state = server.build_clip_state("project-a", 0)
     version = state["active_prompt"]["version"]
@@ -1281,13 +1276,11 @@ def test_chat_learning_eval_action_uses_validator(tmp_path, monkeypatch):
         }),
         encoding="utf-8",
     )
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
-    monkeypatch.setattr(server, "_client_for_prompt_provider", lambda provider: object())
-    monkeypatch.setattr(server, "_default_model_for_provider", lambda provider: "mock-model")
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
+    monkeypatch.setattr("src.prompt_feedback._client_for_prompt_provider", lambda provider: object())
+    monkeypatch.setattr("src.prompt_feedback._default_model_for_provider", lambda provider: "mock-model")
     monkeypatch.setattr(
-        server,
-        "run_learning_eval",
+        "src.clip_chat.run_learning_eval",
         lambda **_kwargs: {
             "passed": False,
             "score": 0.5,
@@ -1336,7 +1329,7 @@ def test_project_job_store_persists_and_cancels(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     project_dir = data_dir / "project-a"
     project_dir.mkdir(parents=True)
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    patch_storage_dirs(monkeypatch, data_dir)
 
     job = server.create_project_job(
         "project-a",
@@ -1361,7 +1354,7 @@ def test_project_events_endpoint_filters_append_only_log(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     project_dir = data_dir / "project-a"
     project_dir.mkdir(parents=True)
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    patch_storage_dirs(monkeypatch, data_dir)
     first = server.append_project_event(
         "project-a",
         "asset_attached",
@@ -1395,7 +1388,7 @@ def test_video_generation_job_records_success(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     project_dir = data_dir / "project-a"
     project_dir.mkdir(parents=True)
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    patch_storage_dirs(monkeypatch, data_dir)
 
     job = server.create_project_job(
         "project-a",
@@ -1405,8 +1398,7 @@ def test_video_generation_job_records_success(tmp_path, monkeypatch):
         payload={"clip_index": 0, "prompt_version_index": 1, "resolution": "720p", "duration": 5},
     )
     monkeypatch.setattr(
-        server,
-        "generate_clip_video",
+        "src.job_manager.generate_clip_video",
         lambda project, clip_index, prompt_version_index=None, **_kwargs: {
             "project_name": project,
             "clip_index": clip_index,
@@ -1477,8 +1469,7 @@ def test_self_evaluation_reports_next_action_for_missing_video(tmp_path, monkeyp
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     server.update_clip_selection(
         "project-a",
         "clip.mp4::0",
@@ -1557,8 +1548,7 @@ def test_video_generation_job_records_self_evaluation(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     server.update_clip_selection(
         "project-a",
         "clip.mp4::0",
@@ -1594,7 +1584,7 @@ def test_video_generation_job_records_self_evaluation(tmp_path, monkeypatch):
         (project_dir / "video_prompts.json").write_text(json.dumps(prompts_data), encoding="utf-8")
         return {"project_name": project, "clip_index": clip_index, "prompt_version_index": prompt_version_index, "video": video}
 
-    monkeypatch.setattr(server, "generate_clip_video", fake_generate_clip_video)
+    monkeypatch.setattr("src.job_manager.generate_clip_video", fake_generate_clip_video)
 
     server.execute_video_generation_job("project-a", job["id"])
 
@@ -1640,9 +1630,8 @@ def test_chat_autonomous_workflow_dispatches_backend_job(tmp_path, monkeypatch):
     async def fake_execute_workflow_job(project, job_id):
         server.append_project_job_log(project, job_id, "fake workflow dispatch")
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
-    monkeypatch.setattr(server, "execute_workflow_job", fake_execute_workflow_job)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
+    monkeypatch.setattr("src.job_manager.execute_workflow_job", fake_execute_workflow_job)
     client = TestClient(server.app)
 
     response = client.post(
@@ -1719,10 +1708,9 @@ def test_prepare_continuity_reference_prefers_previous_final_clip(tmp_path, monk
         frame_path.write_bytes(b"frame")
         return str(frame_path)
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
-    monkeypatch.setattr(server, "get_video_duration", lambda _path: 1.0)
-    monkeypatch.setattr(server, "extract_last_frame", fake_extract_last_frame)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
+    monkeypatch.setattr("src.workflows.prompt_generation.get_video_duration", lambda _path: 1.0)
+    monkeypatch.setattr("src.workflows.prompt_generation.extract_last_frame", fake_extract_last_frame)
 
     frame_path, note = server.prepare_continuity_reference_from_intent(
         "project-a",
@@ -1745,8 +1733,7 @@ def test_build_clip_media_gallery_includes_clip_assets_and_reference_frames(tmp_
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"image")
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
 
     media = server.build_clip_media_gallery({
         "clip": {"clip_url": "/assets/project-a/06_clips/_raw/clip.mp4"},
@@ -1778,8 +1765,7 @@ def test_build_clip_media_gallery_omits_analyzed_clip_context_media(tmp_path, mo
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"media")
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
 
     media = server.build_clip_media_gallery({
         "latest_version": {},
@@ -1828,8 +1814,7 @@ def test_chat_summarizes_saved_clip_context(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
 
     context = server.build_clip_chat_context("project-a", 0, query="summarize this clip")
     reply = server.fallback_chat_reply("summarize this clip", context)
@@ -1871,13 +1856,12 @@ def test_chat_summary_request_runs_clip_context_analysis_when_missing(tmp_path, 
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
     with (
         mock.patch("server.OpenAI", create=True) as openai_cls,
-        mock.patch("server.analyze_clip_context") as analyze,
+        mock.patch("src.workflows.clip_context.analyze_clip_context") as analyze,
     ):
         analyze.return_value = {
             "status": "frames_only",
@@ -1921,11 +1905,10 @@ def test_chat_summary_uses_cached_context_unless_regeneration_is_forced(tmp_path
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
-    with mock.patch("server.analyze_clip_context") as analyze:
+    with mock.patch("src.workflows.clip_context.analyze_clip_context") as analyze:
         context = server.build_clip_chat_context("project-a", 0, query="summary")
         clip_context, error = server.ensure_clip_context_for_chat("project-a", context, "openai")
 
@@ -1935,7 +1918,7 @@ def test_chat_summary_uses_cached_context_unless_regeneration_is_forced(tmp_path
 
     with (
         mock.patch("server.OpenAI", create=True),
-        mock.patch("server.analyze_clip_context") as analyze,
+        mock.patch("src.workflows.clip_context.analyze_clip_context") as analyze,
     ):
         analyze.return_value = {"status": "frames_only", "summary": "Fresh summary.", "frame_paths": []}
         context = server.build_clip_chat_context("project-a", 0, query="regenerate summary")
@@ -2005,9 +1988,9 @@ def test_extract_reference_frame_attaches_to_current_feedback(tmp_path, monkeypa
         Path(output_path).write_bytes(b"frame")
         return True
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
-    monkeypatch.setattr(server, "extract_frame_at_offset", fake_extract)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
+    monkeypatch.setattr("src.workflows.referenced_frames.extract_frame_at_offset", fake_extract)
+    monkeypatch.setattr("src.reference_frames.extract_frame_at_offset", fake_extract)
 
     result = server.extract_reference_frame(
         "project-a",
@@ -2095,9 +2078,9 @@ def test_clip_chat_extracts_reference_frame_and_returns_media(tmp_path, monkeypa
         Path(output_path).write_bytes(b"frame")
         return True
 
-    monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
-    monkeypatch.setattr(server, "extract_frame_at_offset", fake_extract)
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
+    monkeypatch.setattr("src.workflows.referenced_frames.extract_frame_at_offset", fake_extract)
+    monkeypatch.setattr("src.reference_frames.extract_frame_at_offset", fake_extract)
     client = TestClient(server.app)
 
     response = client.post(

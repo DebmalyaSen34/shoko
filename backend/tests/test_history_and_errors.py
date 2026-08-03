@@ -4,8 +4,8 @@ import unittest
 import shutil
 import tempfile
 from pathlib import Path
-import server
-from server import save_output_to_prompts
+from tests.conftest import patch_storage_dirs_manual
+from src.job_manager import save_output_to_prompts
 
 class TestHistoryAndErrors(unittest.TestCase):
     def setUp(self):
@@ -18,16 +18,17 @@ class TestHistoryAndErrors(unittest.TestCase):
         self.prompts_json = os.path.join(self.project_dir, "video_prompts.json")
         
         self.real_project_name = "test-history-temp-project"
-        self.real_project_dir = f"data/{self.real_project_name}"
+        self.real_project_dir = os.path.join(self.temp_dir, "data", self.real_project_name)
         os.makedirs(self.real_project_dir, exist_ok=True)
-        self.real_output_json = f"{self.real_project_dir}/output.json"
-        self.real_prompts_json = f"{self.real_project_dir}/video_prompts.json"
+        self.real_output_json = os.path.join(self.real_project_dir, "output.json")
+        self.real_prompts_json = os.path.join(self.real_project_dir, "video_prompts.json")
         
-        self.original_data_dir = server.DATA_DIR
-        server.DATA_DIR = Path("data")
+        self._restore_storage = patch_storage_dirs_manual(
+            Path(self.temp_dir) / "data", Path(self.temp_dir) / "assets"
+        )
         
     def tearDown(self):
-        server.DATA_DIR = self.original_data_dir
+        self._restore_storage()
         if os.path.exists(self.real_project_dir):
             shutil.rmtree(self.real_project_dir)
 

@@ -229,7 +229,12 @@ export type LearningState = {
   project: PromptLesson[];
   clip: PromptLesson[];
   relevant: PromptLesson[];
+  feedback_count?: number;
+  open_issue_count?: number;
+  lessons?: PromptLesson[];
+  relevant_lessons?: PromptLesson[];
   eval_cases?: PromptEvalCase[];
+  latest_learning_report?: QualityReport["learning_eval"] | null;
 };
 
 export type PromptVersion = {

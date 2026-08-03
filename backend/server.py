@@ -1996,6 +1996,46 @@ def annotate_agent_run_freshness(run: dict, current_freshness: dict) -> dict:
     return annotated
 
 
+def build_learning_state_for_clip(
+    project_name: str,
+    *,
+    clip_index: int,
+    clip_key: str,
+    query: str,
+    active_version: Optional[dict],
+) -> dict:
+    learning_store = prompt_learning_store(project_name)
+    base_state = learning_store.for_clip(clip_key, query=query)
+    project_lessons = base_state.get("project") or []
+    clip_lessons = base_state.get("clip") or []
+    relevant_lessons = base_state.get("relevant") or []
+    eval_cases = prompt_eval_case_store(project_name).list_eval_cases(
+        clip_index=clip_index,
+        limit=20,
+    )
+    active_version_id = (active_version or {}).get("prompt_version_id")
+    feedback_items = [
+        item
+        for item in prompt_feedback_items_for_clip(project_name, clip_index)
+        if not active_version_id or item.get("prompt_version_id") == active_version_id
+    ]
+    open_issue_count = sum(
+        1
+        for item in feedback_items
+        if item.get("rating") == "negative" and item.get("status") == "open"
+    )
+    quality_report = (active_version or {}).get("quality_report") or {}
+    return {
+        **base_state,
+        "feedback_count": len(feedback_items),
+        "open_issue_count": open_issue_count,
+        "lessons": [*project_lessons, *clip_lessons],
+        "relevant_lessons": relevant_lessons,
+        "eval_cases": eval_cases,
+        "latest_learning_report": quality_report.get("learning_eval"),
+    }
+
+
 def build_clip_state(project_name: str, clip_index: int, query: str = "") -> dict:
     project_data = get_project_data(project_name)
     timeline = project_data.get("timeline", [])
@@ -2055,7 +2095,6 @@ def build_clip_state(project_name: str, clip_index: int, query: str = "") -> dic
     latest_video = selected_video or default_video
     clip_context = load_clip_context(project_name, clip, clip_index)
     store = memory_store(project_name)
-    learning_store = prompt_learning_store(project_name)
     feedback_items = (feedback or {}).get("feedback_items", [])
     feedback_indexes = {item.get("raw_index") for item in feedback_items}
     recent_jobs = [
@@ -2174,15 +2213,13 @@ def build_clip_state(project_name: str, clip_index: int, query: str = "") -> dic
             "clip_context_ready": bool(clip_context),
         },
         "memory_state": store.for_clip(clip_key, query=query),
-        "learning_state": learning_store.for_clip(
-            clip_key,
+        "learning_state": build_learning_state_for_clip(
+            project_name,
+            clip_index=clip_index,
+            clip_key=clip_key,
             query=query,
-        ) | {
-            "eval_cases": prompt_eval_case_store(project_name).list_eval_cases(
-                clip_index=clip_index,
-                limit=20,
-            ),
-        },
+            active_version=latest_version,
+        ),
         "agent_state": {
             "recent_runs": agent_runs,
             "pending_actions": [
@@ -2646,6 +2683,7 @@ def build_clip_chat_context(project_name: str, clip_index: int, query: str = "")
         "clip_context": clip_context,
         "assets": (clip_state.get("asset_state") or {}).get("available_assets", {}),
         "memory": clip_state.get("memory_state", {}),
+        "learning": clip_state.get("learning_state", {}),
         "agent_runs": (clip_state.get("agent_state") or {}).get("recent_runs", []),
     }
 
@@ -2665,6 +2703,8 @@ def compact_chat_context(context: dict) -> str:
         }
         for item in context.get("memory", {}).get("relevant", [])
     ]
+    learning = context.get("learning") or ((context.get("clip_state") or {}).get("learning_state") or {})
+    latest_learning_report = learning.get("latest_learning_report") or {}
     assets_by_category = {
         category: [asset.get("path") for asset in assets[:12]]
         for category, assets in (context.get("assets") or {}).items()
@@ -2697,6 +2737,24 @@ def compact_chat_context(context: dict) -> str:
             "latest_prompt_explanation": latest_version.get("explanation"),
             "clip_context": context.get("clip_context"),
             "quality_report": latest_version.get("quality_report"),
+            "learning_state": {
+                "feedback_count": learning.get("feedback_count", 0),
+                "open_issue_count": learning.get("open_issue_count", 0),
+                "lesson_count": len(learning.get("lessons") or []),
+                "relevant_lesson_count": len(learning.get("relevant_lessons") or learning.get("relevant") or []),
+                "eval_case_count": len(learning.get("eval_cases") or []),
+                "latest_learning_passed": latest_learning_report.get("passed") if latest_learning_report else None,
+                "latest_learning_failed_cases": latest_learning_report.get("failed_cases", []) if latest_learning_report else [],
+                "relevant_lessons": [
+                    {
+                        "lesson": item.get("lesson"),
+                        "category": item.get("category"),
+                        "scope": item.get("scope"),
+                        "relevance_score": item.get("relevance_score"),
+                    }
+                    for item in (learning.get("relevant_lessons") or learning.get("relevant") or [])[:6]
+                ],
+            },
             "asset_library_sample": assets_by_category,
             "project_memory": project_memory,
             "clip_memory": clip_memory,

@@ -279,6 +279,61 @@ def test_prompt_eval_case_auto_create_skips_positive_feedback(tmp_path, monkeypa
     assert not (data_dir / "project-a" / "prompt_eval_cases.json").exists()
 
 
+def test_clip_state_learning_state_summary(tmp_path, monkeypatch):
+    _data_dir, ids = _seed_project(tmp_path, monkeypatch)
+    client = TestClient(server.app)
+    server.append_prompt_version(
+        "project-a",
+        0,
+        {
+            "video_model_prompt": "A revised prompt that preserves wardrobe continuity.",
+            "quality_report": {
+                "passed": False,
+                "learning_eval": {
+                    "passed": False,
+                    "score": 0.72,
+                    "failed_cases": ["case-1"],
+                    "case_results": [],
+                    "suggestions": ["Preserve wardrobe continuity."],
+                },
+            },
+        },
+        provider="openai",
+    )
+    revised_state = server.build_clip_state("project-a", 0)
+    revised_version = revised_state["active_prompt"]["version"]
+    feedback = client.post("/api/projects/project-a/prompt-feedback", json={
+        **_feedback_payload({
+            **ids,
+            "prompt_id": revised_version["prompt_id"],
+            "prompt_version_id": revised_version["prompt_version_id"],
+        }),
+        "create_eval_case": True,
+    }).json()["item"]
+    lesson = client.post(
+        "/api/projects/project-a/prompt-lessons",
+        json={
+            "scope": "project",
+            "category": "continuity_error",
+            "lesson": "Preserve wardrobe continuity explicitly.",
+            "source_feedback_ids": [feedback["id"]],
+            "confidence": 0.86,
+            "positive_examples": [],
+            "negative_examples": [],
+        },
+    ).json()["lesson"]
+
+    state = server.build_clip_state("project-a", 0, query="wardrobe continuity")
+    learning = state["learning_state"]
+
+    assert learning["feedback_count"] == 1
+    assert learning["open_issue_count"] == 1
+    assert lesson["id"] in [item["id"] for item in learning["lessons"]]
+    assert learning["relevant_lessons"]
+    assert len(learning["eval_cases"]) == 1
+    assert learning["latest_learning_report"]["failed_cases"] == ["case-1"]
+
+
 def test_append_prompt_version_writes_history_without_output_json(tmp_path, monkeypatch):
     data_dir, _ids = _seed_project(tmp_path, monkeypatch)
     output_json = data_dir / "project-a" / "output.json"

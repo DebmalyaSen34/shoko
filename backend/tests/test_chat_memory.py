@@ -1064,6 +1064,93 @@ def test_chat_snapshot_uses_same_canonical_clip_state(tmp_path, monkeypatch):
     assert chat["context"]["prompt_ready"] is False
 
 
+def test_clip_chat_context_includes_compact_learning_summary(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    assets_dir = tmp_path / "assets"
+    project_dir = data_dir / "project-a"
+    project_dir.mkdir(parents=True)
+    (project_dir / "timeline.json").write_text(
+        json.dumps({
+            "video_timeline": [
+                {
+                    "clip": "clip.mp4",
+                    "start_tc": "00:00",
+                    "end_tc": "00:01",
+                    "start_s": 0,
+                    "end_s": 1,
+                    "duration_s": 1,
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    server.append_prompt_version(
+        "project-a",
+        0,
+        {
+            "video_model_prompt": "Vir keeps the red wardrobe while moving slowly.",
+            "quality_report": {
+                "passed": False,
+                "learning_eval": {
+                    "passed": False,
+                    "score": 0.62,
+                    "failed_cases": ["case-wardrobe"],
+                    "case_results": [],
+                    "suggestions": ["Preserve wardrobe continuity explicitly."],
+                },
+            },
+        },
+        provider="openai",
+    )
+    state = server.build_clip_state("project-a", 0)
+    prompt = state["active_prompt"]
+    version = prompt["version"]
+
+    client = TestClient(server.app)
+    feedback = client.post(
+        "/api/projects/project-a/prompt-feedback",
+        json={
+            "clip_index": 0,
+            "clip_key": state["clip_key"],
+            "prompt_id": prompt["prompt_id"],
+            "prompt_version_id": version["prompt_version_id"],
+            "rating": "negative",
+            "categories": ["continuity_error"],
+            "severity": 4,
+            "comment": "Wardrobe continuity was not explicit.",
+            "correction": "Preserve the visible red wardrobe.",
+            "remember_note": "Always name wardrobe continuity when users flag continuity.",
+            "create_eval_case": True,
+        },
+    ).json()["item"]
+    server.prompt_learning_store("project-a").add_lesson(
+        "Preserve wardrobe continuity explicitly when continuity feedback is present.",
+        scope="project",
+        category="continuity_error",
+        source_feedback_ids=[feedback["id"]],
+    )
+
+    context = server.build_clip_chat_context("project-a", 0, query="wardrobe continuity")
+    learning = context["learning"]
+
+    assert learning["feedback_count"] == 1
+    assert learning["open_issue_count"] == 1
+    assert learning["relevant_lessons"]
+    assert len(learning["eval_cases"]) == 1
+    assert learning["latest_learning_report"]["passed"] is False
+
+    compact = json.loads(server.compact_chat_context(context))
+
+    assert compact["learning_state"]["open_issue_count"] == 1
+    assert compact["learning_state"]["relevant_lesson_count"] == 1
+    assert compact["learning_state"]["eval_case_count"] == 1
+    assert compact["learning_state"]["latest_learning_passed"] is False
+    assert compact["learning_state"]["latest_learning_failed_cases"] == ["case-wardrobe"]
+
+
 def test_project_job_store_persists_and_cancels(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     project_dir = data_dir / "project-a"

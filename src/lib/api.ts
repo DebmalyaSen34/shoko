@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ClipState, PromptEvalCase, PromptFeedbackItem, PromptFeedbackPayload, PromptLesson, PromptLessonPayload, PromptLessonSuggestion, PromptRevisionPayload, PromptRevisionResponse, Provider } from "../types";
+import type { ClipAgentRun, ClipChatAction, ClipState, PromptEvalCase, PromptFeedbackItem, PromptFeedbackPayload, PromptLesson, PromptLessonPayload, PromptLessonSuggestion, PromptRevisionPayload, PromptRevisionResponse, Provider } from "../types";
 
 export let API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
@@ -175,5 +175,22 @@ export async function suggestPromptLesson(projectName: string, feedbackId: strin
     project_name: string;
     feedback_id: string;
     suggestion: PromptLessonSuggestion;
+  }>;
+}
+
+export async function executeClipChatAction(projectName: string, clipIndex: number, action: ClipChatAction, provider: Provider, message = "") {
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectName)}/chat/clip/action`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clip_index: clipIndex, action, provider, message }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<{
+    project_name: string;
+    clip_index: number;
+    clip_key: string;
+    action_result: Record<string, unknown>;
+    agent_run: ClipAgentRun;
+    clip_state: ClipState;
   }>;
 }

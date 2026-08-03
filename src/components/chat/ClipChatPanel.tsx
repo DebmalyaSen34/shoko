@@ -24,7 +24,7 @@ import type {
   Provider,
 } from "../../types";
 import { getVersions } from "../../lib/format";
-import { apiUrl, createPromptFeedback, createPromptLesson, revisePromptFromFeedback, staticUrl, suggestPromptLesson } from "../../lib/api";
+import { apiUrl, createPromptFeedback, createPromptLesson, executeClipChatAction, revisePromptFromFeedback, staticUrl, suggestPromptLesson } from "../../lib/api";
 import { Icon } from "../Icon";
 import { WorkflowRunningLabel } from "../WorkflowRunningLabel";
 import { PromptInputBox } from "../ui/ai-prompt-box";
@@ -369,6 +369,8 @@ export function ClipChatPanel({
   function handleAction(action: ClipChatAction) {
     if (action.type === "execute_workflow") {
       void runWorkflowFromChat(action.feedback_index);
+    } else if (isPromptLearningAction(action.type)) {
+      void executePromptLearningAction(action);
     } else if (action.type === "generate_video" || (action.type === "prepare_video" && action.label.toLowerCase().includes("generate"))) {
       void generateVideoFromChat();
     } else if (action.type === "prepare_video") {
@@ -382,6 +384,37 @@ export function ClipChatPanel({
       void detachAsset(action.asset_path, action.asset_id);
     } else if (action.type === "attach_asset" || action.type === "mark_feedback_resolved" || action.type === "add_reference_frame") {
       void sendMessage(action.prompt || action.reason || action.label);
+    }
+  }
+
+  function isPromptLearningAction(type: ClipChatAction["type"]) {
+    return [
+      "save_prompt_feedback",
+      "suggest_prompt_lesson",
+      "approve_prompt_lesson",
+      "revise_prompt_from_feedback",
+      "run_prompt_learning_eval",
+    ].includes(type);
+  }
+
+  async function executePromptLearningAction(action: ClipChatAction) {
+    setMessages((current) => [...current, localToolMessage(`Running ${action.label}.`)]);
+    try {
+      const result = await executeClipChatAction(
+        projectData.project_name,
+        clipIndex,
+        action,
+        provider,
+        action.prompt || action.reason || action.label,
+      );
+      const actionResult = result.action_result || {};
+      const message = typeof actionResult.message === "string" ? actionResult.message : `${action.label} completed.`;
+      setClipState(result.clip_state);
+      setMessages((current) => [...current, localToolMessage(message)]);
+      onPromptFeedbackSaved?.(result.clip_state);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `${action.label} failed.`;
+      setMessages((current) => [...current, localToolMessage(message)]);
     }
   }
 
@@ -430,6 +463,7 @@ export function ClipChatPanel({
     if (action.type === "attach_asset" || action.type === "detach_asset") return "file";
     if (action.type === "mark_feedback_resolved") return "check";
     if (action.type === "add_reference_frame") return "image";
+    if (isPromptLearningAction(action.type)) return "magic";
     return "chat";
   }
 

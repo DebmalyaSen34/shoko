@@ -1,4 +1,5 @@
 import importlib
+import inspect
 import json
 import os
 import sys
@@ -1149,6 +1150,186 @@ def test_clip_chat_context_includes_compact_learning_summary(tmp_path, monkeypat
     assert compact["learning_state"]["eval_case_count"] == 1
     assert compact["learning_state"]["latest_learning_passed"] is False
     assert compact["learning_state"]["latest_learning_failed_cases"] == ["case-wardrobe"]
+
+
+def test_chat_learning_actions_are_planned_with_approval(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    assets_dir = tmp_path / "assets"
+    project_dir = data_dir / "project-a"
+    project_dir.mkdir(parents=True)
+    (project_dir / "timeline.json").write_text(
+        json.dumps({
+            "video_timeline": [
+                {
+                    "clip": "clip.mp4",
+                    "start_tc": "00:00",
+                    "end_tc": "00:01",
+                    "start_s": 0,
+                    "end_s": 1,
+                    "duration_s": 1,
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    server.append_prompt_version("project-a", 0, {"video_model_prompt": "Vir moves through the doorway."}, provider="openai")
+
+    context = server.build_clip_chat_context("project-a", 0, query="save this as feedback: wardrobe continuity is missing")
+    actions = server.infer_action_suggestions("save this as feedback: wardrobe continuity is missing", context)
+    run = server.plan_chat_agent_run("save this as feedback: wardrobe continuity is missing", context, actions, actions)
+
+    assert actions[0]["type"] == "save_prompt_feedback"
+    assert run["approval_required"] is True
+    assert run["status"] == "awaiting_approval"
+    assert run["plan_steps"][0]["tool"] == "save_prompt_feedback"
+    assert run["plan_steps"][0]["status"] == "awaiting_approval"
+
+
+def test_chat_learning_action_endpoint_saves_feedback_and_lesson(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    assets_dir = tmp_path / "assets"
+    project_dir = data_dir / "project-a"
+    project_dir.mkdir(parents=True)
+    (project_dir / "timeline.json").write_text(
+        json.dumps({
+            "video_timeline": [
+                {
+                    "clip": "clip.mp4",
+                    "start_tc": "00:00",
+                    "end_tc": "00:01",
+                    "start_s": 0,
+                    "end_s": 1,
+                    "duration_s": 1,
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    server.append_prompt_version("project-a", 0, {"video_model_prompt": "Vir moves through the doorway."}, provider="openai")
+    state = server.build_clip_state("project-a", 0)
+    version = state["active_prompt"]["version"]
+    client = TestClient(server.app)
+
+    feedback_response = client.post(
+        "/api/projects/project-a/chat/clip/action",
+        json={
+            "clip_index": 0,
+            "provider": "openai",
+            "message": "The prompt misses wardrobe continuity.",
+            "action": {
+                "type": "save_prompt_feedback",
+                "label": "Save Prompt Feedback",
+                "prompt": "The prompt misses wardrobe continuity.",
+                "rating": "negative",
+                "categories": ["continuity_error"],
+                "prompt_version_id": version["prompt_version_id"],
+            },
+        },
+    )
+
+    assert feedback_response.status_code == 200
+    feedback_body = feedback_response.json()
+    feedback_id = feedback_body["action_result"]["feedback_id"]
+    assert feedback_body["action_result"]["status"] == "ok"
+    assert feedback_body["clip_state"]["learning_state"]["feedback_count"] == 1
+
+    lesson_response = client.post(
+        "/api/projects/project-a/chat/clip/action",
+        json={
+            "clip_index": 0,
+            "provider": "openai",
+            "message": "Remember this: preserve wardrobe continuity explicitly.",
+            "action": {
+                "type": "approve_prompt_lesson",
+                "label": "Approve Lesson",
+                "lesson": "Preserve wardrobe continuity explicitly.",
+                "source_feedback_ids": [feedback_id],
+                "category": "continuity_error",
+            },
+        },
+    )
+
+    assert lesson_response.status_code == 200
+    lesson_body = lesson_response.json()
+    assert lesson_body["action_result"]["status"] == "ok"
+    assert lesson_body["action_result"]["lesson"]["source_feedback_ids"] == [feedback_id]
+    events = server.load_project_events("project-a", event_type="prompt_lesson_created")
+    assert events[0]["actor"] == "chat_agent"
+
+
+def test_chat_learning_eval_action_uses_validator(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    assets_dir = tmp_path / "assets"
+    project_dir = data_dir / "project-a"
+    project_dir.mkdir(parents=True)
+    (project_dir / "timeline.json").write_text(
+        json.dumps({
+            "video_timeline": [
+                {
+                    "clip": "clip.mp4",
+                    "start_tc": "00:00",
+                    "end_tc": "00:01",
+                    "start_s": 0,
+                    "end_s": 1,
+                    "duration_s": 1,
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "DATA_DIR", data_dir)
+    monkeypatch.setattr(server, "ASSETS_DIR", assets_dir)
+    monkeypatch.setattr(server, "_client_for_prompt_provider", lambda provider: object())
+    monkeypatch.setattr(server, "_default_model_for_provider", lambda provider: "mock-model")
+    monkeypatch.setattr(
+        server,
+        "run_learning_eval",
+        lambda **_kwargs: {
+            "passed": False,
+            "score": 0.5,
+            "failed_cases": ["case-1"],
+            "case_results": [],
+            "suggestions": ["Preserve continuity."],
+        },
+    )
+    server.append_prompt_version("project-a", 0, {"video_model_prompt": "Vir moves through the doorway."}, provider="openai")
+    server.prompt_eval_case_store("project-a").add_eval_case(
+        name="Continuity",
+        source_feedback_id=None,
+        clip_index=0,
+        clip_key="clip.mp4::0",
+        input={"feedback_items": [], "clip_summary": "", "selected_assets": []},
+        expected_behavior=["Preserve continuity."],
+        failure_categories=["continuity_error"],
+    )
+    client = TestClient(server.app)
+
+    response = client.post(
+        "/api/projects/project-a/chat/clip/action",
+        json={
+            "clip_index": 0,
+            "provider": "openai",
+            "message": "Run learning eval.",
+            "action": {"type": "run_prompt_learning_eval", "label": "Run Learning Eval"},
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()["action_result"]
+    assert result["status"] == "ok"
+    assert result["learning_eval"]["failed_cases"] == ["case-1"]
+
+
+def test_chat_system_prompt_mentions_learning_without_permanent_claims():
+    source = inspect.getsource(server.generate_chat_reply_with_tools)
+
+    assert "learning_state.relevant_lessons" in source
+    assert "Do not claim the model has permanently learned" in source
+    assert "the app will remember and apply approved lessons" in source
 
 
 def test_project_job_store_persists_and_cancels(tmp_path, monkeypatch):

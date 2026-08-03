@@ -434,9 +434,19 @@ export type ClipChatAction = {
     | "attach_asset"
     | "detach_asset"
     | "mark_feedback_resolved"
-    | "add_reference_frame";
+    | "add_reference_frame"
+    | "save_prompt_feedback"
+    | "suggest_prompt_lesson"
+    | "approve_prompt_lesson"
+    | "revise_prompt_from_feedback"
+    | "run_prompt_learning_eval";
   label: string;
   feedback_index?: number;
+  feedback_id?: string;
+  feedback_ids?: string[];
+  lesson_id?: string;
+  lesson_ids?: string[];
+  source_feedback_ids?: string[];
   autonomous?: boolean;
   continuity_reference?: "previous_clip_last_frame" | string;
   prompt?: string;
@@ -447,6 +457,16 @@ export type ClipChatAction = {
   role?: string;
   reason?: string;
   confidence?: number;
+  rating?: PromptFeedbackRating;
+  categories?: PromptFeedbackCategory[];
+  severity?: number;
+  comment?: string;
+  correction?: string;
+  remember_note?: string;
+  create_eval_case?: boolean;
+  lesson?: string;
+  scope?: PromptLessonScope;
+  category?: PromptFeedbackCategory | string;
   timestamp?: string;
   attach_to?: string;
 };
@@ -702,6 +722,7 @@ export type ClipChatSnapshot = {
     };
     clip: TimelineClip;
     clip_state: ClipState;
+    learning_state?: LearningState;
     adjacent_clips: {
       previous?: TimelineClip | null;
       next?: TimelineClip | null;

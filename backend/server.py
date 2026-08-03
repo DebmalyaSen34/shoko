@@ -512,6 +512,13 @@ class ClipChatRequest(BaseModel):
     provider: Literal["openai", "gemini"] = "openai"
 
 
+class ClipChatActionRequest(BaseModel):
+    clip_index: int
+    action: dict
+    message: str = ""
+    provider: Literal["openai", "gemini"] = "openai"
+
+
 class ClipMemoryRequest(BaseModel):
     clip_index: int
     text: str
@@ -901,6 +908,58 @@ def _validate_prompt_feedback_payload(payload: dict) -> dict:
         "create_eval_case": bool(payload.get("create_eval_case", False)),
         "status": status or ("approved" if rating == "positive" else "open"),
     }
+
+
+def create_prompt_feedback_item(project_name: str, payload: dict, *, actor: str = "user") -> dict:
+    payload = _validate_prompt_feedback_payload(payload)
+    created_at = now_iso()
+    item = {
+        "id": str(uuid.uuid4()),
+        "project_name": project_name,
+        **payload,
+        "created_at": created_at,
+        "updated_at": created_at,
+    }
+    data = load_prompt_feedback(project_name)
+    data.setdefault("items", []).append(item)
+    save_prompt_feedback(project_name, data)
+    eval_case = None
+    if item.get("create_eval_case") and item.get("rating") == "negative":
+        try:
+            eval_case = create_eval_case_from_feedback_item(project_name, item)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    append_project_event(
+        project_name,
+        "prompt_feedback_created",
+        actor=actor,
+        clip_index=item.get("clip_index"),
+        clip_key=item.get("clip_key"),
+        entity="prompt_feedback",
+        entity_id=item.get("id"),
+        payload={
+            "prompt_id": item.get("prompt_id"),
+            "prompt_version_id": item.get("prompt_version_id"),
+            "rating": item.get("rating"),
+            "status": item.get("status"),
+            "categories": item.get("categories", []),
+        },
+    )
+    if eval_case:
+        append_project_event(
+            project_name,
+            "prompt_eval_case_created",
+            actor=actor,
+            clip_index=item.get("clip_index"),
+            clip_key=item.get("clip_key"),
+            entity="prompt_eval_case",
+            entity_id=eval_case.get("id"),
+            payload={
+                "source_feedback_id": item.get("id"),
+                "failure_categories": eval_case.get("failure_categories", []),
+            },
+        )
+    return {"item": item, "eval_case": eval_case}
 
 
 def prompt_feedback_items_for_clip(project_name: str, clip_index: Optional[int] = None) -> list[dict]:
@@ -2962,9 +3021,161 @@ def update_chat_agent_run(project_name: str, run_id: str, updates: dict) -> dict
     return updated_run
 
 
+LEARNING_CHAT_ACTION_TYPES = {
+    "save_prompt_feedback",
+    "suggest_prompt_lesson",
+    "approve_prompt_lesson",
+    "revise_prompt_from_feedback",
+    "run_prompt_learning_eval",
+}
+
+
+def _infer_prompt_feedback_category(text: str) -> str:
+    lower = text.lower()
+    if any(word in lower for word in ["wardrobe", "character", "clothes", "costume"]):
+        return "wrong_character_or_wardrobe"
+    if any(word in lower for word in ["continuity", "same", "preserve", "consistent"]):
+        return "continuity_error"
+    if any(word in lower for word in ["camera", "pan", "zoom", "dolly", "shot"]):
+        return "bad_camera_instruction"
+    if any(word in lower for word in ["audio", "dialogue", "voice", "music"]):
+        return "bad_audio_or_dialogue"
+    if any(word in lower for word in ["invent", "unsupported", "assumption", "prop", "extra"]):
+        return "unsupported_assumption"
+    if any(word in lower for word in ["vague", "unclear", "specific"]):
+        return "too_vague"
+    if any(word in lower for word in ["verbose", "long"]):
+        return "too_verbose"
+    if any(word in lower for word in ["format", "json", "schema"]):
+        return "format_error"
+    if any(word in lower for word in ["provider", "seedance", "segmind", "incompatible"]):
+        return "provider_incompatible"
+    return "other"
+
+
+def _active_prompt_ids_for_context(context: dict) -> tuple[Optional[str], Optional[str]]:
+    active_prompt = (context.get("clip_state") or {}).get("active_prompt") or {}
+    version = active_prompt.get("version") or {}
+    prompt_id = active_prompt.get("prompt_id") or version.get("prompt_id")
+    version_id = active_prompt.get("version_id") or version.get("prompt_version_id")
+    return prompt_id, version_id
+
+
+def _active_prompt_feedback_items(context: dict, *, negative_only: bool = False) -> list[dict]:
+    learning = context.get("learning") or ((context.get("clip_state") or {}).get("learning_state") or {})
+    active_prompt_id, active_version_id = _active_prompt_ids_for_context(context)
+    items = []
+    for item in ((context.get("clip_state") or {}).get("learning_feedback_items") or []):
+        if active_version_id and item.get("prompt_version_id") != active_version_id:
+            continue
+        if active_prompt_id and item.get("prompt_id") != active_prompt_id:
+            continue
+        if negative_only and item.get("rating") != "negative":
+            continue
+        items.append(item)
+    if items:
+        return items
+    clip_index = context.get("clip_index")
+    project_name = (context.get("project") or {}).get("name")
+    if not project_name or clip_index is None:
+        return []
+    items = prompt_feedback_items_for_clip(project_name, int(clip_index))
+    return [
+        item for item in items
+        if (not active_version_id or item.get("prompt_version_id") == active_version_id)
+        and (not negative_only or item.get("rating") == "negative")
+    ][: max(1, int(learning.get("feedback_count") or len(items) or 1))]
+
+
+def _latest_feedback_for_learning_action(project_name: str, context: dict, action: dict) -> Optional[dict]:
+    feedback_id = action.get("feedback_id")
+    if feedback_id:
+        return find_prompt_feedback_item(project_name, str(feedback_id))
+    items = _active_prompt_feedback_items(context, negative_only=True) or _active_prompt_feedback_items(context)
+    open_items = [item for item in items if item.get("status") == "open"]
+    return (open_items or items or [None])[-1]
+
+
+def infer_learning_action_suggestions(text: str, context: dict) -> list[dict]:
+    lower = text.lower()
+    actions: list[dict] = []
+    prompt_id, prompt_version_id = _active_prompt_ids_for_context(context)
+    has_prompt = bool(prompt_version_id and ((context.get("latest_version") or {}).get("video_model_prompt")))
+    category = _infer_prompt_feedback_category(text)
+
+    if has_prompt and any(phrase in lower for phrase in [
+        "save this as feedback",
+        "save prompt feedback",
+        "mark prompt as bad",
+        "this prompt is bad",
+        "prompt is wrong",
+        "add feedback",
+    ]):
+        actions.append({
+            "type": "save_prompt_feedback",
+            "label": "Save Prompt Feedback",
+            "prompt": text.strip(),
+            "rating": "negative",
+            "categories": [category],
+            "severity": 4 if any(word in lower for word in ["bad", "wrong", "failed", "ignored"]) else 3,
+            "create_eval_case": any(phrase in lower for phrase in ["eval", "regression", "test case"]),
+            "prompt_id": prompt_id,
+            "prompt_version_id": prompt_version_id,
+        })
+
+    if any(phrase in lower for phrase in ["suggest a lesson", "suggest lesson", "turn this into a lesson"]):
+        actions.append({
+            "type": "suggest_prompt_lesson",
+            "label": "Suggest Lesson",
+            "prompt": text.strip(),
+        })
+
+    if any(phrase in lower for phrase in ["approve lesson", "save as lesson", "remember this lesson", "app should remember", "remember this"]):
+        actions.append({
+            "type": "approve_prompt_lesson",
+            "label": "Approve Lesson",
+            "prompt": text.strip(),
+            "lesson": text.strip(),
+            "category": category,
+            "scope": "project",
+        })
+
+    if has_prompt and any(phrase in lower for phrase in [
+        "revise prompt",
+        "revise the prompt",
+        "improve prompt",
+        "fix the prompt",
+        "rewrite prompt",
+    ]):
+        actions.append({
+            "type": "revise_prompt_from_feedback",
+            "label": "Revise Prompt",
+            "prompt": text.strip(),
+            "prompt_version_id": prompt_version_id,
+        })
+
+    if has_prompt and any(phrase in lower for phrase in [
+        "run learning eval",
+        "learning eval",
+        "evaluate learning",
+        "check learned",
+        "check prompt against lessons",
+    ]):
+        actions.append({
+            "type": "run_prompt_learning_eval",
+            "label": "Run Learning Eval",
+            "prompt": text.strip(),
+            "prompt_version_id": prompt_version_id,
+        })
+
+    return actions
+
+
 def infer_action_suggestions(text: str, context: dict) -> list[dict]:
     lower = text.lower()
     suggestions = _state_mutation_actions_from_message(text, context)
+    for action in infer_learning_action_suggestions(text, context):
+        add_unique_action(suggestions, action)
     feedback_items = (context.get("feedback") or {}).get("feedback_items", [])
     latest_version = context.get("latest_version") or {}
     if any(word in lower for word in ["workflow", "run", "execute"]) and feedback_items:
@@ -3045,6 +3256,16 @@ def _action_goal(action: dict) -> str:
         return "Run the feedback workflow for this clip."
     if action.get("type") == "generate_video":
         return "Generate a video from the latest prompt."
+    if action.get("type") == "save_prompt_feedback":
+        return "Save prompt feedback for the active prompt version."
+    if action.get("type") == "suggest_prompt_lesson":
+        return "Suggest an editable lesson from prompt feedback."
+    if action.get("type") == "approve_prompt_lesson":
+        return "Save an approved prompt lesson for future prompts."
+    if action.get("type") == "revise_prompt_from_feedback":
+        return "Create a revised prompt version using feedback and lessons."
+    if action.get("type") == "run_prompt_learning_eval":
+        return "Evaluate the active prompt against lessons and eval cases."
     if action.get("type") == "prepare_video":
         return "Prepare the latest prompt and references for video generation."
     if action.get("type") == "send_message":
@@ -3054,7 +3275,7 @@ def _action_goal(action: dict) -> str:
 
 def _step_for_action(index: int, action: dict, autonomy_level: str) -> dict:
     action_type = action.get("type") or "send_message"
-    risky = action_type in {"execute_workflow", "generate_video"}
+    risky = action_type in {"execute_workflow", "generate_video", *LEARNING_CHAT_ACTION_TYPES}
     if risky and autonomy_level == "approval_required":
         status = "awaiting_approval"
     elif risky and autonomy_level == "full_autopilot":
@@ -3099,6 +3320,9 @@ def plan_chat_agent_run(message: str, context: dict, explicit_actions: list[dict
     elif any(action.get("type") == "generate_video" for action in explicit_actions):
         intent = "video_generation"
         confidence = 0.86
+    elif any(action.get("type") in LEARNING_CHAT_ACTION_TYPES for action in explicit_actions):
+        intent = "prompt_learning"
+        confidence = 0.84
     elif wants_clip_summary_or_analysis(message):
         intent = "clip_analysis"
         confidence = 0.82
@@ -3123,10 +3347,11 @@ def plan_chat_agent_run(message: str, context: dict, explicit_actions: list[dict
 
     risky_actions = [
         action for action in explicit_actions
-        if action.get("type") in {"execute_workflow", "generate_video"}
+        if action.get("type") in {"execute_workflow", "generate_video", *LEARNING_CHAT_ACTION_TYPES}
     ]
     has_generate_video_action = any(action.get("type") == "generate_video" for action in risky_actions)
-    direct_execution = not has_generate_video_action and not _asks_for_permission_or_advice(message) and (
+    has_learning_action = any(action.get("type") in LEARNING_CHAT_ACTION_TYPES for action in risky_actions)
+    direct_execution = not has_generate_video_action and not has_learning_action and not _asks_for_permission_or_advice(message) and (
         wants_autonomous_execution(message)
         or any(has_word(lower, word) for word in ["render", "seedance"])
     )
@@ -3150,7 +3375,7 @@ def plan_chat_agent_run(message: str, context: dict, explicit_actions: list[dict
     required_actions = [dict(action) for action in explicit_actions]
     action_plan = required_actions or [
         action for action in available_actions
-        if action.get("type") in {"execute_workflow", "generate_video", "prepare_video"}
+        if action.get("type") in {"execute_workflow", "generate_video", "prepare_video", *LEARNING_CHAT_ACTION_TYPES}
     ][:2]
 
     steps = []
@@ -3236,7 +3461,7 @@ def apply_agent_run_action_policy(actions: list[dict], agent_run: dict) -> list[
     gated_actions = []
     for action in actions:
         next_action = dict(action)
-        if next_action.get("type") in {"execute_workflow", "generate_video"}:
+        if next_action.get("type") in {"execute_workflow", "generate_video", *LEARNING_CHAT_ACTION_TYPES}:
             next_action.pop("autonomous", None)
         gated_actions.append(next_action)
     return gated_actions
@@ -3246,7 +3471,7 @@ def strip_risky_autonomous_actions(actions: list[dict]) -> list[dict]:
     stripped = []
     for action in actions:
         next_action = dict(action)
-        if next_action.get("type") in {"execute_workflow", "generate_video"}:
+        if next_action.get("type") in {"execute_workflow", "generate_video", *LEARNING_CHAT_ACTION_TYPES}:
             next_action.pop("autonomous", None)
         stripped.append(next_action)
     return stripped
@@ -3771,7 +3996,239 @@ def add_reference_frame_for_agent(project_name: str, context: dict, action: dict
         return {"status": "error", "tool": "add_reference_frame", "message": exc.detail}
 
 
-def execute_safe_agent_run_tools(project_name: str, run: dict, context: dict, message: str, saved_memories: list[dict]) -> dict:
+def save_prompt_feedback_for_agent(project_name: str, context: dict, action: dict, message: str) -> dict:
+    prompt_id, prompt_version_id = _active_prompt_ids_for_context(context)
+    if not prompt_id or not prompt_version_id:
+        return {"status": "missing", "tool": "save_prompt_feedback", "message": "No active prompt version is available for feedback."}
+    comment = str(action.get("comment") or action.get("prompt") or message or "").strip()
+    correction = str(action.get("correction") or "").strip()
+    remember_note = str(action.get("remember_note") or "").strip()
+    rating = action.get("rating") if action.get("rating") in PROMPT_FEEDBACK_RATINGS else "negative"
+    payload = {
+        "clip_index": int(context.get("clip_index") or 0),
+        "clip_key": context.get("clip_key") or "",
+        "prompt_id": prompt_id,
+        "prompt_version_id": prompt_version_id,
+        "rating": rating,
+        "categories": action.get("categories") or [_infer_prompt_feedback_category(comment or correction or remember_note)],
+        "severity": int(action.get("severity") or (4 if rating == "negative" else 1)),
+        "comment": comment,
+        "correction": correction,
+        "remember_note": remember_note,
+        "create_eval_case": bool(action.get("create_eval_case")),
+        "status": action.get("status"),
+    }
+    try:
+        created = create_prompt_feedback_item(project_name, payload, actor="chat_agent")
+    except HTTPException as exc:
+        return {"status": "error", "tool": "save_prompt_feedback", "message": exc.detail}
+    item = created["item"]
+    return {
+        "status": "ok",
+        "tool": "save_prompt_feedback",
+        "message": "Saved prompt feedback for the active prompt version.",
+        "feedback_id": item.get("id"),
+        "eval_case_id": (created.get("eval_case") or {}).get("id"),
+        "mutates_state": True,
+    }
+
+
+def suggest_prompt_lesson_for_agent(project_name: str, context: dict, action: dict, provider: str) -> dict:
+    item = _latest_feedback_for_learning_action(project_name, context, action)
+    if not item:
+        return {"status": "missing", "tool": "suggest_prompt_lesson", "message": "No prompt feedback is available to turn into a lesson."}
+    try:
+        suggestion = _suggest_prompt_lesson(project_name, item, provider)  # type: ignore[arg-type]
+    except HTTPException as exc:
+        return {"status": "error", "tool": "suggest_prompt_lesson", "message": exc.detail}
+    except Exception as exc:
+        return {"status": "error", "tool": "suggest_prompt_lesson", "message": str(exc)}
+    return {
+        "status": "ok",
+        "tool": "suggest_prompt_lesson",
+        "message": "Suggested an editable prompt lesson. Review it before saving.",
+        "feedback_id": item.get("id"),
+        "suggestion": suggestion,
+    }
+
+
+def _lesson_text_from_action(action: dict, message: str) -> str:
+    for key in ("lesson", "remember_note", "prompt"):
+        text = str(action.get(key) or "").strip()
+        if text:
+            return re.sub(
+                r"^(approve lesson|save as lesson|remember this lesson|remember this|app should remember)[:\s-]*",
+                "",
+                text,
+                flags=re.IGNORECASE,
+            ).strip() or text
+    return message.strip()
+
+
+def approve_prompt_lesson_for_agent(project_name: str, context: dict, action: dict, message: str) -> dict:
+    lesson_text = _lesson_text_from_action(action, message)
+    if not lesson_text:
+        return {"status": "missing", "tool": "approve_prompt_lesson", "message": "No lesson text was provided."}
+    source_feedback_ids = [
+        str(value)
+        for value in (action.get("source_feedback_ids") or [])
+        if value
+    ]
+    if not source_feedback_ids:
+        feedback_item = _latest_feedback_for_learning_action(project_name, context, action)
+        if feedback_item:
+            source_feedback_ids = [feedback_item.get("id")]
+    scope = action.get("scope") if action.get("scope") in {"project", "clip"} else "project"
+    try:
+        lesson = prompt_learning_store(project_name).add_lesson(
+            lesson_text,
+            scope=scope,
+            clip_key=context.get("clip_key") if scope == "clip" else None,
+            category=str(action.get("category") or _infer_prompt_feedback_category(lesson_text)),
+            source_feedback_ids=source_feedback_ids,
+            confidence=float(action.get("confidence") or 0.84),
+        )
+    except ValueError as exc:
+        return {"status": "error", "tool": "approve_prompt_lesson", "message": str(exc)}
+    append_project_event(
+        project_name,
+        "prompt_lesson_created",
+        actor="chat_agent",
+        clip_index=context.get("clip_index"),
+        clip_key=lesson.get("clip_key"),
+        entity="prompt_lesson",
+        entity_id=lesson.get("id"),
+        payload={
+            "scope": lesson.get("scope"),
+            "category": lesson.get("category"),
+            "source_feedback_ids": lesson.get("source_feedback_ids", []),
+        },
+    )
+    return {
+        "status": "ok",
+        "tool": "approve_prompt_lesson",
+        "message": "Lesson saved. The app will remember and apply this approved lesson in future prompt work.",
+        "lesson_id": lesson.get("id"),
+        "lesson": lesson,
+        "mutates_state": True,
+    }
+
+
+def revise_prompt_from_feedback_for_agent(project_name: str, context: dict, action: dict, provider: str) -> dict:
+    _prompt_id, prompt_version_id = _active_prompt_ids_for_context(context)
+    prompt_version_id = str(action.get("prompt_version_id") or prompt_version_id or "")
+    if not prompt_version_id:
+        return {"status": "missing", "tool": "revise_prompt_from_feedback", "message": "No active prompt version is available to revise."}
+    feedback_ids = [
+        str(value)
+        for value in (action.get("feedback_ids") or [])
+        if value
+    ]
+    if not feedback_ids:
+        feedback_ids = [
+            item.get("id")
+            for item in _active_prompt_feedback_items(context, negative_only=True)
+            if item.get("status") == "open" and item.get("id")
+        ]
+    lesson_ids = [
+        str(value)
+        for value in (action.get("lesson_ids") or [])
+        if value
+    ]
+    if not lesson_ids:
+        learning = context.get("learning") or ((context.get("clip_state") or {}).get("learning_state") or {})
+        lesson_ids = [
+            lesson.get("id")
+            for lesson in (learning.get("relevant_lessons") or learning.get("relevant") or [])
+            if lesson.get("id")
+        ][:6]
+    try:
+        response = revise_prompt_from_feedback(
+            project_name,
+            prompt_version_id,
+            PromptRevisionRequest(
+                clip_index=int(context.get("clip_index") or 0),
+                feedback_ids=feedback_ids,
+                lesson_ids=lesson_ids,
+                provider=provider,  # type: ignore[arg-type]
+            ),
+        )
+    except HTTPException as exc:
+        return {"status": "error", "tool": "revise_prompt_from_feedback", "message": exc.detail}
+    except Exception as exc:
+        return {"status": "error", "tool": "revise_prompt_from_feedback", "message": str(exc)}
+    append_project_event(
+        project_name,
+        "prompt_version_revised_from_feedback",
+        actor="chat_agent",
+        clip_index=context.get("clip_index"),
+        clip_key=context.get("clip_key"),
+        entity="prompt_version",
+        entity_id=(response.get("prompt_version") or {}).get("prompt_version_id"),
+        payload={
+            "source_prompt_version_id": prompt_version_id,
+            "feedback_ids": feedback_ids,
+            "lesson_ids": lesson_ids,
+        },
+    )
+    return {
+        "status": "ok",
+        "tool": "revise_prompt_from_feedback",
+        "message": "New prompt version created from feedback and approved lessons.",
+        "prompt_version": response.get("prompt_version"),
+        "quality_report": response.get("quality_report"),
+        "learning_report": response.get("learning_report"),
+        "mutates_state": True,
+    }
+
+
+def run_prompt_learning_eval_for_agent(project_name: str, context: dict, action: dict, provider: str) -> dict:
+    latest_version = context.get("latest_version") or {}
+    prompt_text = str(latest_version.get("video_model_prompt") or "").strip()
+    if not prompt_text:
+        return {"status": "missing", "tool": "run_prompt_learning_eval", "message": "No active prompt text is available to evaluate."}
+    learning = context.get("learning") or ((context.get("clip_state") or {}).get("learning_state") or {})
+    eval_cases = learning.get("eval_cases") or []
+    lessons = learning.get("relevant_lessons") or learning.get("relevant") or learning.get("lessons") or []
+    try:
+        client = _client_for_prompt_provider(provider)  # type: ignore[arg-type]
+        model = _default_model_for_provider(provider)
+        report = run_learning_eval(
+            provider=provider,
+            client=client,
+            model=model,
+            prompt=prompt_text,
+            eval_cases=eval_cases,
+            lessons=lessons,
+        )
+    except HTTPException as exc:
+        return {"status": "error", "tool": "run_prompt_learning_eval", "message": exc.detail}
+    except Exception as exc:
+        return {"status": "error", "tool": "run_prompt_learning_eval", "message": str(exc)}
+    return {
+        "status": "ok",
+        "tool": "run_prompt_learning_eval",
+        "message": "Ran learning eval for the active prompt.",
+        "learning_eval": report,
+    }
+
+
+def execute_learning_action_for_agent(project_name: str, context: dict, action: dict, message: str, provider: str) -> dict:
+    action_type = action.get("type")
+    if action_type == "save_prompt_feedback":
+        return save_prompt_feedback_for_agent(project_name, context, action, message)
+    if action_type == "suggest_prompt_lesson":
+        return suggest_prompt_lesson_for_agent(project_name, context, action, provider)
+    if action_type == "approve_prompt_lesson":
+        return approve_prompt_lesson_for_agent(project_name, context, action, message)
+    if action_type == "revise_prompt_from_feedback":
+        return revise_prompt_from_feedback_for_agent(project_name, context, action, provider)
+    if action_type == "run_prompt_learning_eval":
+        return run_prompt_learning_eval_for_agent(project_name, context, action, provider)
+    return {"status": "error", "tool": action_type or "learning_action", "message": "Unsupported learning action."}
+
+
+def execute_safe_agent_run_tools(project_name: str, run: dict, context: dict, message: str, saved_memories: list[dict], provider: str = "openai") -> dict:
     tool_results = list(run.get("tool_results") or [])
     errors = list(run.get("errors") or [])
     changed = False
@@ -3801,6 +4258,8 @@ def execute_safe_agent_run_tools(project_name: str, run: dict, context: dict, me
                 result = mark_feedback_resolved_for_agent(project_name, context, step.get("action") or {})
             elif tool == "add_reference_frame":
                 result = add_reference_frame_for_agent(project_name, context, step.get("action") or {}, tool_results)
+            elif tool in LEARNING_CHAT_ACTION_TYPES:
+                result = execute_learning_action_for_agent(project_name, context, step.get("action") or {"type": tool}, message, provider)
             elif tool in {"chat_reply", "send_message"}:
                 result = {"status": "ok", "tool": tool, "message": "Chat reply completed."}
             else:
@@ -3988,6 +4447,9 @@ async def generate_chat_reply_with_tools(provider: str, message: str, context: d
         "You are Loka15 Studio's clip assistant inside a video feedback and generation tool. "
         "Answer as a practical editor-facing collaborator. Use only the supplied context. "
         "You can discuss timeline, clip details, feedback, assets, prior prompt generations, quality reports, memory, workflow execution, and video-generation handoff. "
+        "When discussing or revising prompts, consider learning_state.relevant_lessons, unresolved prompt feedback, eval cases, and the latest learning eval report from the supplied context. "
+        "Do not claim the model has permanently learned; say the app will remember and apply approved lessons. "
+        "If the user wants to save feedback, suggest or approve a lesson, revise a prompt from feedback, or run a learning eval, recommend the matching chat action instead of claiming it already happened. "
         "You can call extract_reference_frame when the user clearly asks to extract/grab/capture/save/add/attach a frame or still at an explicit timestamp as a reference for this clip. "
         "Format replies as normal Markdown. When showing prompt text, write it as plain paragraphs or bullets under a short heading; do not use ```text, ```markdown, or any Markdown code fence for prompts. "
         "Never wrap the whole reply in a Markdown code fence or indent prompt text as a code block. "
@@ -5749,59 +6211,14 @@ def revise_prompt_from_feedback(project_name: str, prompt_version_id: str, reque
 @app.post("/api/projects/{project_name}/prompt-feedback")
 def create_prompt_feedback(project_name: str, request: PromptFeedbackCreateRequest):
     project_name = safe_project_name(project_name)
-    payload = _validate_prompt_feedback_payload(request.model_dump())
-    created_at = now_iso()
-    item = {
-        "id": str(uuid.uuid4()),
-        "project_name": project_name,
-        **payload,
-        "created_at": created_at,
-        "updated_at": created_at,
-    }
-    data = load_prompt_feedback(project_name)
-    data.setdefault("items", []).append(item)
-    save_prompt_feedback(project_name, data)
-    eval_case = None
-    if item.get("create_eval_case") and item.get("rating") == "negative":
-        try:
-            eval_case = create_eval_case_from_feedback_item(project_name, item)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-    append_project_event(
-        project_name,
-        "prompt_feedback_created",
-        actor="user",
-        clip_index=item.get("clip_index"),
-        clip_key=item.get("clip_key"),
-        entity="prompt_feedback",
-        entity_id=item.get("id"),
-        payload={
-            "prompt_id": item.get("prompt_id"),
-            "prompt_version_id": item.get("prompt_version_id"),
-            "rating": item.get("rating"),
-            "status": item.get("status"),
-            "categories": item.get("categories", []),
-        },
-    )
+    created = create_prompt_feedback_item(project_name, request.model_dump(), actor="user")
+    item = created["item"]
     response = {
         "item": item,
         "clip_state": build_clip_state(project_name, item["clip_index"]),
     }
-    if eval_case:
-        append_project_event(
-            project_name,
-            "prompt_eval_case_created",
-            actor="user",
-            clip_index=item.get("clip_index"),
-            clip_key=item.get("clip_key"),
-            entity="prompt_eval_case",
-            entity_id=eval_case.get("id"),
-            payload={
-                "source_feedback_id": item.get("id"),
-                "failure_categories": eval_case.get("failure_categories", []),
-            },
-        )
-        response["eval_case"] = eval_case
+    if created.get("eval_case"):
+        response["eval_case"] = created["eval_case"]
     return response
 
 
@@ -5988,6 +6405,7 @@ def get_clip_chat(project_name: str, clip_index: int):
             "project": context["project"],
             "clip": context["clip"],
             "clip_state": context["clip_state"],
+            "learning_state": context.get("learning", {}),
             "adjacent_clips": context["adjacent_clips"],
             "feedback_count": len((context.get("feedback") or {}).get("feedback_items", [])),
             "selected_asset_count": len((context.get("latest_version") or {}).get("selected_assets", []) or []),
@@ -6050,7 +6468,7 @@ async def post_clip_chat(project_name: str, request: ClipChatRequest, background
     agent_run["available_actions"] = actions
     agent_run["suggested_actions"] = actions
     agent_run["tool_results"] = tool_results
-    agent_run = execute_safe_agent_run_tools(project_name, agent_run, context, message_text, saved_memories)
+    agent_run = execute_safe_agent_run_tools(project_name, agent_run, context, message_text, saved_memories, provider=request.provider)
     mutation_results = [
         result for result in agent_run.get("tool_results", [])
         if isinstance(result, dict) and result.get("mutates_state")
@@ -6114,6 +6532,47 @@ async def post_clip_chat(project_name: str, request: ClipChatRequest, background
         "suggested_actions": actions,
         "agent_run": agent_run,
         "clip_state": context["clip_state"],
+    }
+
+
+@app.post("/api/projects/{project_name}/chat/clip/action")
+def execute_clip_chat_action(project_name: str, request: ClipChatActionRequest):
+    project_name = safe_project_name(project_name)
+    action = dict(request.action or {})
+    action_type = action.get("type")
+    if action_type not in LEARNING_CHAT_ACTION_TYPES:
+        raise HTTPException(status_code=400, detail="This endpoint only executes prompt learning chat actions.")
+    context = build_clip_chat_context(project_name, request.clip_index, query=request.message or action.get("prompt") or action.get("label") or "")
+    run = plan_chat_agent_run(
+        request.message or action.get("label") or action_type,
+        context,
+        [action],
+        [action],
+    )
+    for step in run.get("plan_steps", []):
+        if step.get("tool") == action_type:
+            step["status"] = "pending"
+            step["requires_approval"] = False
+    run["approval_required"] = False
+    run["autonomy_level"] = "approved_action"
+    run["status"] = "planned"
+    run = execute_safe_agent_run_tools(
+        project_name,
+        run,
+        context,
+        request.message or action.get("prompt") or action.get("label") or "",
+        [],
+        provider=request.provider,
+    )
+    run = create_chat_agent_run(project_name, run)
+    updated_context = build_clip_chat_context(project_name, request.clip_index, query=request.message or action.get("prompt") or "")
+    return {
+        "project_name": project_name,
+        "clip_index": request.clip_index,
+        "clip_key": updated_context["clip_key"],
+        "action_result": (run.get("tool_results") or [{}])[-1],
+        "agent_run": run,
+        "clip_state": updated_context["clip_state"],
     }
 
 

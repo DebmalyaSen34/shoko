@@ -44,3 +44,6 @@ AGENTS.md
 backend/segmind_seedance_llm.txt
 backend/segmind_seedance_migration.md
 backend/timeline.json
+
+backend/.smoke_storage/
+backend/scripts/smoke_baseline.json

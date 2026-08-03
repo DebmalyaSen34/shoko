@@ -277,3 +277,148 @@ def test_prompt_eval_case_auto_create_skips_positive_feedback(tmp_path, monkeypa
     assert response.status_code == 200
     assert "eval_case" not in response.json()
     assert not (data_dir / "project-a" / "prompt_eval_cases.json").exists()
+
+
+def test_append_prompt_version_writes_history_without_output_json(tmp_path, monkeypatch):
+    data_dir, _ids = _seed_project(tmp_path, monkeypatch)
+    output_json = data_dir / "project-a" / "output.json"
+    if output_json.exists():
+        output_json.unlink()
+
+    appended = server.append_prompt_version(
+        "project-a",
+        0,
+        {
+            "video_model_prompt": "A revised prompt that keeps wardrobe continuity and slow hand motion.",
+            "selected_assets": ["char.png"],
+            "explanation": "Revised from feedback.",
+            "quality_report": {"passed": True},
+            "revision_feedback_ids": ["feedback-1"],
+        },
+        provider="openai",
+    )
+
+    assert appended["provider"] == "openai"
+    assert not output_json.exists()
+    prompts = server.read_json_file(data_dir / "project-a" / "video_prompts.json", [])
+    versions = server.prompt_versions_for_record(prompts[0])
+    assert len(versions) == 2
+    assert versions[-1]["revision_feedback_ids"] == ["feedback-1"]
+
+
+def test_revise_prompt_from_feedback_creates_new_prompt_version(tmp_path, monkeypatch):
+    _data_dir, ids = _seed_project(tmp_path, monkeypatch)
+    client = TestClient(server.app)
+    feedback = client.post("/api/projects/project-a/prompt-feedback", json={**_feedback_payload(ids), "create_eval_case": True}).json()["item"]
+    lesson = client.post(
+        "/api/projects/project-a/prompt-lessons",
+        json={
+            "scope": "project",
+            "category": "continuity_error",
+            "lesson": "Preserve wardrobe continuity explicitly.",
+            "source_feedback_ids": [feedback["id"]],
+            "confidence": 0.86,
+            "positive_examples": [],
+            "negative_examples": [],
+        },
+    ).json()["lesson"]
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+    monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
+    monkeypatch.setattr(
+        server,
+        "generate_structured",
+        lambda **_kwargs: {
+            "video_model_prompt": "A revised detailed prompt preserving wardrobe continuity, original clip reference images, and slow deliberate hand movement. " * 12,
+            "explanation": "Applied feedback and lessons.",
+        },
+    )
+    monkeypatch.setattr(
+        server,
+        "run_quality_check",
+        lambda **_kwargs: {"passed": True, "suggestions": [], "feedback_adherence": "ok", "clothing_consistency": "ok"},
+    )
+    monkeypatch.setattr(
+        server,
+        "run_learning_eval",
+        lambda **_kwargs: {"passed": True, "score": 1, "failed_cases": [], "case_results": [], "suggestions": []},
+    )
+
+    response = client.post(
+        f"/api/projects/project-a/prompts/{ids['prompt_version_id']}/revise-from-feedback",
+        json={
+            "clip_index": 0,
+            "feedback_ids": [feedback["id"]],
+            "lesson_ids": [lesson["id"]],
+            "provider": "openai",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["quality_report"]["passed"] is True
+    assert body["learning_report"]["passed"] is True
+    prompt_version = body["prompt_version"]
+    assert prompt_version["revision_source_prompt_version_id"] == ids["prompt_version_id"]
+    assert prompt_version["revision_feedback_ids"] == [feedback["id"]]
+    assert prompt_version["revision_lesson_ids"] == [lesson["id"]]
+    assert prompt_version["applied_prompt_lessons"][0]["id"] == lesson["id"]
+    assert len(body["clip_state"]["active_prompt"]["versions"]) == 2
+
+
+def test_revise_prompt_rejects_wrong_clip_feedback_and_lesson(tmp_path, monkeypatch):
+    _data_dir, ids = _seed_project(tmp_path, monkeypatch)
+    client = TestClient(server.app)
+    feedback = client.post("/api/projects/project-a/prompt-feedback", json=_feedback_payload(ids)).json()["item"]
+    wrong_lesson = server.prompt_learning_store("project-a").add_lesson(
+        "Other clip only.",
+        scope="clip",
+        clip_key="clip999.mp4::9",
+        category="continuity_error",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    response = client.post(
+        f"/api/projects/project-a/prompts/{ids['prompt_version_id']}/revise-from-feedback",
+        json={
+            "clip_index": 0,
+            "feedback_ids": ["missing-feedback"],
+            "lesson_ids": [],
+            "provider": "openai",
+        },
+    )
+    assert response.status_code == 400
+
+    response = client.post(
+        f"/api/projects/project-a/prompts/{ids['prompt_version_id']}/revise-from-feedback",
+        json={
+            "clip_index": 0,
+            "feedback_ids": [feedback["id"]],
+            "lesson_ids": [wrong_lesson["id"]],
+            "provider": "openai",
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_revise_prompt_requires_provider_key(tmp_path, monkeypatch):
+    _data_dir, ids = _seed_project(tmp_path, monkeypatch)
+    client = TestClient(server.app)
+    feedback = client.post("/api/projects/project-a/prompt-feedback", json=_feedback_payload(ids)).json()["item"]
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    response = client.post(
+        f"/api/projects/project-a/prompts/{ids['prompt_version_id']}/revise-from-feedback",
+        json={
+            "clip_index": 0,
+            "feedback_ids": [feedback["id"]],
+            "lesson_ids": [],
+            "provider": "openai",
+        },
+    )
+
+    assert response.status_code == 400

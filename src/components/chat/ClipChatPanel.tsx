@@ -24,7 +24,7 @@ import type {
   Provider,
 } from "../../types";
 import { getVersions } from "../../lib/format";
-import { apiUrl, createPromptFeedback, createPromptLesson, staticUrl, suggestPromptLesson } from "../../lib/api";
+import { apiUrl, createPromptFeedback, createPromptLesson, revisePromptFromFeedback, staticUrl, suggestPromptLesson } from "../../lib/api";
 import { Icon } from "../Icon";
 import { WorkflowRunningLabel } from "../WorkflowRunningLabel";
 import { PromptInputBox } from "../ui/ai-prompt-box";
@@ -733,9 +733,11 @@ function PromptFeedbackPanel({
   const [submitting, setSubmitting] = useState(false);
   const [suggestingLesson, setSuggestingLesson] = useState(false);
   const [savingLesson, setSavingLesson] = useState(false);
+  const [revisingPrompt, setRevisingPrompt] = useState(false);
   const [error, setError] = useState("");
   const [savedMessage, setSavedMessage] = useState("");
   const [savedFeedback, setSavedFeedback] = useState<PromptFeedbackItem | null>(null);
+  const [savedLessonIds, setSavedLessonIds] = useState<string[]>([]);
   const [lessonText, setLessonText] = useState("");
   const [lessonCategory, setLessonCategory] = useState<PromptFeedbackCategory>("other");
   const [lessonScope, setLessonScope] = useState<PromptLessonScope>("project");
@@ -746,6 +748,7 @@ function PromptFeedbackPanel({
   const canWorkWithLesson = Boolean(
     savedFeedback && (savedFeedback.comment || savedFeedback.correction || savedFeedback.remember_note || lessonText),
   );
+  const canRevisePrompt = savedFeedback?.rating === "negative";
 
   useEffect(() => {
     setRating("negative");
@@ -758,12 +761,14 @@ function PromptFeedbackPanel({
     setError("");
     setSavedMessage("");
     setSavedFeedback(null);
+    setSavedLessonIds([]);
     setLessonText("");
     setLessonCategory("other");
     setLessonScope("project");
     setLessonConfidence(0.8);
     setLessonReasoning("");
     setLessonMessage("");
+    setRevisingPrompt(false);
   }, [target.prompt_version_id]);
 
   function toggleCategory(category: PromptFeedbackCategory) {
@@ -859,11 +864,36 @@ function PromptFeedbackPanel({
         negative_examples: [savedFeedback.comment, savedFeedback.correction].filter(Boolean),
       });
       if (result.clip_state) onSaved(result.clip_state);
+      setSavedLessonIds((current) => current.includes(result.lesson.id) ? current : [...current, result.lesson.id]);
       setLessonMessage("Lesson saved for future prompts.");
     } catch (lessonError) {
       setError(lessonError instanceof Error ? lessonError.message : "Failed to save lesson.");
     } finally {
       setSavingLesson(false);
+    }
+  }
+
+  async function revisePrompt() {
+    if (!savedFeedback) {
+      setError("Save prompt feedback before revising the prompt.");
+      return;
+    }
+    setError("");
+    setSavedMessage("");
+    setRevisingPrompt(true);
+    try {
+      const result = await revisePromptFromFeedback(projectName, target.prompt_version_id, {
+        clip_index: target.clip_index,
+        feedback_ids: [savedFeedback.id],
+        lesson_ids: savedLessonIds,
+        provider,
+      });
+      onSaved(result.clip_state);
+      setSavedMessage("New prompt version created.");
+    } catch (revisionError) {
+      setError(revisionError instanceof Error ? revisionError.message : "Failed to revise prompt.");
+    } finally {
+      setRevisingPrompt(false);
     }
   }
 
@@ -949,6 +979,20 @@ function PromptFeedbackPanel({
         </label>
 
         {savedMessage && <div className="prompt-feedback-success"><Icon name="check" /> {savedMessage}</div>}
+
+        {canRevisePrompt && (
+          <section className="prompt-lesson-box" aria-label="Prompt revision">
+            <div className="prompt-lesson-header">
+              <div>
+                <span>Improve</span>
+                <strong>Create a revised prompt version</strong>
+              </div>
+              <button className="premium-btn" type="button" disabled={revisingPrompt} onClick={() => void revisePrompt()}>
+                <Icon name="magic" /> {revisingPrompt ? "Revising..." : "Revise Prompt"}
+              </button>
+            </div>
+          </section>
+        )}
 
         {canWorkWithLesson && (
           <section className="prompt-lesson-box" aria-label="Prompt lesson">

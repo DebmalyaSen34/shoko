@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ClipState, PromptEvalCase, PromptFeedbackItem, PromptFeedbackPayload, PromptLesson, PromptLessonPayload, PromptLessonSuggestion, Provider } from "../types";
+import type { ClipState, PromptEvalCase, PromptFeedbackItem, PromptFeedbackPayload, PromptLesson, PromptLessonPayload, PromptLessonSuggestion, PromptRevisionPayload, PromptRevisionResponse, Provider } from "../types";
 
 export let API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
@@ -132,6 +132,16 @@ export async function updatePromptEvalCase(projectName: string, caseId: string, 
   });
   if (!response.ok) throw new Error(await response.text());
   return response.json() as Promise<{ eval_case: PromptEvalCase; clip_state: ClipState }>;
+}
+
+export async function revisePromptFromFeedback(projectName: string, promptVersionId: string, payload: PromptRevisionPayload) {
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectName)}/prompts/${encodeURIComponent(promptVersionId)}/revise-from-feedback`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<PromptRevisionResponse>;
 }
 
 export async function createPromptLesson(projectName: string, payload: PromptLessonPayload) {

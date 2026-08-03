@@ -211,6 +211,20 @@ export type PromptEvalCase = {
   updated_at?: string;
 };
 
+export type PromptRevisionPayload = {
+  clip_index: number;
+  feedback_ids: string[];
+  lesson_ids: string[];
+  provider: Provider;
+};
+
+export type PromptRevisionResponse = {
+  prompt_version: PromptVersion;
+  quality_report: QualityReport;
+  learning_report: QualityReport["learning_eval"];
+  clip_state: ClipState;
+};
+
 export type LearningState = {
   project: PromptLesson[];
   clip: PromptLesson[];

@@ -38,6 +38,8 @@ from src.workflows.clip_context import analyze_clip_context, clip_context_dir
 from src.workflows.referenced_frames import extract_frame_at_offset
 from src.generator.media import _frame_offsets_for_duration
 from src.generator.client import _default_model_for_provider, generate_structured
+from src.generator.validator import merge_learning_eval_report, run_learning_eval, run_quality_check
+from src.schemas import PromptResult
 from src.clustering import find_matching_clip_occurrence
 from src.utils import parse_timestamp_to_seconds
 from src.logging_utils import log_event
@@ -607,6 +609,13 @@ class PromptEvalCasePatchRequest(BaseModel):
     enabled: Optional[bool] = None
 
 
+class PromptRevisionRequest(BaseModel):
+    clip_index: int
+    feedback_ids: list[str] = Field(default_factory=list)
+    lesson_ids: list[str] = Field(default_factory=list)
+    provider: Literal["openai", "gemini"] = "openai"
+
+
 class PromptLessonSuggestRequest(BaseModel):
     provider: Literal["openai", "gemini"] = "openai"
 
@@ -999,6 +1008,61 @@ def create_eval_case_from_feedback_item(project_name: str, feedback_item: dict) 
         selected_assets=context.get("selected_assets", []),
         feedback_items=context.get("feedback_items", []),
     )
+
+
+def _client_for_prompt_provider(provider: Literal["openai", "gemini"]):
+    if provider == "openai":
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise HTTPException(status_code=400, detail="OPENAI_API_KEY is not configured.")
+        from openai import OpenAI
+
+        return OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise HTTPException(status_code=400, detail="GEMINI_API_KEY is not configured.")
+    from google import genai
+
+    return genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+
+
+def _feedback_revision_text(feedback_items: list[dict]) -> str:
+    return "\n".join(
+        (
+            f"- rating={item.get('rating')} severity={item.get('severity')} "
+            f"categories={item.get('categories') or []}\n"
+            f"  comment: {item.get('comment') or ''}\n"
+            f"  correction: {item.get('correction') or ''}\n"
+            f"  remember: {item.get('remember_note') or ''}"
+        )
+        for item in feedback_items
+    )
+
+
+def _lesson_revision_text(lessons: list[dict]) -> str:
+    return "\n".join(
+        f"- [{lesson.get('category')}] {lesson.get('lesson')}"
+        for lesson in lessons
+        if lesson.get("lesson")
+    )
+
+
+def _eval_case_revision_text(eval_cases: list[dict]) -> str:
+    return "\n".join(
+        f"- {case.get('name')}: {'; '.join(case.get('expected_behavior') or [])}"
+        for case in eval_cases
+        if case.get("enabled", True)
+    )
+
+
+def _compact_applied_eval_cases(eval_cases: list[dict]) -> list[dict]:
+    return [
+        {
+            "id": case.get("id"),
+            "name": case.get("name"),
+            "failure_categories": case.get("failure_categories", []),
+            "expected_behavior": case.get("expected_behavior", []),
+        }
+        for case in eval_cases
+    ]
 
 
 def _suggest_prompt_lesson(project_name: str, feedback_item: dict, provider: Literal["openai", "gemini"]) -> dict:
@@ -4238,77 +4302,185 @@ def select_master_audio_segments(project_name: str, segments: list[dict], total_
         item.pop("_score", None)
     return selected
 
+PROMPT_VERSION_HANDOFF_FIELDS = [
+    "video_provider",
+    "segmind_model",
+    "segmind_payload_status",
+    "segmind_payload",
+    "segmind_prompt",
+    "segmind_first_frame_url",
+    "segmind_reference_images",
+    "segmind_reference_videos",
+    "segmind_reference_audios",
+    "segmind_payload_error",
+    "audio_reference_path",
+    "trimmed_audio_path",
+    "audio_trim_start_s",
+    "audio_trim_end_s",
+    "audio_trim_duration_s",
+    "audio_trim_source",
+    "audio_trim_error",
+    "audio_transcript",
+    "dialogue_text",
+    "dialogue_language",
+    "dialogue_extraction_reasoning",
+    "audio_used",
+    "audio_path",
+    "audio_url",
+    "referenced_frames",
+    "referenced_frame_paths",
+    "referenced_frame_labels",
+    "is_dialogue_active",
+    "generate_audio",
+    "ratio",
+    "duration",
+    "matched_clip",
+    "clip_occurrence",
+    "clip_start_tc",
+    "clip_end_tc",
+    "clip_start_s",
+    "clip_end_s",
+    "clip_duration_s",
+    "clip_context_path",
+    "clip_segment_path",
+    "clip_context_summary",
+    "clip_context_status",
+    "applied_prompt_lessons",
+    "applied_prompt_eval_cases",
+    "revision_source_prompt_version_id",
+    "revision_feedback_ids",
+    "revision_lesson_ids",
+]
+
+
+def copy_prompt_handoff_fields(target: dict, source: dict) -> None:
+    for field in PROMPT_VERSION_HANDOFF_FIELDS:
+        if field in source:
+            target[field] = source.get(field)
+
+
+def prompt_history_entry(item: dict, entry_provider: str) -> dict:
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "provider": entry_provider,
+        "video_model_prompt": item.get("video_model_prompt"),
+        "selected_assets": item.get("selected_assets", []),
+        "explanation": item.get("explanation"),
+        "quality_report": item.get("quality_report"),
+        "initial_frame_image_path": item.get("initial_frame_image_path"),
+        "initial_frame_prompt": item.get("initial_frame_prompt"),
+        "clip_frame_paths": item.get("clip_frame_paths", []),
+    }
+    copy_prompt_handoff_fields(entry, item)
+    return entry
+
+
+def _same_prompt_clip(prompt_record: dict, matched_clip: str, clip_occurrence: Optional[int]) -> bool:
+    clip_used = prompt_record.get("clip_used")
+    same_clip = (
+        clip_used == matched_clip
+        or (clip_used and matched_clip and os.path.basename(clip_used) == os.path.basename(matched_clip))
+    )
+    existing_occurrence = prompt_record.get("clip_occurrence")
+    same_occurrence = (
+        clip_occurrence is None
+        or existing_occurrence is None
+        or existing_occurrence == clip_occurrence
+    )
+    return bool(same_clip and same_occurrence)
+
+
+def append_prompt_version_to_records(
+    prompts_data: list[dict],
+    gen_item: dict,
+    provider: str = "unknown",
+) -> dict:
+    matched_clip = gen_item.get("matched_clip") or gen_item.get("clip_used")
+    if not matched_clip:
+        raise ValueError("matched_clip or clip_used is required to append a prompt version")
+    clip_occurrence = gen_item.get("clip_occurrence")
+
+    for prompt_record in prompts_data:
+        if not _same_prompt_clip(prompt_record, matched_clip, clip_occurrence):
+            continue
+        prompt_record["latest_error"] = None
+        history = prompt_record.get("history", [])
+        if not isinstance(history, list):
+            history = []
+        if len(history) == 0 and prompt_record.get("video_model_prompt"):
+            first_entry = prompt_history_entry(prompt_record, prompt_record.get("provider", "unknown"))
+            first_entry["timestamp"] = prompt_record.get("created_at", first_entry["timestamp"])
+            history.append(first_entry)
+        new_entry = prompt_history_entry(gen_item, provider)
+        history.append(new_entry)
+        prompt_record["history"] = history
+        prompt_record["video_model_prompt"] = gen_item.get("video_model_prompt")
+        prompt_record["selected_assets"] = gen_item.get("selected_assets", [])
+        prompt_record["explanation"] = gen_item.get("explanation")
+        prompt_record["status"] = "success"
+        prompt_record["quality_report"] = gen_item.get("quality_report")
+        prompt_record["initial_frame_image_path"] = gen_item.get("initial_frame_image_path")
+        prompt_record["initial_frame_prompt"] = gen_item.get("initial_frame_prompt")
+        prompt_record["clip_frame_paths"] = gen_item.get("clip_frame_paths", [])
+        prompt_record["referenced_frames"] = gen_item.get("referenced_frames", [])
+        prompt_record["referenced_frame_paths"] = gen_item.get("referenced_frame_paths", [])
+        prompt_record["referenced_frame_labels"] = gen_item.get("referenced_frame_labels", [])
+        copy_prompt_handoff_fields(prompt_record, gen_item)
+        return new_entry
+
+    new_entry = prompt_history_entry(gen_item, provider)
+    prompt_record = {
+        "clip_used": matched_clip,
+        "matched_clip": gen_item.get("matched_clip") or matched_clip,
+        "clip_occurrence": gen_item.get("clip_occurrence"),
+        "category": gen_item.get("category", "video"),
+        "generation_type": gen_item.get("prompt_format", gen_item.get("generation_type", "complex")),
+        "video_model_prompt": gen_item.get("video_model_prompt"),
+        "selected_assets": gen_item.get("selected_assets", []),
+        "status": "success",
+        "explanation": gen_item.get("explanation"),
+        "quality_report": gen_item.get("quality_report"),
+        "initial_frame_image_path": gen_item.get("initial_frame_image_path"),
+        "initial_frame_prompt": gen_item.get("initial_frame_prompt"),
+        "clip_frame_paths": gen_item.get("clip_frame_paths", []),
+        "referenced_frames": gen_item.get("referenced_frames", []),
+        "referenced_frame_paths": gen_item.get("referenced_frame_paths", []),
+        "referenced_frame_labels": gen_item.get("referenced_frame_labels", []),
+        "history": [new_entry],
+    }
+    copy_prompt_handoff_fields(prompt_record, gen_item)
+    prompts_data.append(prompt_record)
+    return new_entry
+
+
+def append_prompt_version(project_name: str, clip_index: int, new_prompt_version: dict, provider: str = "unknown") -> dict:
+    project_name = safe_project_name(project_name)
+    project_data = get_project_data(project_name)
+    timeline = project_data.get("timeline", [])
+    if clip_index < 0 or clip_index >= len(timeline):
+        raise HTTPException(status_code=404, detail="Clip index not found")
+    clip = timeline[clip_index]
+    prompts_path = project_data_dir(project_name) / "video_prompts.json"
+    prompts_data = read_json_file(prompts_path, [])
+    if not isinstance(prompts_data, list):
+        prompts_data = []
+    gen_item = {
+        **new_prompt_version,
+        "matched_clip": new_prompt_version.get("matched_clip") or new_prompt_version.get("clip_used") or clip.get("clip"),
+        "clip_used": new_prompt_version.get("clip_used") or new_prompt_version.get("matched_clip") or clip.get("clip"),
+        "clip_occurrence": new_prompt_version.get("clip_occurrence", clip_index),
+        "category": new_prompt_version.get("category", "video"),
+    }
+    appended = append_prompt_version_to_records(prompts_data, gen_item, provider)
+    write_json_file(prompts_path, prompts_data)
+    return appended
+
+
 def save_output_to_prompts(project: str, provider: str = "unknown"):
-    import datetime
     project_dir = project_data_dir(project)
     output_json = project_dir / "output.json"
     prompts_json = project_dir / "video_prompts.json"
-    handoff_fields = [
-        "video_provider",
-        "segmind_model",
-        "segmind_payload_status",
-        "segmind_payload",
-        "segmind_prompt",
-        "segmind_first_frame_url",
-        "segmind_reference_images",
-        "segmind_reference_videos",
-        "segmind_reference_audios",
-        "segmind_payload_error",
-        "audio_reference_path",
-        "trimmed_audio_path",
-        "audio_trim_start_s",
-        "audio_trim_end_s",
-        "audio_trim_duration_s",
-        "audio_trim_source",
-        "audio_trim_error",
-        "audio_transcript",
-        "dialogue_text",
-        "dialogue_language",
-        "dialogue_extraction_reasoning",
-        "audio_used",
-        "audio_path",
-        "audio_url",
-        "referenced_frames",
-        "referenced_frame_paths",
-        "referenced_frame_labels",
-        "is_dialogue_active",
-        "generate_audio",
-        "ratio",
-        "duration",
-        "matched_clip",
-        "clip_occurrence",
-        "clip_start_tc",
-        "clip_end_tc",
-        "clip_start_s",
-        "clip_end_s",
-        "clip_duration_s",
-        "clip_context_path",
-        "clip_segment_path",
-        "clip_context_summary",
-        "clip_context_status",
-        "applied_prompt_lessons",
-    ]
 
-    def copy_handoff_fields(target: dict, source: dict) -> None:
-        for field in handoff_fields:
-            if field in source:
-                target[field] = source.get(field)
-
-    def prompt_history_entry(item: dict, entry_provider: str) -> dict:
-        entry = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "provider": entry_provider,
-            "video_model_prompt": item.get("video_model_prompt"),
-            "selected_assets": item.get("selected_assets", []),
-            "explanation": item.get("explanation"),
-            "quality_report": item.get("quality_report"),
-            "initial_frame_image_path": item.get("initial_frame_image_path"),
-            "initial_frame_prompt": item.get("initial_frame_prompt"),
-            "clip_frame_paths": item.get("clip_frame_paths", []),
-        }
-        copy_handoff_fields(entry, item)
-        return entry
-    
     if not output_json.exists():
         return
         
@@ -4344,53 +4516,17 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
         is_error = any(phrase in prompt_text_lower for phrase in error_phrases)
             
         found = False
-        for p_item in prompts_data:
-            clip_used = p_item.get("clip_used")
-            same_clip = (
-                clip_used == matched_clip
-                or (clip_used and matched_clip and os.path.basename(clip_used) == os.path.basename(matched_clip))
-            )
-            existing_occurrence = p_item.get("clip_occurrence")
-            generated_occurrence = gen_item.get("clip_occurrence")
-            same_occurrence = (
-                generated_occurrence is None
-                or existing_occurrence is None
-                or existing_occurrence == generated_occurrence
-            )
-            if same_clip and same_occurrence:
-                found = True
-                if is_error:
+        if is_error:
+            for p_item in prompts_data:
+                if _same_prompt_clip(p_item, matched_clip, gen_item.get("clip_occurrence")):
                     p_item["latest_error"] = prompt_text
                     updated = True
-                else:
-                    p_item["latest_error"] = None
-                    history = p_item.get("history", [])
-                    if not isinstance(history, list):
-                        history = []
-                        
-                    if len(history) == 0 and p_item.get("video_model_prompt"):
-                        first_entry = prompt_history_entry(p_item, p_item.get("provider", "unknown"))
-                        first_entry["timestamp"] = p_item.get("created_at", first_entry["timestamp"])
-                        history.append(first_entry)
-                        
-                    new_entry = prompt_history_entry(gen_item, provider)
-                    history.append(new_entry)
-                    p_item["history"] = history
-                    
-                    p_item["video_model_prompt"] = gen_item.get("video_model_prompt")
-                    p_item["selected_assets"] = gen_item.get("selected_assets", [])
-                    p_item["explanation"] = gen_item.get("explanation")
-                    p_item["status"] = "success"
-                    p_item["quality_report"] = gen_item.get("quality_report")
-                    p_item["initial_frame_image_path"] = gen_item.get("initial_frame_image_path")
-                    p_item["initial_frame_prompt"] = gen_item.get("initial_frame_prompt")
-                    p_item["clip_frame_paths"] = gen_item.get("clip_frame_paths", [])
-                    p_item["referenced_frames"] = gen_item.get("referenced_frames", [])
-                    p_item["referenced_frame_paths"] = gen_item.get("referenced_frame_paths", [])
-                    p_item["referenced_frame_labels"] = gen_item.get("referenced_frame_labels", [])
-                    copy_handoff_fields(p_item, gen_item)
-                    updated = True
-                break
+                    found = True
+                    break
+        else:
+            append_prompt_version_to_records(prompts_data, gen_item, provider)
+            updated = True
+            found = True
         
         if not found:
             if is_error:
@@ -4406,29 +4542,6 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
                     "latest_error": prompt_text,
                     "history": []
                 })
-            else:
-                new_entry = prompt_history_entry(gen_item, provider)
-                prompt_record = {
-                    "clip_used": matched_clip,
-                    "matched_clip": gen_item.get("matched_clip"),
-                    "clip_occurrence": gen_item.get("clip_occurrence"),
-                    "category": gen_item.get("category", "video"),
-                    "generation_type": gen_item.get("prompt_format", "complex"),
-                    "video_model_prompt": gen_item.get("video_model_prompt"),
-                    "selected_assets": gen_item.get("selected_assets", []),
-                    "status": "success",
-                    "explanation": gen_item.get("explanation"),
-                    "quality_report": gen_item.get("quality_report"),
-                    "initial_frame_image_path": gen_item.get("initial_frame_image_path"),
-                    "initial_frame_prompt": gen_item.get("initial_frame_prompt"),
-                    "clip_frame_paths": gen_item.get("clip_frame_paths", []),
-                    "referenced_frames": gen_item.get("referenced_frames", []),
-                    "referenced_frame_paths": gen_item.get("referenced_frame_paths", []),
-                    "referenced_frame_labels": gen_item.get("referenced_frame_labels", []),
-                    "history": [new_entry]
-                }
-                copy_handoff_fields(prompt_record, gen_item)
-                prompts_data.append(prompt_record)
             updated = True
             
     if updated:
@@ -5387,6 +5500,191 @@ def patch_prompt_lesson(project_name: str, lesson_id: str, request: PromptLesson
     return {
         "lesson": lesson,
         "clip_state": clip_state_for_lesson_sources(project_name, lesson.get("source_feedback_ids", [])),
+    }
+
+
+@app.post("/api/projects/{project_name}/prompts/{prompt_version_id}/revise-from-feedback")
+def revise_prompt_from_feedback(project_name: str, prompt_version_id: str, request: PromptRevisionRequest):
+    project_name = safe_project_name(project_name)
+    state = build_clip_state(project_name, request.clip_index)
+    clip_key = state.get("clip_key")
+    versions = (state.get("active_prompt") or {}).get("versions") or []
+    source_version = next(
+        (version for version in versions if version.get("prompt_version_id") == prompt_version_id),
+        None,
+    )
+    if not source_version:
+        raise HTTPException(status_code=404, detail="Prompt version was not found for this clip.")
+    source_prompt = str(source_version.get("video_model_prompt") or "").strip()
+    if not source_prompt:
+        raise HTTPException(status_code=400, detail="Selected prompt version has no prompt text.")
+
+    feedback_items = [
+        item
+        for item in load_prompt_feedback(project_name).get("items", [])
+        if item.get("clip_index") == request.clip_index
+        and item.get("prompt_version_id") == prompt_version_id
+    ]
+    if request.feedback_ids:
+        requested_feedback_ids = set(request.feedback_ids)
+        selected_feedback = [item for item in feedback_items if item.get("id") in requested_feedback_ids]
+        if len(selected_feedback) != len(requested_feedback_ids):
+            raise HTTPException(status_code=400, detail="One or more feedback ids do not belong to this prompt version and clip.")
+    else:
+        selected_feedback = [
+            item
+            for item in feedback_items
+            if item.get("rating") == "negative" and item.get("status") == "open"
+        ]
+    if not selected_feedback:
+        raise HTTPException(status_code=400, detail="No matching prompt feedback was selected for revision.")
+
+    lesson_store = prompt_learning_store(project_name)
+    all_lessons = lesson_store.list_lessons(include_archived=False, limit=500)
+    if request.lesson_ids:
+        requested_lesson_ids = set(request.lesson_ids)
+        selected_lessons = [lesson for lesson in all_lessons if lesson.get("id") in requested_lesson_ids]
+        if len(selected_lessons) != len(requested_lesson_ids):
+            raise HTTPException(status_code=400, detail="One or more lesson ids were not found.")
+        for lesson in selected_lessons:
+            if lesson.get("scope") == "clip" and lesson.get("clip_key") != clip_key:
+                raise HTTPException(status_code=400, detail="One or more lesson ids belong to another clip.")
+    else:
+        query = " ".join(
+            " ".join(str(item.get(key) or "") for key in ("comment", "correction", "remember_note"))
+            for item in selected_feedback
+        )
+        selected_lessons = [
+            candidate.item
+            for candidate in lesson_store.retrieve_lessons(
+                query=query,
+                clip_key=clip_key,
+                limit=6,
+            )
+        ]
+
+    eval_case_candidates = prompt_eval_case_store(project_name).retrieve_eval_cases(
+        query=" ".join(
+            " ".join(str(item.get(key) or "") for key in ("comment", "correction", "remember_note"))
+            for item in selected_feedback
+        ),
+        clip_key=clip_key,
+        clip_index=request.clip_index,
+        limit=6,
+    )
+    eval_cases = [candidate.item for candidate in eval_case_candidates]
+
+    client = _client_for_prompt_provider(request.provider)
+    model = _default_model_for_provider(request.provider)
+    clip = (state.get("timeline") or {}).get("clip") or {}
+    clip_context = (state.get("analysis_state") or {}).get("clip_context") or {}
+    selected_assets = source_version.get("selected_assets") or []
+    previous_quality_report = source_version.get("quality_report") or {}
+    revision_prompt = (
+        "Revise this existing AI video generation prompt using the supplied user feedback. "
+        "Create a new improved version; do not overwrite history. Keep all correct details from the original prompt, "
+        "preserve clip continuity, and change only what is necessary to satisfy feedback, lessons, and eval cases.\n\n"
+        f"PROJECT: {project_name}\n"
+        f"CLIP: {json.dumps(clip, ensure_ascii=False)}\n"
+        f"CLIP_CONTEXT: {json.dumps(clip_context, ensure_ascii=False)}\n"
+        f"SELECTED_ASSETS: {json.dumps(selected_assets, ensure_ascii=False)}\n\n"
+        f"ORIGINAL_PROMPT:\n{source_prompt}\n\n"
+        f"USER_FEEDBACK_TO_FIX:\n{_feedback_revision_text(selected_feedback)}\n\n"
+        f"APPROVED_OR_RELEVANT_LESSONS:\n{_lesson_revision_text(selected_lessons) or 'None'}\n\n"
+        f"RELEVANT_EVAL_CASE_EXPECTATIONS:\n{_eval_case_revision_text(eval_cases) or 'None'}\n\n"
+        f"PREVIOUS_QUALITY_REPORT:\n{json.dumps(previous_quality_report, ensure_ascii=False)}\n\n"
+        "Return a revised prompt and a short explanation of what changed. The revised prompt must remain English-only, "
+        "provider-compatible, concrete, and detailed."
+    )
+    try:
+        revision = generate_structured(
+            provider=request.provider,
+            client=client,
+            model=model,
+            contents=[revision_prompt],
+            schema=PromptResult,
+            system_instruction=(
+                "You are a careful AI video prompt editor. You revise existing prompts using explicit user feedback, "
+                "approved lessons, and eval case expectations while preserving correct continuity and visual details."
+            ),
+            temperature=0.15,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to revise prompt: {exc}") from exc
+
+    revised_prompt = str(revision.get("video_model_prompt") or "").strip()
+    if not revised_prompt:
+        raise HTTPException(status_code=500, detail="Prompt revision returned empty prompt text.")
+
+    quality_report = run_quality_check(
+        provider=request.provider,
+        client=client,
+        model=model,
+        prompt=revised_prompt,
+        feedback_items=[
+            {"remark": item.get("correction") or item.get("comment") or item.get("remember_note") or ""}
+            for item in selected_feedback
+        ],
+        selected_assets=selected_assets,
+        has_clip=bool(source_version.get("clip_frame_paths")),
+    )
+    learning_report = run_learning_eval(
+        provider=request.provider,
+        client=client,
+        model=model,
+        prompt=revised_prompt,
+        eval_cases=eval_cases,
+        lessons=selected_lessons,
+    )
+    quality_report = merge_learning_eval_report(quality_report, learning_report)
+
+    new_version_payload = {
+        **source_version,
+        "timestamp": now_iso(),
+        "provider": request.provider,
+        "video_model_prompt": revised_prompt,
+        "explanation": revision.get("explanation") or "Revised from prompt feedback.",
+        "quality_report": quality_report,
+        "revision_source_prompt_version_id": prompt_version_id,
+        "revision_feedback_ids": [item.get("id") for item in selected_feedback],
+        "revision_lesson_ids": [lesson.get("id") for lesson in selected_lessons],
+        "applied_prompt_lessons": [
+            {
+                "id": lesson.get("id"),
+                "scope": lesson.get("scope"),
+                "category": lesson.get("category"),
+                "lesson": lesson.get("lesson"),
+            }
+            for lesson in selected_lessons
+        ],
+        "applied_prompt_eval_cases": _compact_applied_eval_cases(eval_cases),
+    }
+    append_prompt_version(project_name, request.clip_index, new_version_payload, provider=request.provider)
+    refreshed_state = build_clip_state(project_name, request.clip_index)
+    latest_version = ((refreshed_state.get("active_prompt") or {}).get("versions") or [])[-1]
+    update_clip_selection(project_name, clip_key, {"active_prompt_version_id": latest_version.get("prompt_version_id")})
+    refreshed_state = build_clip_state(project_name, request.clip_index)
+    prompt_version = (refreshed_state.get("active_prompt") or {}).get("version") or latest_version
+    append_project_event(
+        project_name,
+        "prompt_version_revised_from_feedback",
+        actor="user",
+        clip_index=request.clip_index,
+        clip_key=clip_key,
+        entity="prompt_version",
+        entity_id=prompt_version.get("prompt_version_id"),
+        payload={
+            "source_prompt_version_id": prompt_version_id,
+            "feedback_ids": [item.get("id") for item in selected_feedback],
+            "lesson_ids": [lesson.get("id") for lesson in selected_lessons],
+            "eval_case_ids": [case.get("id") for case in eval_cases],
+        },
+    )
+    return {
+        "prompt_version": prompt_version,
+        "quality_report": quality_report,
+        "learning_report": learning_report,
+        "clip_state": refreshed_state,
     }
 
 

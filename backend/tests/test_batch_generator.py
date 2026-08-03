@@ -11,6 +11,8 @@ from src.generator import (
     generate_single_video_prompt,
     generate_video_prompts_batch,
 )
+from src.generator.orchestrator import _refine_prompt
+from src.generator.prompts import format_prompt_lessons
 from src.selector import scan_visual_reference_assets
 from config.settings import OPENAI_IMAGE_MODEL
 
@@ -221,6 +223,126 @@ class BatchGeneratorTests(unittest.TestCase):
         self.assertIn("Generate an initial frame prompt", first_call_text)
         self.assertIn("INITIAL_FRAME_PROMPT", second_call_text)
         self.assertIn("initial frame 0", second_call_text)
+
+    def test_format_prompt_lessons_caps_numbered_block_at_three(self):
+        block = format_prompt_lessons(
+            [
+                {"id": f"lesson-{index}", "lesson": f"Lesson text {index}"}
+                for index in range(4)
+            ]
+        )
+
+        self.assertIn("RELEVANT LEARNED LESSONS FROM PRIOR FEEDBACK:", block)
+        self.assertIn("1. Lesson text 0", block)
+        self.assertIn("3. Lesson text 2", block)
+        self.assertNotIn("Lesson text 3", block)
+
+    def test_batch_generation_injects_prompt_lessons_and_persists_metadata(self):
+        clusters = self.make_clusters(1)
+        client = mock.MagicMock()
+        client.models.generate_content.side_effect = [
+            self.selection_response_for_ids(range(1), ["character.png"]),
+            self.response_for_ids(range(1)),
+        ]
+        lessons = [
+            {
+                "id": "lesson-continuity",
+                "scope": "project",
+                "category": "continuity_error",
+                "lesson": "Preserve wardrobe and location explicitly when feedback mentions continuity.",
+            },
+            {
+                "id": "lesson-motion",
+                "scope": "clip",
+                "category": "too_vague",
+                "lesson": "Convert vague speed notes into concrete motion language.",
+            },
+        ]
+
+        with mock.patch(
+            "src.generator.upload.upload_file_and_wait",
+            side_effect=lambda _client, path: SimpleNamespace(name=f"uploaded-{path}"),
+        ):
+            results = generate_video_prompts_batch(
+                client=client,
+                clusters=clusters,
+                reference_assets=self.reference_assets,
+                assets_dir=self.assets_dir,
+                generate_initial_frame=False,
+                run_validator=False,
+                prompt_lessons_by_cluster={0: lessons},
+            )
+
+        final_text = "\n".join(
+            item
+            for item in client.models.generate_content.call_args_list[1].kwargs["contents"]
+            if isinstance(item, str)
+        )
+        self.assertIn("RELEVANT LEARNED LESSONS FROM PRIOR FEEDBACK:", final_text)
+        self.assertIn("Preserve wardrobe and location explicitly", final_text)
+        self.assertIn("REFERENCE_LEGEND_TO_USE", final_text)
+        self.assertLess(
+            final_text.index("RELEVANT LEARNED LESSONS FROM PRIOR FEEDBACK:"),
+            final_text.index("REFERENCE_LEGEND_TO_USE"),
+        )
+        self.assertEqual("lesson-continuity", results[0]["applied_prompt_lessons"][0]["id"])
+        self.assertEqual("project", results[0]["applied_prompt_lessons"][0]["scope"])
+
+    def test_batch_generation_without_lessons_omits_lesson_metadata(self):
+        clusters = self.make_clusters(1)
+        client = mock.MagicMock()
+        client.models.generate_content.side_effect = [
+            self.selection_response_for_ids(range(1), ["character.png"]),
+            self.response_for_ids(range(1)),
+        ]
+
+        with mock.patch(
+            "src.generator.upload.upload_file_and_wait",
+            side_effect=lambda _client, path: SimpleNamespace(name=f"uploaded-{path}"),
+        ):
+            results = generate_video_prompts_batch(
+                client=client,
+                clusters=clusters,
+                reference_assets=self.reference_assets,
+                assets_dir=self.assets_dir,
+                generate_initial_frame=False,
+                run_validator=False,
+            )
+
+        final_text = "\n".join(
+            item
+            for item in client.models.generate_content.call_args_list[1].kwargs["contents"]
+            if isinstance(item, str)
+        )
+        self.assertNotIn("RELEVANT LEARNED LESSONS FROM PRIOR FEEDBACK", final_text)
+        self.assertNotIn("applied_prompt_lessons", results[0])
+
+    def test_refine_prompt_includes_lessons_to_avoid_repeated_mistakes(self):
+        with mock.patch(
+            "src.generator.orchestrator.generate_structured",
+            return_value={"english_prompt": "refined prompt", "refinement_explanation": "ok"},
+        ) as generated:
+            refined = _refine_prompt(
+                provider="gemini",
+                client=mock.MagicMock(),
+                model="gemini-test",
+                draft_prompt="draft prompt",
+                feedback_items=[{"remark": "keep continuity"}],
+                suggestions=["Add concrete wardrobe details."],
+                lessons=[
+                    {
+                        "id": "lesson-1",
+                        "lesson": "Do not change wardrobe when continuity is requested.",
+                        "category": "continuity_error",
+                        "scope": "project",
+                    }
+                ],
+            )
+
+        self.assertEqual("refined prompt", refined)
+        refiner_text = generated.call_args.kwargs["contents"][0]
+        self.assertIn("KNOWN PRIOR MISTAKES TO AVOID:", refiner_text)
+        self.assertIn("Do not change wardrobe", refiner_text)
 
     def test_batch_generation_uploads_only_assets_selected_for_the_cluster(self):
         clusters = self.make_clusters(1)

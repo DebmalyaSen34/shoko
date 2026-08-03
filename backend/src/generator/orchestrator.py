@@ -37,6 +37,8 @@ from .prompts import (
     _default_seedance_skill_text,
     _failed_batch_result,
     _cluster_prompt_context,
+    format_prompt_lessons,
+    normalize_prompt_lessons,
     _reference_asset_manifest,
     _resolve_selected_asset_paths,
     _reference_legend_for_assets,
@@ -152,16 +154,22 @@ def _refine_prompt(
     draft_prompt: str,
     feedback_items: List[Dict[str, Any]],
     suggestions: List[str],
+    lessons: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """Uses a text-only call to refine the draft prompt based on quality checker suggestions."""
     print("Draft prompt failed validation. Triggering text-only auto-refinement...")
     feedback_text = "\n".join([f"- {item.get('remark', '')}" for item in feedback_items])
     suggestions_text = "\n".join([f"- {sug}" for sug in suggestions])
+    lesson_block = format_prompt_lessons(
+        lessons,
+        heading="KNOWN PRIOR MISTAKES TO AVOID",
+    )
     
     refiner_prompt = (
         f"You are refining a drafted AI video generation prompt to correct quality issues.\n\n"
         f"CLIENT FEEDBACK:\n{feedback_text or 'None'}\n\n"
         f"QUALITY CHECKER SUGGESTIONS:\n{suggestions_text}\n\n"
+        f"{lesson_block + chr(10) + chr(10) if lesson_block else ''}"
         f"DRAFT PROMPT TO CORRECT:\n{draft_prompt}\n\n"
         f"Task:\n"
         f"Rewrite the draft prompt to address all suggestions. For example:\n"
@@ -207,6 +215,7 @@ def generate_video_prompts_batch(
     video_frames_dir: Optional[str] = None,
     run_validator: bool = True,
     generate_initial_frame: bool = True,
+    prompt_lessons_by_cluster: Optional[Dict[int, List[Dict[str, Any]]]] = None,
 ) -> List[Dict[str, Any]]:
     """Generate one prompt result per video cluster in bounded request batches."""
     if batch_size <= 0:
@@ -233,6 +242,7 @@ def generate_video_prompts_batch(
     initial_frame_image_refs = {}
     selected_assets_by_id = {}
     results_by_id = {}
+    prompt_lessons_by_cluster = prompt_lessons_by_cluster or {}
 
     try:
         for cluster_id, cluster in indexed_clusters:
@@ -465,13 +475,18 @@ def generate_video_prompts_batch(
             for cluster_id, cluster in prompt_batch:
                 prompt_batch_ids.add(cluster_id)
                 continuity_note = cluster.get("continuity_reference_note")
+                lessons = prompt_lessons_by_cluster.get(cluster_id, [])
+                lesson_block = format_prompt_lessons(lessons)
                 if generate_initial_frame:
-                    contents.append(
+                    cluster_text = (
                         f"{_cluster_prompt_context(cluster_id, cluster)}\n"
                         f"INITIAL_FRAME_PROMPT:\n{initial_frame_prompts[cluster_id]}"
                     )
                 else:
-                    contents.append(_cluster_prompt_context(cluster_id, cluster))
+                    cluster_text = _cluster_prompt_context(cluster_id, cluster)
+                if lesson_block:
+                    cluster_text = f"{cluster_text}\n\n{lesson_block}"
+                contents.append(cluster_text)
                 selected_assets = selected_assets_by_id.get(cluster_id, [])
                 contents.append(
                     "REFERENCE_LEGEND_TO_USE:\n"
@@ -547,6 +562,7 @@ def generate_video_prompts_batch(
                     if run_validator:
                         feedback_items = cluster_context.get("feedback_items", [])
                         selected_assets = selected_assets_by_id.get(cluster_id, [])
+                        lessons = prompt_lessons_by_cluster.get(cluster_id, [])
                         has_clip = len(cluster_frame_paths.get(cluster_id, [])) > 0
                         
                         eval_model = _default_model_for_provider(provider)
@@ -575,6 +591,7 @@ def generate_video_prompts_batch(
                                 draft_prompt=prompt,
                                 feedback_items=feedback_items,
                                 suggestions=quality_report.get("suggestions", []),
+                                lessons=lessons,
                             )
                             
                             print(f"Running quality checks on refined prompt (iteration {rewrite_attempts}) for cluster {cluster_id}...")
@@ -605,7 +622,7 @@ def generate_video_prompts_batch(
                         quality_warning = None
                         status = "success"
                             
-                    results_by_id[cluster_id] = {
+                    result = {
                         "cluster_id": cluster_id,
                         "initial_frame_prompt": initial_frame_prompts[cluster_id] or cluster_context.get("continuity_reference_note", ""),
                         "initial_frame_image_path": initial_frame_image_paths.get(cluster_id, ""),
@@ -625,6 +642,12 @@ def generate_video_prompts_batch(
                         "quality_warning": quality_warning,
                         "quality_report": quality_report,
                     }
+                    applied_lessons = normalize_prompt_lessons(
+                        prompt_lessons_by_cluster.get(cluster_id, [])
+                    )
+                    if applied_lessons:
+                        result["applied_prompt_lessons"] = applied_lessons
+                    results_by_id[cluster_id] = result
             except Exception as exc:
                 explanation = f"Batch generation failed: {exc}"
                 for cluster_id, _ in prompt_batch:

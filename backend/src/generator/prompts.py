@@ -1,4 +1,5 @@
 import os
+import re
 from typing import List, Dict, Any, Optional
 
 from .media import _aspect_ratio
@@ -31,6 +32,8 @@ These rules override every conflicting instruction in the skill above:
 - Return exactly one structured result for every supplied cluster_id.
 """
 
+MAX_PROMPT_LESSONS = 3
+
 
 def _default_seedance_skill_text() -> str:
     skill_path = app_resource_path("skill", "video_generation_skill.md")
@@ -53,6 +56,113 @@ def _failed_batch_result(cluster_id: int, explanation: str) -> Dict[str, Any]:
         "quality_warning": None,
         "quality_report": None,
     }
+
+
+def normalize_prompt_lessons(
+    lessons: Optional[List[Dict[str, Any]]],
+    limit: int = MAX_PROMPT_LESSONS,
+) -> List[Dict[str, Any]]:
+    normalized = []
+    seen = set()
+    for lesson in lessons or []:
+        if not isinstance(lesson, dict) or lesson.get("archived"):
+            continue
+        lesson_text = str(lesson.get("lesson") or "").strip()
+        if not lesson_text:
+            continue
+        lesson_id = str(lesson.get("id") or "").strip()
+        dedupe_key = lesson_id or lesson_text.lower()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized.append(
+            {
+                "id": lesson_id,
+                "scope": lesson.get("scope") or "project",
+                "category": lesson.get("category") or "other",
+                "lesson": lesson_text,
+            }
+        )
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
+def format_prompt_lessons(
+    lessons: Optional[List[Dict[str, Any]]],
+    *,
+    heading: str = "RELEVANT LEARNED LESSONS FROM PRIOR FEEDBACK",
+    limit: int = MAX_PROMPT_LESSONS,
+) -> str:
+    normalized = normalize_prompt_lessons(lessons, limit=limit)
+    if not normalized:
+        return ""
+    lines = [f"{heading}:"]
+    for index, lesson in enumerate(normalized, start=1):
+        lines.append(f"{index}. {lesson['lesson']}")
+    return "\n".join(lines)
+
+
+def _compact_query_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        return " ".join(_compact_query_value(item) for item in value)
+    if isinstance(value, dict):
+        return " ".join(_compact_query_value(item) for item in value.values())
+    return str(value)
+
+
+def build_prompt_lesson_query(
+    cluster: Dict[str, Any],
+    *,
+    selected_assets: Optional[List[str]] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    prior_quality_suggestions: Optional[List[str]] = None,
+) -> str:
+    parts = []
+    for item in cluster.get("feedback_items", []) or []:
+        remark = str(item.get("remark") or "").strip()
+        if remark:
+            parts.append(remark)
+
+    clip_context = cluster.get("clip_context") or {}
+    for key in [
+        "summary",
+        "visible_characters",
+        "actions",
+        "camera_framing",
+        "location",
+        "continuity_notes",
+        "uncertainty_flags",
+        "status",
+    ]:
+        text = _compact_query_value(clip_context.get(key)).strip()
+        if text:
+            parts.append(text)
+
+    for asset in selected_assets or []:
+        basename = os.path.basename(str(asset))
+        if basename:
+            parts.append(basename)
+
+    clip = cluster.get("matched_clip") or {}
+    clip_name = clip.get("clip")
+    if clip_name:
+        parts.append(str(clip_name))
+    if cluster.get("category"):
+        parts.append(f"clip category {cluster.get('category')}")
+    if provider:
+        parts.append(f"provider {provider}")
+    if model:
+        parts.append(f"model {model}")
+    for suggestion in prior_quality_suggestions or []:
+        if suggestion:
+            parts.append(str(suggestion))
+
+    query = " ".join(parts)
+    return re.sub(r"\s+", " ", query).strip()
 
 
 def _cluster_prompt_context(cluster_id: int, cluster: Dict[str, Any]) -> str:

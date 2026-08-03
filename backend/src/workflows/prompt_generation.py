@@ -8,6 +8,7 @@ import base64
 import mimetypes
 import re
 import subprocess
+from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from dotenv import load_dotenv
@@ -15,6 +16,12 @@ load_dotenv()
 
 from src.generator.client import generate_structured
 from src.generator.media import _frame_offsets_for_duration
+from src.generator.prompts import (
+    build_prompt_lesson_query,
+    format_prompt_lessons,
+    normalize_prompt_lessons,
+)
+from src.prompt_learning import PromptLearningStore
 from src.schemas import PromptResult
 from src.workflows.clip_context import analyze_clip_context
 from config.settings import OPENAI_REASONING_MODEL
@@ -420,6 +427,9 @@ def generate_video_prompts_from_plan(
     # Keep track of generated prompts by clip name to supply as continuity context
     previous_clip_prompts = {}
     segmind_cache = SupabaseAssetUrlCache()
+    lesson_store = PromptLearningStore(
+        Path(os.path.abspath(output_base_dir)) / project_name / "prompt_lessons.json"
+    )
 
     for item in plan_items:
         clip_name = item.get("clip_used")
@@ -680,11 +690,38 @@ def generate_video_prompts_from_plan(
                 "status",
             ]
         }
+        lesson_cluster = {
+            "category": "video",
+            "matched_clip": {"clip": clip_name},
+            "clip_occurrence": item.get("clip_occurrence"),
+            "feedback_items": [{"remark": remark} for remark in remarks],
+            "clip_context": clip_context_for_prompt,
+        }
+        clip_key = (
+            f"{clip_name}::{item.get('clip_occurrence')}"
+            if item.get("clip_occurrence") is not None
+            else f"{clip_name}::0"
+        )
+        prompt_lessons = [
+            candidate.item
+            for candidate in lesson_store.retrieve_lessons(
+                query=build_prompt_lesson_query(
+                    lesson_cluster,
+                    selected_assets=selected_assets,
+                    provider="openai",
+                    model=openai_model,
+                ),
+                clip_key=clip_key,
+                limit=3,
+            )
+        ]
+        lesson_block = format_prompt_lessons(prompt_lessons)
         prompt_instruction = (
             f"You are modifying the video clip: \"{clip_name}\" "
             f"(Duration: {clip_duration:.2f}s, Segment: {item.get('clip_start_tc')} to {item.get('clip_end_tc')}).\n\n"
             f"Saved Clip Understanding Context: {json.dumps(clip_context_for_prompt, ensure_ascii=False)}\n\n"
             f"Client Feedback Remarks: {json.dumps(remarks)}\n\n"
+            f"{lesson_block + chr(10) + chr(10) if lesson_block else ''}"
             f"Tasks:\n"
             f"1. Analyze the provided current clip frames (Image references) showing the starting layout, camera positioning, and composition.\n"
         )
@@ -829,6 +866,9 @@ def generate_video_prompts_from_plan(
             "missing_required_subject_sheets": [],
             "explanation": explanation
         }
+        applied_lessons = normalize_prompt_lessons(prompt_lessons)
+        if applied_lessons:
+            result_payload["applied_prompt_lessons"] = applied_lessons
         if first_frame_url and last_frame_path:
             result_payload["first_frame_url"] = first_frame_url
             result_payload["initial_frame_image_path"] = last_frame_path

@@ -4233,6 +4233,7 @@ def save_output_to_prompts(project: str, provider: str = "unknown"):
         "clip_segment_path",
         "clip_context_summary",
         "clip_context_status",
+        "applied_prompt_lessons",
     ]
 
     def copy_handoff_fields(target: dict, source: dict) -> None:

@@ -44,10 +44,34 @@ class ClusteredPipelineTests(unittest.TestCase):
             timeline_path = os.path.join(temp_dir, "timeline.json")
             output_json = os.path.join(temp_dir, "output", "result.json")
             output_report = os.path.join(temp_dir, "output", "report.md")
+            os.makedirs(os.path.dirname(output_json), exist_ok=True)
             with open(feedback_path, "w", encoding="utf-8") as file:
                 json.dump(feedback, file)
             with open(timeline_path, "w", encoding="utf-8") as file:
                 json.dump(timeline, file)
+            with open(os.path.join(os.path.dirname(output_json), "prompt_lessons.json"), "w", encoding="utf-8") as file:
+                json.dump(
+                    {
+                        "schema_version": 1,
+                        "lessons": [
+                            {
+                                "id": "lesson-continuity",
+                                "scope": "project",
+                                "clip_key": None,
+                                "category": "continuity_error",
+                                "lesson": "Preserve wardrobe when feedback mentions continuity.",
+                                "source_feedback_ids": [],
+                                "confidence": 0.9,
+                                "positive_examples": [],
+                                "negative_examples": [],
+                                "created_at": "2026-01-01T00:00:00Z",
+                                "updated_at": "2026-01-01T00:00:00Z",
+                                "archived": False,
+                            }
+                        ],
+                    },
+                    file,
+                )
 
             with (
                 mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}),
@@ -74,6 +98,14 @@ class ClusteredPipelineTests(unittest.TestCase):
                             "video_model_prompt": "video result",
                             "explanation": "video",
                             "status": "success",
+                            "applied_prompt_lessons": [
+                                {
+                                    "id": "lesson-continuity",
+                                    "scope": "project",
+                                    "category": "continuity_error",
+                                    "lesson": "Preserve wardrobe when feedback mentions continuity.",
+                                }
+                            ],
                         }
                     ],
                 ) as batch_generator,
@@ -91,6 +123,10 @@ class ClusteredPipelineTests(unittest.TestCase):
             passed_clusters = batch_generator.call_args.kwargs["clusters"]
             self.assertTrue(all(c["category"] == "video" for c in passed_clusters))
             self.assertEqual(5, batch_generator.call_args.kwargs["batch_size"])
+            self.assertEqual(
+                "lesson-continuity",
+                batch_generator.call_args.kwargs["prompt_lessons_by_cluster"][0][0]["id"],
+            )
             self.assertEqual("1080x1920", passed_clusters[0]["frame_size"])
             self.assertEqual(
                 ["video one", "visual and sound"],
@@ -103,6 +139,10 @@ class ClusteredPipelineTests(unittest.TestCase):
             self.assertEqual("video", results[0]["category"])
             self.assertEqual(2, len(results[0]["feedback_items"]))
             self.assertEqual("success", results[0]["status"])
+            self.assertEqual(
+                "lesson-continuity",
+                results[0]["applied_prompt_lessons"][0]["id"],
+            )
             self.assertEqual("plain_text", results[0]["prompt_format"])
             self.assertEqual("initial frame result", results[0]["initial_frame_prompt"])
             self.assertTrue(results[0]["initial_frame_image_path"].endswith(

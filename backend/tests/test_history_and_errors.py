@@ -41,7 +41,15 @@ class TestHistoryAndErrors(unittest.TestCase):
                 "video_model_prompt": "First successful prompt plan for clip1",
                 "selected_assets": ["char1.png"],
                 "explanation": "Exp 1",
-                "prompt_format": "complex"
+                "prompt_format": "complex",
+                "applied_prompt_lessons": [
+                    {
+                        "id": "lesson-1",
+                        "scope": "project",
+                        "category": "continuity_error",
+                        "lesson": "Preserve wardrobe.",
+                    }
+                ],
             }
         ]
         with open(self.real_output_json, "w", encoding="utf-8") as f:
@@ -61,6 +69,8 @@ class TestHistoryAndErrors(unittest.TestCase):
         self.assertEqual(len(item["history"]), 1)
         self.assertEqual(item["history"][0]["video_model_prompt"], "First successful prompt plan for clip1")
         self.assertEqual(item["history"][0]["provider"], "openai")
+        self.assertEqual("lesson-1", item["applied_prompt_lessons"][0]["id"])
+        self.assertEqual("lesson-1", item["history"][0]["applied_prompt_lessons"][0]["id"])
 
         second_output = [
             {
@@ -68,7 +78,15 @@ class TestHistoryAndErrors(unittest.TestCase):
                 "video_model_prompt": "Second successful prompt plan for clip1",
                 "selected_assets": ["char1.png", "char2.png"],
                 "explanation": "Exp 2",
-                "prompt_format": "complex"
+                "prompt_format": "complex",
+                "applied_prompt_lessons": [
+                    {
+                        "id": "lesson-2",
+                        "scope": "clip",
+                        "category": "too_vague",
+                        "lesson": "Use concrete motion language.",
+                    }
+                ],
             }
         ]
         with open(self.real_output_json, "w", encoding="utf-8") as f:
@@ -86,6 +104,8 @@ class TestHistoryAndErrors(unittest.TestCase):
         self.assertEqual(item["history"][0]["video_model_prompt"], "First successful prompt plan for clip1")
         self.assertEqual(item["history"][1]["video_model_prompt"], "Second successful prompt plan for clip1")
         self.assertEqual(item["history"][1]["provider"], "gemini")
+        self.assertEqual("lesson-2", item["applied_prompt_lessons"][0]["id"])
+        self.assertEqual("lesson-2", item["history"][1]["applied_prompt_lessons"][0]["id"])
 
     def test_save_output_to_prompts_error_handling(self):
         initial_prompts = [

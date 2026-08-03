@@ -163,6 +163,31 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
         mock_gen_structured.side_effect = mock_gen_side_effect
 
         project_name = "test_prompt_project"
+        lessons_dir = os.path.join(self.output_base_dir, project_name)
+        os.makedirs(lessons_dir, exist_ok=True)
+        with open(os.path.join(lessons_dir, "prompt_lessons.json"), "w", encoding="utf-8") as file:
+            json.dump(
+                {
+                    "schema_version": 1,
+                    "lessons": [
+                        {
+                            "id": "lesson-motion",
+                            "scope": "project",
+                            "clip_key": None,
+                            "category": "too_vague",
+                            "lesson": "Convert vague playful feedback into concrete body motion and expression details.",
+                            "source_feedback_ids": [],
+                            "confidence": 0.9,
+                            "positive_examples": [],
+                            "negative_examples": [],
+                            "created_at": "2026-01-01T00:00:00Z",
+                            "updated_at": "2026-01-01T00:00:00Z",
+                            "archived": False,
+                        }
+                    ],
+                },
+                file,
+            )
         mock_client = mock.MagicMock()
         mock_transcript = mock.MagicMock()
         mock_transcript.text = "Kya hua?"
@@ -198,6 +223,22 @@ class TestPromptGenerationWorkflow(unittest.TestCase):
         self.assertEqual(prompts_data[1]["clip_used"], "clip2.mp4")
         self.assertEqual(prompts_data[1]["generation_type"], "complex")
         self.assertEqual(prompts_data[1]["category"], "video")
+        self.assertEqual("lesson-motion", prompts_data[1]["applied_prompt_lessons"][0]["id"])
+        final_prompt_inputs = [
+            "\n".join(
+                entry
+                for entry in call.kwargs.get("contents", [])
+                if isinstance(entry, str)
+            )
+            for call in mock_gen_structured.call_args_list
+        ]
+        self.assertTrue(
+            any(
+                "RELEVANT LEARNED LESSONS FROM PRIOR FEEDBACK:" in prompt_input
+                and "Convert vague playful feedback" in prompt_input
+                for prompt_input in final_prompt_inputs
+            )
+        )
         self.assertIn("REFERENCE IMAGE MAP:", prompts_data[1]["video_model_prompt"])
         self.assertTrue(
             prompts_data[1]["video_model_prompt"].endswith(

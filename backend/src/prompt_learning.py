@@ -77,6 +77,13 @@ class LessonCandidate:
     reasons: list[str]
 
 
+@dataclass
+class EvalCaseCandidate:
+    item: dict
+    score: float
+    reasons: list[str]
+
+
 class PromptLearningStore:
     schema_version = 1
 
@@ -244,9 +251,6 @@ class PromptLearningStore:
         ] if query.strip() else []
         return {"project": project, "clip": clip, "relevant": relevant}
 
-    def create_eval_case_from_feedback(self, *_args, **_kwargs) -> None:
-        raise NotImplementedError("Eval case creation is planned for a later stage.")
-
     def mark_feedback_resolved(self, *_args, **_kwargs) -> None:
         raise NotImplementedError("Feedback resolution is handled by prompt feedback endpoints.")
 
@@ -338,3 +342,240 @@ class PromptLearningStore:
 
     def _empty(self) -> dict:
         return {"schema_version": self.schema_version, "lessons": []}
+
+
+class PromptEvalCaseStore:
+    schema_version = 1
+
+    def __init__(self, path: Path):
+        self.path = path
+
+    def load(self) -> dict:
+        if not self.path.exists():
+            return self._empty()
+        try:
+            with self.path.open("r", encoding="utf-8") as file:
+                data = json.load(file)
+        except Exception:
+            return self._empty()
+        if not isinstance(data, dict):
+            return self._empty()
+        cases = data.get("cases")
+        if not isinstance(cases, list):
+            cases = []
+        return {
+            "schema_version": self.schema_version,
+            "cases": [self._normalize_case(item) for item in cases if isinstance(item, dict)],
+        }
+
+    def save(self, data: dict) -> None:
+        data.setdefault("schema_version", self.schema_version)
+        data.setdefault("cases", [])
+        atomic_write_json(self.path, data)
+
+    def add_eval_case(
+        self,
+        *,
+        name: str,
+        source_feedback_id: Optional[str],
+        clip_index: int,
+        clip_key: Optional[str],
+        input: dict,
+        expected_behavior: list[str],
+        failure_categories: list[str],
+        enabled: bool = True,
+    ) -> dict:
+        cleaned_expected = self._clean_list(expected_behavior)
+        if not cleaned_expected:
+            raise ValueError("expected_behavior must include at least one item")
+        created_at = now_iso()
+        item = {
+            "id": str(uuid.uuid4()),
+            "name": self._clean_name(name),
+            "source_feedback_id": source_feedback_id,
+            "clip_index": int(clip_index),
+            "clip_key": clip_key,
+            "input": self._normalize_input(input),
+            "expected_behavior": cleaned_expected,
+            "failure_categories": self._clean_list(failure_categories) or ["other"],
+            "enabled": bool(enabled),
+            "created_at": created_at,
+            "updated_at": created_at,
+        }
+        data = self.load()
+        data["cases"].append(item)
+        self.save(data)
+        return item
+
+    def add_eval_case_from_feedback(
+        self,
+        feedback_item: dict,
+        *,
+        clip_summary: str = "",
+        selected_assets: Optional[list[str]] = None,
+        feedback_items: Optional[list[dict]] = None,
+    ) -> dict:
+        expected = self._expected_behavior_from_feedback(feedback_item)
+        categories = self._clean_list(feedback_item.get("categories") or []) or ["other"]
+        name = self._name_from_feedback(categories, expected)
+        return self.add_eval_case(
+            name=name,
+            source_feedback_id=feedback_item.get("id"),
+            clip_index=int(feedback_item.get("clip_index") or 0),
+            clip_key=feedback_item.get("clip_key"),
+            input={
+                "feedback_items": feedback_items or [self._feedback_excerpt(feedback_item)],
+                "clip_summary": clip_summary or "",
+                "selected_assets": selected_assets or [],
+            },
+            expected_behavior=expected,
+            failure_categories=categories,
+            enabled=True,
+        )
+
+    def list_eval_cases(
+        self,
+        *,
+        clip_index: Optional[int] = None,
+        enabled: Optional[bool] = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        cases = []
+        for item in self.load()["cases"]:
+            if clip_index is not None and item.get("clip_index") != clip_index:
+                continue
+            if enabled is not None and bool(item.get("enabled", True)) is not enabled:
+                continue
+            cases.append(item)
+        cases.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
+        return cases[: max(1, min(limit, 500))]
+
+    def update_eval_case(self, case_id: str, updates: dict) -> dict:
+        data = self.load()
+        item = next((candidate for candidate in data["cases"] if candidate.get("id") == case_id), None)
+        if item is None:
+            raise KeyError(case_id)
+        if "name" in updates:
+            item["name"] = self._clean_name(str(updates.get("name") or ""))
+        if "input" in updates:
+            item["input"] = self._normalize_input(updates.get("input") or {})
+        if "expected_behavior" in updates:
+            expected = self._clean_list(updates.get("expected_behavior") or [])
+            if not expected:
+                raise ValueError("expected_behavior must include at least one item")
+            item["expected_behavior"] = expected
+        if "failure_categories" in updates:
+            item["failure_categories"] = self._clean_list(updates.get("failure_categories") or []) or ["other"]
+        if "enabled" in updates:
+            item["enabled"] = bool(updates.get("enabled"))
+        item["updated_at"] = now_iso()
+        self.save(data)
+        return item
+
+    def retrieve_eval_cases(
+        self,
+        query: str,
+        *,
+        clip_key: Optional[str] = None,
+        clip_index: Optional[int] = None,
+        limit: int = 6,
+    ) -> list[EvalCaseCandidate]:
+        query_tokens = tokenize(query)
+        candidates: list[EvalCaseCandidate] = []
+        for item in self.load()["cases"]:
+            if not item.get("enabled", True):
+                continue
+            score, reasons = self._score_case(item, query_tokens, clip_key, clip_index)
+            if score > 0:
+                candidates.append(EvalCaseCandidate(item=item, score=score, reasons=reasons))
+        candidates.sort(key=lambda candidate: candidate.score, reverse=True)
+        return candidates[: max(1, min(limit, 50))]
+
+    def _score_case(
+        self,
+        item: dict,
+        query_tokens: set[str],
+        clip_key: Optional[str],
+        clip_index: Optional[int],
+    ) -> tuple[float, list[str]]:
+        score = 0.0
+        reasons: list[str] = []
+        if clip_key and item.get("clip_key") == clip_key:
+            score += 0.42
+            reasons.append("same clip")
+        elif clip_index is not None and item.get("clip_index") == clip_index:
+            score += 0.28
+            reasons.append("same clip index")
+        case_tokens = tokenize(" ".join([
+            item.get("name", ""),
+            " ".join(item.get("expected_behavior") or []),
+            " ".join(item.get("failure_categories") or []),
+            normalize_text(json.dumps(item.get("input") or {}, ensure_ascii=False)),
+        ]))
+        if query_tokens and case_tokens:
+            overlap = len(query_tokens.intersection(case_tokens))
+            if overlap:
+                score += overlap / math.sqrt(len(query_tokens) * len(case_tokens))
+                reasons.append(f"{overlap} keyword match")
+        return score, reasons
+
+    def _normalize_case(self, item: dict) -> dict:
+        return {
+            "id": str(item.get("id") or uuid.uuid4()),
+            "name": self._clean_name(str(item.get("name") or "Prompt eval case")),
+            "source_feedback_id": item.get("source_feedback_id"),
+            "clip_index": int(item.get("clip_index") or 0),
+            "clip_key": item.get("clip_key"),
+            "input": self._normalize_input(item.get("input") or {}),
+            "expected_behavior": self._clean_list(item.get("expected_behavior") or []) or ["Address the saved feedback explicitly."],
+            "failure_categories": self._clean_list(item.get("failure_categories") or []) or ["other"],
+            "enabled": bool(item.get("enabled", True)),
+            "created_at": item.get("created_at") or now_iso(),
+            "updated_at": item.get("updated_at") or item.get("created_at") or now_iso(),
+        }
+
+    def _normalize_input(self, value: dict) -> dict:
+        return {
+            "feedback_items": value.get("feedback_items") if isinstance(value.get("feedback_items"), list) else [],
+            "clip_summary": str(value.get("clip_summary") or ""),
+            "selected_assets": value.get("selected_assets") if isinstance(value.get("selected_assets"), list) else [],
+        }
+
+    def _expected_behavior_from_feedback(self, feedback_item: dict) -> list[str]:
+        values = self._clean_list([
+            feedback_item.get("correction"),
+            feedback_item.get("remember_note"),
+            feedback_item.get("comment"),
+        ])
+        if not values:
+            values = ["Address this feedback explicitly without introducing unsupported visual details."]
+        return values[:5]
+
+    def _feedback_excerpt(self, feedback_item: dict) -> dict:
+        return {
+            "rating": feedback_item.get("rating"),
+            "categories": feedback_item.get("categories") or [],
+            "severity": feedback_item.get("severity"),
+            "comment": feedback_item.get("comment") or "",
+            "correction": feedback_item.get("correction") or "",
+            "remember_note": feedback_item.get("remember_note") or "",
+        }
+
+    def _name_from_feedback(self, categories: list[str], expected: list[str]) -> str:
+        category = (categories or ["prompt"])[0].replace("_", " ")
+        first_expected = (expected or ["feedback"])[0]
+        words = re.findall(r"[A-Za-z0-9'-]+", first_expected)[:5]
+        suffix = " ".join(words) if words else "feedback"
+        return f"{category.title()} - {suffix}"
+
+    def _clean_name(self, name: str) -> str:
+        cleaned = re.sub(r"\s+", " ", name).strip()
+        if not cleaned:
+            raise ValueError("Eval case name cannot be empty")
+        return cleaned[:120]
+
+    def _clean_list(self, values: Optional[list[Any]]) -> list[str]:
+        return [re.sub(r"\s+", " ", str(value)).strip() for value in values or [] if str(value).strip()]
+
+    def _empty(self) -> dict:
+        return {"schema_version": self.schema_version, "cases": []}

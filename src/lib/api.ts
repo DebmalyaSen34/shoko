@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ClipState, PromptFeedbackItem, PromptFeedbackPayload, PromptLesson, PromptLessonPayload, PromptLessonSuggestion, Provider } from "../types";
+import type { ClipState, PromptEvalCase, PromptFeedbackItem, PromptFeedbackPayload, PromptLesson, PromptLessonPayload, PromptLessonSuggestion, Provider } from "../types";
 
 export let API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
@@ -70,7 +70,7 @@ export async function createPromptFeedback(projectName: string, payload: PromptF
     body: JSON.stringify(payload),
   });
   if (!response.ok) throw new Error(await response.text());
-  return response.json() as Promise<{ item: PromptFeedbackItem; clip_state: ClipState }>;
+  return response.json() as Promise<{ item: PromptFeedbackItem; clip_state: ClipState; eval_case?: PromptEvalCase }>;
 }
 
 export async function updatePromptFeedback(projectName: string, feedbackId: string, patch: Partial<PromptFeedbackPayload> & { status?: PromptFeedbackItem["status"] }) {
@@ -98,6 +98,40 @@ export async function listPromptLessons(projectName: string, options: { clipKey?
     category?: string | null;
     lessons: PromptLesson[];
   }>;
+}
+
+export async function listPromptEvalCases(projectName: string, options: { clipIndex?: number; enabled?: boolean } = {}) {
+  const params = new URLSearchParams();
+  if (typeof options.clipIndex === "number") params.set("clip_index", String(options.clipIndex));
+  if (typeof options.enabled === "boolean") params.set("enabled", String(options.enabled));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectName)}/prompt-eval-cases${suffix}`));
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<{
+    schema_version: number;
+    project_name: string;
+    clip_index?: number | null;
+    enabled?: boolean | null;
+    cases: PromptEvalCase[];
+  }>;
+}
+
+export async function createPromptEvalCaseFromFeedback(projectName: string, feedbackId: string) {
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectName)}/prompt-feedback/${encodeURIComponent(feedbackId)}/eval-case`), {
+    method: "POST",
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<{ eval_case: PromptEvalCase; clip_state: ClipState }>;
+}
+
+export async function updatePromptEvalCase(projectName: string, caseId: string, patch: Partial<PromptEvalCase>) {
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectName)}/prompt-eval-cases/${encodeURIComponent(caseId)}`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<{ eval_case: PromptEvalCase; clip_state: ClipState }>;
 }
 
 export async function createPromptLesson(projectName: string, payload: PromptLessonPayload) {

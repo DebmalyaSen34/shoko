@@ -802,7 +802,11 @@ function PromptFeedbackPanel({
         setLessonCategory(categories[0] || "other");
         setLessonConfidence(rating === "positive" ? 0.72 : 0.82);
       }
-      setSavedMessage(rating === "positive" ? "Prompt approved." : "Feedback saved. This version now needs revision.");
+      if (result.eval_case) {
+        setSavedMessage("Feedback saved. Eval case created.");
+      } else {
+        setSavedMessage(rating === "positive" ? "Prompt approved." : "Feedback saved. This version now needs revision.");
+      }
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Failed to save prompt feedback.");
     } finally {
@@ -941,7 +945,7 @@ function PromptFeedbackPanel({
 
         <label className="prompt-feedback-check">
           <input type="checkbox" checked={createEvalCase} onChange={(event) => setCreateEvalCase(event.target.checked)} />
-          <span>Create eval case from this later</span>
+          <span>Create eval case from this feedback</span>
         </label>
 
         {savedMessage && <div className="prompt-feedback-success"><Icon name="check" /> {savedMessage}</div>}

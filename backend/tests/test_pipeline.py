@@ -72,6 +72,32 @@ class ClusteredPipelineTests(unittest.TestCase):
                     },
                     file,
                 )
+            with open(os.path.join(os.path.dirname(output_json), "prompt_eval_cases.json"), "w", encoding="utf-8") as file:
+                json.dump(
+                    {
+                        "schema_version": 1,
+                        "cases": [
+                            {
+                                "id": "case-continuity",
+                                "name": "Continuity wardrobe preservation",
+                                "source_feedback_id": "feedback-1",
+                                "clip_index": 0,
+                                "clip_key": "clip.mp4::0",
+                                "input": {
+                                    "feedback_items": [{"remark": "video one"}],
+                                    "clip_summary": "",
+                                    "selected_assets": ["character.png"],
+                                },
+                                "expected_behavior": ["Must preserve wardrobe continuity."],
+                                "failure_categories": ["continuity_error"],
+                                "enabled": True,
+                                "created_at": "2026-01-01T00:00:00Z",
+                                "updated_at": "2026-01-01T00:00:00Z",
+                            }
+                        ],
+                    },
+                    file,
+                )
 
             with (
                 mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}),
@@ -126,6 +152,10 @@ class ClusteredPipelineTests(unittest.TestCase):
             self.assertEqual(
                 "lesson-continuity",
                 batch_generator.call_args.kwargs["prompt_lessons_by_cluster"][0][0]["id"],
+            )
+            self.assertEqual(
+                "case-continuity",
+                batch_generator.call_args.kwargs["prompt_eval_cases_by_cluster"][0][0]["id"],
             )
             self.assertEqual("1080x1920", passed_clusters[0]["frame_size"])
             self.assertEqual(

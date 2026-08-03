@@ -42,7 +42,7 @@ from src.clustering import find_matching_clip_occurrence
 from src.utils import parse_timestamp_to_seconds
 from src.logging_utils import log_event
 from src.chat_memory import ChatMemoryStore
-from src.prompt_learning import PromptLearningStore
+from src.prompt_learning import PromptEvalCaseStore, PromptLearningStore
 from scripts.generate_seedance_video import (
     SeedanceGenerationRecoveryError,
     SupabaseAssetUrlCache,
@@ -599,6 +599,14 @@ class PromptLessonPatchRequest(BaseModel):
     archived: Optional[bool] = None
 
 
+class PromptEvalCasePatchRequest(BaseModel):
+    name: Optional[str] = None
+    input: Optional[dict] = None
+    expected_behavior: Optional[list[str]] = None
+    failure_categories: Optional[list[str]] = None
+    enabled: Optional[bool] = None
+
+
 class PromptLessonSuggestRequest(BaseModel):
     provider: Literal["openai", "gemini"] = "openai"
 
@@ -680,6 +688,10 @@ def prompt_feedback_path(project_name: str) -> Path:
 
 def prompt_lessons_path(project_name: str) -> Path:
     return project_data_dir(project_name) / "prompt_lessons.json"
+
+
+def prompt_eval_cases_path(project_name: str) -> Path:
+    return project_data_dir(project_name) / "prompt_eval_cases.json"
 
 
 def project_jobs_path(project_name: str) -> Path:
@@ -957,6 +969,36 @@ def _prompt_context_for_feedback(project_name: str, feedback_item: dict) -> dict
         "feedback_state": state.get("feedback_state"),
         "prompt_version": version or {},
     }
+
+
+def _eval_case_context_for_feedback(project_name: str, feedback_item: dict) -> dict:
+    context = _prompt_context_for_feedback(project_name, feedback_item)
+    prompt_version = context.get("prompt_version") or {}
+    feedback_state = context.get("feedback_state") or {}
+    return {
+        "clip_summary": (
+            prompt_version.get("clip_context_summary")
+            or (((context.get("clip") or {}).get("summary")) if isinstance(context.get("clip"), dict) else "")
+            or ""
+        ),
+        "selected_assets": prompt_version.get("selected_assets") or [],
+        "feedback_items": feedback_state.get("feedback_items") or [
+            {
+                "remark": feedback_item.get("comment") or feedback_item.get("correction") or feedback_item.get("remember_note") or "",
+                "category": "video",
+            }
+        ],
+    }
+
+
+def create_eval_case_from_feedback_item(project_name: str, feedback_item: dict) -> dict:
+    context = _eval_case_context_for_feedback(project_name, feedback_item)
+    return prompt_eval_case_store(project_name).add_eval_case_from_feedback(
+        feedback_item,
+        clip_summary=context.get("clip_summary", ""),
+        selected_assets=context.get("selected_assets", []),
+        feedback_items=context.get("feedback_items", []),
+    )
 
 
 def _suggest_prompt_lesson(project_name: str, feedback_item: dict, provider: Literal["openai", "gemini"]) -> dict:
@@ -1508,6 +1550,10 @@ def prompt_learning_store(project_name: str) -> PromptLearningStore:
     return PromptLearningStore(prompt_lessons_path(project_name))
 
 
+def prompt_eval_case_store(project_name: str) -> PromptEvalCaseStore:
+    return PromptEvalCaseStore(prompt_eval_cases_path(project_name))
+
+
 def matching_prompt(project_data: dict, clip: dict, clip_index: int) -> Optional[dict]:
     clip_name = clip.get("clip", "")
     basename = os.path.basename(clip_name)
@@ -1807,6 +1853,7 @@ def build_clip_freshness(
         "memory": chat_memory_path(project_name),
         "prompt_feedback": prompt_feedback_path(project_name),
         "prompt_lessons": prompt_lessons_path(project_name),
+        "prompt_eval_cases": prompt_eval_cases_path(project_name),
         "events": project_events_path(project_name),
     }
     fingerprints = {
@@ -1843,6 +1890,7 @@ def build_clip_freshness(
         }),
         "prompt_feedback": stable_json_hash(prompt_feedback_summary_by_version(project_name, active_version.get("clip_index", -1) if active_version else -1)),
         "prompt_lessons": stable_json_hash(prompt_learning_store(project_name).list_lessons(clip_key=clip_key, include_archived=True, limit=500)),
+        "prompt_eval_cases": stable_json_hash(prompt_eval_case_store(project_name).list_eval_cases(clip_index=active_version.get("clip_index", -1) if active_version else -1, limit=500)),
     }
     fingerprints["state"] = stable_json_hash({
         key: value
@@ -1853,7 +1901,7 @@ def build_clip_freshness(
     return {
         "source_files": {key: str(path) for key, path in source_paths.items()},
         "source_mtimes": {key: file_mtime_iso(path) for key, path in source_paths.items()},
-        "derived_from": ["timeline", "feedback", "assets", "prompts", "clip_selections", "prompt_feedback", "prompt_lessons", "memory", "agent_runs", "events"],
+        "derived_from": ["timeline", "feedback", "assets", "prompts", "clip_selections", "prompt_feedback", "prompt_lessons", "prompt_eval_cases", "memory", "agent_runs", "events"],
         "fingerprints": fingerprints,
         "state_hash": fingerprints["state"],
         "stale_reasons": selection_stale_reasons,
@@ -1867,7 +1915,7 @@ def annotate_agent_run_freshness(run: dict, current_freshness: dict) -> dict:
     current_fingerprints = current_freshness.get("fingerprints") or {}
     stale_reasons = []
 
-    for key in ["timeline", "feedback", "prompts", "assets", "videos", "selection", "prompt_feedback", "prompt_lessons"]:
+    for key in ["timeline", "feedback", "prompts", "assets", "videos", "selection", "prompt_feedback", "prompt_lessons", "prompt_eval_cases"]:
         if previous_fingerprints.get(key) and previous_fingerprints.get(key) != current_fingerprints.get(key):
             stale_reasons.append(f"{key}_changed")
 
@@ -2065,7 +2113,12 @@ def build_clip_state(project_name: str, clip_index: int, query: str = "") -> dic
         "learning_state": learning_store.for_clip(
             clip_key,
             query=query,
-        ),
+        ) | {
+            "eval_cases": prompt_eval_case_store(project_name).list_eval_cases(
+                clip_index=clip_index,
+                limit=20,
+            ),
+        },
         "agent_state": {
             "recent_runs": agent_runs,
             "pending_actions": [
@@ -5251,6 +5304,26 @@ def get_prompt_lessons(
     }
 
 
+@app.get("/api/projects/{project_name}/prompt-eval-cases")
+def get_prompt_eval_cases(
+    project_name: str,
+    clip_index: Optional[int] = None,
+    enabled: Optional[bool] = None,
+):
+    project_name = safe_project_name(project_name)
+    cases = prompt_eval_case_store(project_name).list_eval_cases(
+        clip_index=clip_index,
+        enabled=enabled,
+    )
+    return {
+        "schema_version": 1,
+        "project_name": project_name,
+        "clip_index": clip_index,
+        "enabled": enabled,
+        "cases": cases,
+    }
+
+
 @app.post("/api/projects/{project_name}/prompt-lessons")
 def create_prompt_lesson(project_name: str, request: PromptLessonCreateRequest):
     project_name = safe_project_name(project_name)
@@ -5332,6 +5405,12 @@ def create_prompt_feedback(project_name: str, request: PromptFeedbackCreateReque
     data = load_prompt_feedback(project_name)
     data.setdefault("items", []).append(item)
     save_prompt_feedback(project_name, data)
+    eval_case = None
+    if item.get("create_eval_case") and item.get("rating") == "negative":
+        try:
+            eval_case = create_eval_case_from_feedback_item(project_name, item)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     append_project_event(
         project_name,
         "prompt_feedback_created",
@@ -5348,8 +5427,55 @@ def create_prompt_feedback(project_name: str, request: PromptFeedbackCreateReque
             "categories": item.get("categories", []),
         },
     )
-    return {
+    response = {
         "item": item,
+        "clip_state": build_clip_state(project_name, item["clip_index"]),
+    }
+    if eval_case:
+        append_project_event(
+            project_name,
+            "prompt_eval_case_created",
+            actor="user",
+            clip_index=item.get("clip_index"),
+            clip_key=item.get("clip_key"),
+            entity="prompt_eval_case",
+            entity_id=eval_case.get("id"),
+            payload={
+                "source_feedback_id": item.get("id"),
+                "failure_categories": eval_case.get("failure_categories", []),
+            },
+        )
+        response["eval_case"] = eval_case
+    return response
+
+
+@app.post("/api/projects/{project_name}/prompt-feedback/{feedback_id}/eval-case")
+def create_prompt_eval_case_from_feedback(project_name: str, feedback_id: str):
+    project_name = safe_project_name(project_name)
+    item = find_prompt_feedback_item(project_name, feedback_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Prompt feedback was not found")
+    if item.get("rating") != "negative":
+        raise HTTPException(status_code=400, detail="Eval cases can only be created from negative feedback.")
+    try:
+        eval_case = create_eval_case_from_feedback_item(project_name, item)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    append_project_event(
+        project_name,
+        "prompt_eval_case_created",
+        actor="user",
+        clip_index=item.get("clip_index"),
+        clip_key=item.get("clip_key"),
+        entity="prompt_eval_case",
+        entity_id=eval_case.get("id"),
+        payload={
+            "source_feedback_id": item.get("id"),
+            "failure_categories": eval_case.get("failure_categories", []),
+        },
+    )
+    return {
+        "eval_case": eval_case,
         "clip_state": build_clip_state(project_name, item["clip_index"]),
     }
 
@@ -5365,6 +5491,34 @@ def suggest_prompt_lesson(project_name: str, feedback_id: str, request: PromptLe
         "project_name": project_name,
         "feedback_id": feedback_id,
         "suggestion": suggestion,
+    }
+
+
+@app.patch("/api/projects/{project_name}/prompt-eval-cases/{case_id}")
+def patch_prompt_eval_case(project_name: str, case_id: str, request: PromptEvalCasePatchRequest):
+    project_name = safe_project_name(project_name)
+    try:
+        eval_case = prompt_eval_case_store(project_name).update_eval_case(
+            case_id,
+            request.model_dump(exclude_none=True),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Prompt eval case was not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    append_project_event(
+        project_name,
+        "prompt_eval_case_updated",
+        actor="user",
+        clip_index=eval_case.get("clip_index"),
+        clip_key=eval_case.get("clip_key"),
+        entity="prompt_eval_case",
+        entity_id=eval_case.get("id"),
+        payload={"enabled": eval_case.get("enabled")},
+    )
+    return {
+        "eval_case": eval_case,
+        "clip_state": build_clip_state(project_name, eval_case.get("clip_index", 0)),
     }
 
 

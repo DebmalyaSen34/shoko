@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 from src.generator import Provider, generate_video_prompts_batch
 from src.generator.prompts import build_prompt_lesson_query
-from src.prompt_learning import PromptLearningStore
+from src.prompt_learning import PromptEvalCaseStore, PromptLearningStore
 from src.selector import scan_visual_reference_assets
 from src.parser import parse_prproj_to_json
 from src.categorizer import process_feedback
@@ -95,6 +95,32 @@ def _retrieve_prompt_lessons_for_clusters(
         if candidates:
             lessons_by_cluster[cluster_id] = [candidate.item for candidate in candidates]
     return lessons_by_cluster
+
+
+def _retrieve_prompt_eval_cases_for_clusters(
+    *,
+    project_data_dir: str,
+    clusters: list[dict],
+    provider: Provider,
+    model: Optional[str],
+) -> dict[int, list[dict]]:
+    store = PromptEvalCaseStore(Path(project_data_dir) / "prompt_eval_cases.json")
+    eval_cases_by_cluster: dict[int, list[dict]] = {}
+    for cluster_id, cluster in enumerate(clusters):
+        query = build_prompt_lesson_query(
+            cluster,
+            provider=provider,
+            model=model,
+        )
+        candidates = store.retrieve_eval_cases(
+            query=query,
+            clip_key=_clip_key_for_cluster(cluster, cluster_id),
+            clip_index=cluster.get("clip_occurrence"),
+            limit=6,
+        )
+        if candidates:
+            eval_cases_by_cluster[cluster_id] = [candidate.item for candidate in candidates]
+    return eval_cases_by_cluster
 
 
 def _resolve_audio_path(assets_dir: str, audio_name: Optional[str]) -> Optional[str]:
@@ -633,6 +659,12 @@ def run_pipeline(
             provider=provider,
             model=OPENAI_REASONING_MODEL if provider == "openai" else None,
         )
+        prompt_eval_cases_by_cluster = _retrieve_prompt_eval_cases_for_clusters(
+            project_data_dir=project_data_dir_for_output,
+            clusters=video_clusters,
+            provider=provider,
+            model=OPENAI_REASONING_MODEL if provider == "openai" else None,
+        )
         batch_results = generate_video_prompts_batch(
             client=client,
             clusters=video_clusters,
@@ -650,6 +682,7 @@ def run_pipeline(
             ),
             generate_initial_frame=False,
             prompt_lessons_by_cluster=prompt_lessons_by_cluster,
+            prompt_eval_cases_by_cluster=prompt_eval_cases_by_cluster,
         )
 
     results = []

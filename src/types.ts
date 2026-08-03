@@ -69,6 +69,13 @@ export type QualityReport = {
   feedback_adherence?: string;
   clothing_consistency?: string;
   forbidden_terms_found?: string[];
+  learning_eval?: {
+    passed: boolean;
+    score: number;
+    failed_cases: string[];
+    case_results: Record<string, unknown>[];
+    suggestions: string[];
+  };
   suggestions?: string[];
 };
 
@@ -186,10 +193,29 @@ export type PromptLessonSuggestion = {
   source_feedback_id?: string;
 };
 
+export type PromptEvalCase = {
+  id: string;
+  name: string;
+  source_feedback_id?: string | null;
+  clip_index: number;
+  clip_key?: string | null;
+  input: {
+    feedback_items: Record<string, unknown>[];
+    clip_summary: string;
+    selected_assets: string[];
+  };
+  expected_behavior: string[];
+  failure_categories: string[];
+  enabled: boolean;
+  created_at: string;
+  updated_at?: string;
+};
+
 export type LearningState = {
   project: PromptLesson[];
   clip: PromptLesson[];
   relevant: PromptLesson[];
+  eval_cases?: PromptEvalCase[];
 };
 
 export type PromptVersion = {

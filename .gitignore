@@ -40,3 +40,7 @@ __pycache__/
 .venv/
 docs/
 api_responses.jsonl
+AGENTS.md
+backend/segmind_seedance_llm.txt
+backend/segmind_seedance_migration.md
+backend/timeline.json

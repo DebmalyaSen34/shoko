@@ -1,6 +1,6 @@
 import unittest
 from unittest import mock
-from src.generator.validator import run_quality_check
+from src.generator.validator import merge_learning_eval_report, run_learning_eval, run_quality_check
 
 class ValidatorTests(unittest.TestCase):
     def test_word_count_check(self):
@@ -132,3 +132,114 @@ class ValidatorTests(unittest.TestCase):
         self.assertIn("/path/to/location-v1.png", resolved)
         self.assertIn("/path/to/location-v2.png", resolved)
         self.assertNotIn("/path/to/unused-rian.png", resolved)
+
+    def test_learning_eval_deterministic_checks(self):
+        res = run_learning_eval(
+            provider="gemini",
+            client=mock.MagicMock(),
+            model="mock-model",
+            prompt="Short prompt with @image1 and no wardrobe.",
+            eval_cases=[
+                {
+                    "id": "case-1",
+                    "name": "Wardrobe continuity",
+                    "input": {
+                        "feedback_items": [{"remark": "Preserve slow hand movement and wardrobe."}],
+                        "clip_summary": "Boy in blue shirt raises hand.",
+                        "selected_assets": ["char.png"],
+                    },
+                    "expected_behavior": [
+                        "Must preserve visible wardrobe.",
+                        "Must mention slow deliberate hand movement.",
+                    ],
+                    "failure_categories": ["continuity_error"],
+                    "enabled": True,
+                }
+            ],
+            lessons=[],
+        )
+
+        self.assertFalse(res["passed"])
+        self.assertIn("case-1", res["failed_cases"])
+        self.assertTrue(any("too short" in suggestion for suggestion in res["suggestions"]))
+        self.assertTrue(any("provider-incompatible" in suggestion for suggestion in res["suggestions"]))
+
+    @mock.patch("src.generator.validator.generate_structured")
+    def test_learning_eval_merges_llm_judge_result(self, mock_generate_structured):
+        mock_generate_structured.return_value = {
+            "passed": False,
+            "score": 0.45,
+            "failed_cases": ["case-llm"],
+            "suggestions": ["Prompt does not explicitly preserve wardrobe continuity."],
+            "case_results": [{"case_id": "case-llm", "passed": False, "score": 0.45}],
+        }
+        prompt = (
+            "A detailed prompt with image 1 and original clip reference images that must preserve visible wardrobe and slow deliberate hand movement. "
+            * 15
+        )
+
+        res = run_learning_eval(
+            provider="gemini",
+            client=mock.MagicMock(),
+            model="mock-model",
+            prompt=prompt,
+            eval_cases=[
+                {
+                    "id": "case-llm",
+                    "name": "Wardrobe continuity",
+                    "input": {"feedback_items": [], "clip_summary": "", "selected_assets": ["char.png"]},
+                    "expected_behavior": ["Must preserve visible wardrobe."],
+                    "failure_categories": ["continuity_error"],
+                    "enabled": True,
+                }
+            ],
+            lessons=[],
+        )
+
+        self.assertFalse(res["passed"])
+        self.assertEqual(["case-llm"], res["failed_cases"])
+        self.assertIn("Prompt does not explicitly preserve wardrobe continuity.", res["suggestions"])
+
+    @mock.patch("src.generator.validator.generate_structured", side_effect=RuntimeError("judge down"))
+    def test_learning_eval_judge_failure_is_non_blocking(self, _mock_generate_structured):
+        prompt = (
+            "A detailed prompt with image 1 and original clip reference images that must preserve visible wardrobe and slow deliberate hand movement. "
+            * 15
+        )
+
+        res = run_learning_eval(
+            provider="gemini",
+            client=mock.MagicMock(),
+            model="mock-model",
+            prompt=prompt,
+            eval_cases=[
+                {
+                    "id": "case-ok",
+                    "name": "Wardrobe continuity",
+                    "input": {"feedback_items": [], "clip_summary": "", "selected_assets": ["char.png"]},
+                    "expected_behavior": ["Must preserve visible wardrobe."],
+                    "failure_categories": ["continuity_error"],
+                    "enabled": True,
+                }
+            ],
+            lessons=[],
+        )
+
+        self.assertTrue(res["passed"])
+        self.assertTrue(any("judge error" in suggestion.lower() for suggestion in res["suggestions"]))
+
+    def test_failed_learning_eval_marks_quality_report_failed(self):
+        merged = merge_learning_eval_report(
+            {"passed": True, "suggestions": []},
+            {
+                "passed": False,
+                "score": 0.5,
+                "failed_cases": ["case-1"],
+                "case_results": [],
+                "suggestions": ["Preserve wardrobe continuity."],
+            },
+        )
+
+        self.assertFalse(merged["passed"])
+        self.assertEqual(["case-1"], merged["learning_eval"]["failed_cases"])
+        self.assertIn("Preserve wardrobe continuity.", merged["suggestions"])

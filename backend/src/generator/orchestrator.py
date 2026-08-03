@@ -45,7 +45,7 @@ from .prompts import (
     _append_selected_reference_assets,
     _append_clip_reference,
 )
-from .validator import run_quality_check
+from .validator import merge_learning_eval_report, run_learning_eval, run_quality_check
 
 
 def _openai_input_from_contents(contents: List[Any]) -> List[Dict[str, Any]]:
@@ -202,6 +202,40 @@ def _refine_prompt(
     return draft_prompt
 
 
+def _run_quality_check_with_learning_eval(
+    *,
+    provider: Provider,
+    client,
+    model: str,
+    prompt: str,
+    feedback_items: List[Dict[str, Any]],
+    selected_assets: List[str],
+    has_clip: bool,
+    eval_cases: List[Dict[str, Any]],
+    lessons: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    quality_report = run_quality_check(
+        provider=provider,
+        client=client,
+        model=model,
+        prompt=prompt,
+        feedback_items=feedback_items,
+        selected_assets=selected_assets,
+        has_clip=has_clip,
+    )
+    if eval_cases:
+        learning_eval = run_learning_eval(
+            provider=provider,
+            client=client,
+            model=model,
+            prompt=prompt,
+            eval_cases=eval_cases,
+            lessons=lessons,
+        )
+        quality_report = merge_learning_eval_report(quality_report, learning_eval)
+    return quality_report
+
+
 def generate_video_prompts_batch(
     client: genai.Client | OpenAI,
     clusters: List[Dict[str, Any]],
@@ -216,6 +250,7 @@ def generate_video_prompts_batch(
     run_validator: bool = True,
     generate_initial_frame: bool = True,
     prompt_lessons_by_cluster: Optional[Dict[int, List[Dict[str, Any]]]] = None,
+    prompt_eval_cases_by_cluster: Optional[Dict[int, List[Dict[str, Any]]]] = None,
 ) -> List[Dict[str, Any]]:
     """Generate one prompt result per video cluster in bounded request batches."""
     if batch_size <= 0:
@@ -243,6 +278,7 @@ def generate_video_prompts_batch(
     selected_assets_by_id = {}
     results_by_id = {}
     prompt_lessons_by_cluster = prompt_lessons_by_cluster or {}
+    prompt_eval_cases_by_cluster = prompt_eval_cases_by_cluster or {}
 
     try:
         for cluster_id, cluster in indexed_clusters:
@@ -563,11 +599,12 @@ def generate_video_prompts_batch(
                         feedback_items = cluster_context.get("feedback_items", [])
                         selected_assets = selected_assets_by_id.get(cluster_id, [])
                         lessons = prompt_lessons_by_cluster.get(cluster_id, [])
+                        eval_cases = prompt_eval_cases_by_cluster.get(cluster_id, [])
                         has_clip = len(cluster_frame_paths.get(cluster_id, [])) > 0
                         
                         eval_model = _default_model_for_provider(provider)
                         print(f"Running quality checks for cluster {cluster_id}...")
-                        quality_report = run_quality_check(
+                        quality_report = _run_quality_check_with_learning_eval(
                             provider=provider,
                             client=client,
                             model=eval_model,
@@ -575,6 +612,8 @@ def generate_video_prompts_batch(
                             feedback_items=feedback_items,
                             selected_assets=selected_assets,
                             has_clip=has_clip,
+                            eval_cases=eval_cases,
+                            lessons=lessons,
                         )
                         
                         # Loop to rewrite the prompt up to a maximum of 3 times if validator fails
@@ -595,7 +634,7 @@ def generate_video_prompts_batch(
                             )
                             
                             print(f"Running quality checks on refined prompt (iteration {rewrite_attempts}) for cluster {cluster_id}...")
-                            quality_report = run_quality_check(
+                            quality_report = _run_quality_check_with_learning_eval(
                                 provider=provider,
                                 client=client,
                                 model=eval_model,
@@ -603,6 +642,8 @@ def generate_video_prompts_batch(
                                 feedback_items=feedback_items,
                                 selected_assets=selected_assets,
                                 has_clip=has_clip,
+                                eval_cases=eval_cases,
+                                lessons=lessons,
                             )
                         
                         status = "success"

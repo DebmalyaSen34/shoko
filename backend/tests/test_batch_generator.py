@@ -344,6 +344,63 @@ class BatchGeneratorTests(unittest.TestCase):
         self.assertIn("KNOWN PRIOR MISTAKES TO AVOID:", refiner_text)
         self.assertIn("Do not change wardrobe", refiner_text)
 
+    def test_batch_generation_merges_learning_eval_and_refines_from_its_suggestions(self):
+        clusters = self.make_clusters(1)
+        client = mock.MagicMock()
+        client.models.generate_content.side_effect = [
+            self.selection_response_for_ids(range(1), ["character.png"]),
+            self.response_for_ids(range(1)),
+        ]
+        learning_fail = {
+            "passed": False,
+            "score": 0.55,
+            "failed_cases": ["case-1"],
+            "case_results": [],
+            "suggestions": ["Prompt does not explicitly preserve wardrobe continuity."],
+        }
+        learning_pass = {
+            "passed": True,
+            "score": 0.95,
+            "failed_cases": [],
+            "case_results": [],
+            "suggestions": [],
+        }
+
+        with mock.patch(
+            "src.generator.upload.upload_file_and_wait",
+            side_effect=lambda _client, path: SimpleNamespace(name=f"uploaded-{path}"),
+        ), mock.patch(
+            "src.generator.orchestrator.run_learning_eval",
+            side_effect=[learning_fail, learning_pass],
+        ), mock.patch(
+            "src.generator.orchestrator._refine_prompt",
+            return_value="refined prompt " + " ".join(["specific"] * 160),
+        ) as refine:
+            results = generate_video_prompts_batch(
+                client=client,
+                clusters=clusters,
+                reference_assets=self.reference_assets,
+                assets_dir=self.assets_dir,
+                generate_initial_frame=False,
+                prompt_eval_cases_by_cluster={
+                    0: [
+                        {
+                            "id": "case-1",
+                            "enabled": True,
+                            "expected_behavior": ["Preserve wardrobe continuity."],
+                            "input": {"selected_assets": ["character.png"]},
+                        }
+                    ]
+                },
+            )
+
+        refine.assert_called_once()
+        self.assertIn(
+            "Prompt does not explicitly preserve wardrobe continuity.",
+            refine.call_args.kwargs["suggestions"],
+        )
+        self.assertTrue(results[0]["quality_report"]["learning_eval"]["passed"])
+
     def test_batch_generation_uploads_only_assets_selected_for_the_cluster(self):
         clusters = self.make_clusters(1)
         selected_character = self.reference_assets[0]

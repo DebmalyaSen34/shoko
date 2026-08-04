@@ -17,6 +17,19 @@ from config import settings as settings_module
 from src import config as config_module
 
 
+def test_server_reexports_refactored_helper_api():
+    for name in [
+        "build_clip_state",
+        "get_project_data",
+        "append_prompt_version",
+        "generate_chat_reply_with_tools",
+        "prompt_learning_store",
+        "read_json_file",
+        "stable_state_id",
+    ]:
+        assert hasattr(server, name)
+
+
 def test_health_endpoint_reports_backend_status():
     client = TestClient(server.app)
 

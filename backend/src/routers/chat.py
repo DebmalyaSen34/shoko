@@ -32,6 +32,7 @@ from src.project_manager import (
     make_chat_message,
     wants_clip_media_gallery,
 )
+
 router = APIRouter(tags=["chat"])
 
 

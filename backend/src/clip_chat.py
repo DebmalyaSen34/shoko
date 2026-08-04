@@ -28,7 +28,6 @@ from src.storage_paths import (
     project_data_dir,
     read_json_file,
     stable_json_hash,
-    stable_state_id,
     write_json_file,
 )
 from src.project_manager import (
@@ -1441,45 +1440,6 @@ def set_active_prompt_version_for_agent(project_name: str, context: dict, action
     }
 
 
-def _current_selection_lists(context: dict) -> tuple[list[dict], list[dict]]:
-    clip_state = context.get("clip_state") or {}
-    selection_state = clip_state.get("selection_state") or {}
-    selected_refs = list(selection_state.get("selected_assets") or [])
-    pinned_refs = list(selection_state.get("pinned_assets") or [])
-    return selected_refs, pinned_refs
-
-
-def _current_selection_asset_refs(context: dict) -> list[dict]:
-    selected_refs, pinned_refs = _current_selection_lists(context)
-    refs = selected_refs or pinned_refs
-    if not refs and context.get("selected_assets"):
-        return normalize_selection_asset_refs({"selected_assets": context.get("selected_assets")})
-    return refs
-
-
-def _resolve_asset_action_target(context: dict, asset_id: Optional[str], asset_path: Optional[str]) -> Optional[dict]:
-    available = context.get("assets") or {}
-    for category, items in available.items():
-        for asset in items:
-            enriched = _asset_identity((context.get("project") or {}).get("name", ""), category, asset)
-            if asset_id and enriched.get("asset_id") == asset_id:
-                return enriched
-            if asset_path:
-                candidate_path = str(asset.get("path") or asset.get("name") or "").lower()
-                candidate_base = os.path.basename(candidate_path)
-                target_path = str(asset_path).lower()
-                target_base = os.path.basename(target_path)
-                if candidate_path == target_path or candidate_base == target_base:
-                    return enriched
-    if asset_path:
-        return {
-            "asset_id": stable_state_id("asset", (context.get("project") or {}).get("name", ""), asset_path),
-            "name": os.path.basename(asset_path),
-            "path": asset_path,
-        }
-    return None
-
-
 def _current_selection_lists(context: dict) -> tuple[list[str], list[str]]:
     selection = (context.get("clip_state") or {}).get("selection_state") or {}
     asset_ids = list(selection.get("pinned_asset_ids") or selection.get("selected_asset_ids") or [])
@@ -2059,98 +2019,6 @@ def fallback_chat_reply(user_message: str, context: dict, action_suggestions: Op
         lines.append(f"\nReceived message for clip **{clip_name}**. Ready to analyze feedback, manage assets, or run prompt generation workflows.")
 
     return "\n".join(lines)
-
-
-def reference_frame_tool_schema() -> dict:
-    return {
-        "type": "function",
-        "function": {
-            "name": "extract_reference_frame",
-            "description": "Extract a frame at a specific timeline timestamp and attach it as a visual reference.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "timestamp": {"type": "string", "description": "Timestamp in MM:SS or HH:MM:SS format."},
-                    "reason": {"type": "string", "description": "Why this frame is being extracted as a reference."},
-                },
-                "required": ["timestamp"],
-            },
-        },
-    }
-
-
-def _response_output_items(response: Any) -> list[Any]:
-    choices = getattr(response, "choices", None)
-    if choices and isinstance(choices, list) and len(choices) > 0:
-        message = getattr(choices[0], "message", None)
-        if message:
-            tool_calls = getattr(message, "tool_calls", None) or []
-            content = getattr(message, "content", None)
-            return [*tool_calls, content] if content else list(tool_calls)
-    candidates = getattr(response, "candidates", None)
-    if candidates and isinstance(candidates, list) and len(candidates) > 0:
-        content = getattr(candidates[0], "content", None)
-        if content and hasattr(content, "parts"):
-            return list(content.parts)
-    return []
-
-
-def _output_item_value(item: Any, attr: str, default: Any = None) -> Any:
-    if isinstance(item, dict):
-        return item.get(attr, default)
-    return getattr(item, attr, default)
-
-
-def _response_text(response: Any) -> str:
-    text = getattr(response, "text", None)
-    if isinstance(text, str) and text.strip():
-        return text.strip()
-    choices = getattr(response, "choices", None)
-    if choices and len(choices) > 0:
-        msg = getattr(choices[0], "message", None)
-        if msg and getattr(msg, "content", None):
-            return str(msg.content).strip()
-    return ""
-
-
-def _tool_call_arguments(tool_call: Any) -> dict:
-    if isinstance(tool_call, dict):
-        args = tool_call.get("function", {}).get("arguments") or tool_call.get("arguments")
-    else:
-        func = getattr(tool_call, "function", None)
-        args = getattr(func, "arguments", None) if func else getattr(tool_call, "args", None)
-    if isinstance(args, str):
-        try:
-            return json.loads(args)
-        except Exception:
-            return {}
-    return args if isinstance(args, dict) else {}
-
-
-def _tool_call_id(tool_call: Any) -> str:
-    return str(_output_item_value(tool_call, "id", "tool_call"))
-
-
-def _extract_reference_frame_tool_calls(response: Any) -> list[dict]:
-    calls = []
-    for item in _response_output_items(response):
-        name = _output_item_value(item, "name") or getattr(getattr(item, "function", None), "name", None)
-        if name == "extract_reference_frame":
-            calls.append({"id": _tool_call_id(item), "args": _tool_call_arguments(item)})
-    return calls
-
-
-def _run_reference_frame_tool_call(project_name: str, clip_index: int, tool_call: dict) -> dict:
-    args = tool_call.get("args") or {}
-    timestamp = str(args.get("timestamp") or "").strip()
-    reason = str(args.get("reason") or "").strip()
-    return extract_reference_frame(
-        project_name=project_name,
-        current_clip_index=clip_index,
-        timestamp=timestamp,
-        reason=reason,
-        attach_to="current_feedback",
-    )
 
 
 def reference_frame_tool_schema() -> dict:

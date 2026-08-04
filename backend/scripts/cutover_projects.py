@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Cutover script for the projects router.
 
 For each route owned by src/routers/projects.py:

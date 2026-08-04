@@ -13,8 +13,57 @@ from src.routers.jobs import router as jobs_router
 from src.routers.projects import router as projects_router
 from src.routers.system import router as system_router
 from src.storage_paths import ASSETS_DIR, DATA_DIR
+from src.clip_chat import (
+    build_clip_chat_context,
+    compact_chat_context,
+    create_chat_agent_run,
+    dynamic_chat_suggestions,
+    ensure_clip_context_for_chat,
+    evaluate_agent_state_for_clip,
+    execute_safe_agent_run_tools,
+    fallback_chat_reply,
+    generate_chat_reply_with_tools,
+    infer_action_suggestions,
+    normalize_chat_reply_markdown,
+    plan_chat_agent_run,
+    recent_agent_runs_for_clip,
+    wants_clip_summary_or_analysis,
+    wants_regenerated_clip_summary,
+)
+from src.clip_state import (
+    build_clip_state,
+    prompt_eval_case_store,
+    prompt_learning_store,
+    update_clip_selection,
+)
+from src.job_manager import (
+    append_project_job_log,
+    append_prompt_version,
+    create_project_job,
+    execute_video_generation_job,
+    get_project_job,
+    list_recent_project_jobs,
+    prepare_continuity_reference_from_intent,
+    prompt_versions_for_record,
+    update_project_job,
+)
+from src.project_manager import (
+    append_project_event,
+    build_clip_media_gallery,
+    ensure_raw_feedback,
+    get_assets_list,
+    get_project_data,
+    load_project_events,
+)
+from src.reference_frames import extract_reference_frame, parse_explicit_reference_frame_request
+from src.storage_paths import read_json_file, stable_state_id
 
-app = FastAPI(title="Video Project Timeline & Feedback UI")
+try:
+    from openai import OpenAI
+except Exception:  # pragma: no cover - compatibility symbol for tests/patching.
+    OpenAI = None
+
+app = FastAPI(title="Shoko: A Video Feedback Engine")
 
 # Enable CORS for development
 app.add_middleware(

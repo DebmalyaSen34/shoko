@@ -3,9 +3,6 @@ name: Cross Platform Build
 on:
   pull_request:
   push:
-    branches:
-      - main
-      - new-ui
     tags:
       - "v*"
   workflow_dispatch:

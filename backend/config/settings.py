@@ -5,10 +5,13 @@ from typing import Iterable
 
 from dotenv import load_dotenv
 
+#TODO: remove gemini models and keep only OPENAI
 LITE_MODEL = "gemini-2.5-flash"
 REASONING_MODEL = "gemini-2.5-flash"
-OPENAI_LITE_MODEL = "gpt-5.4-mini"
-OPENAI_REASONING_MODEL = "gpt-5.4-mini"
+
+OPENAI_LITE_MODEL = "gpt-5.6-luna"
+OPENAI_REASONING_MODEL = "gpt-5.6-luna"
+
 OPENAI_IMAGE_MODEL = "gpt-image-1-mini"
 
 DEFAULT_FEEDBACK_JSON_PATH = "data/feedback/feedback.json"
@@ -17,7 +20,7 @@ DEFAULT_ASSETS_DIR = "assets"
 DEFAULT_OUTPUT_JSON = "data/output/generated_prompts/generated_prompts_openai_0.json"
 DEFAULT_OUTPUT_REPORT = "data/output/result_docs/workflow_report_openai_0.md"
 
-APP_NAME = "Loka15 Studio"
+APP_NAME = "Shoko"
 SECRET_ENV_KEYS = ("OPENAI_API_KEY", "GEMINI_API_KEY", "SEGMIND_API_KEY")
 RUNTIME_ENV_KEYS = (
     "LOKA_STORAGE_DIR",

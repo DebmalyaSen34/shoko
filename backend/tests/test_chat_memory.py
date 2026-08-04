@@ -1277,8 +1277,8 @@ def test_chat_learning_eval_action_uses_validator(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     patch_storage_dirs(monkeypatch, data_dir, assets_dir)
-    monkeypatch.setattr("src.prompt_feedback._client_for_prompt_provider", lambda provider: object())
-    monkeypatch.setattr("src.prompt_feedback._default_model_for_provider", lambda provider: "mock-model")
+    monkeypatch.setattr("src.clip_chat._client_for_prompt_provider", lambda provider: object())
+    monkeypatch.setattr("src.clip_chat._default_model_for_provider", lambda provider: "mock-model")
     monkeypatch.setattr(
         "src.clip_chat.run_learning_eval",
         lambda **_kwargs: {

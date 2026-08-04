@@ -2,12 +2,12 @@ import os
 from pathlib import Path
 from unittest import mock
 
-from config.settings import configured_app_storage_dir, default_app_storage_dir, load_runtime_env
+from config.settings import APP_NAME, configured_app_storage_dir, default_app_storage_dir, load_runtime_env
 
 
 def test_default_app_storage_dir_uses_macos_application_support():
     with mock.patch("config.settings.sys.platform", "darwin"), mock.patch.object(Path, "home", return_value=Path("/Users/alex")):
-        assert default_app_storage_dir() == "/Users/alex/Library/Application Support/Loka15 Studio"
+        assert default_app_storage_dir() == f"/Users/alex/Library/Application Support/{APP_NAME}"
 
 
 def test_default_app_storage_dir_uses_windows_local_app_data():
@@ -15,7 +15,7 @@ def test_default_app_storage_dir_uses_windows_local_app_data():
         mock.patch("config.settings.sys.platform", "win32"),
         mock.patch.dict(os.environ, {"LOCALAPPDATA": r"C:\Users\Alex\AppData\Local"}, clear=True),
     ):
-        assert default_app_storage_dir() == str(Path(r"C:\Users\Alex\AppData\Local") / "Loka15 Studio")
+        assert default_app_storage_dir() == str(Path(r"C:\Users\Alex\AppData\Local") / APP_NAME)
 
 
 def test_default_app_storage_dir_falls_back_to_windows_app_data():
@@ -23,7 +23,7 @@ def test_default_app_storage_dir_falls_back_to_windows_app_data():
         mock.patch("config.settings.sys.platform", "win32"),
         mock.patch.dict(os.environ, {"APPDATA": r"C:\Users\Alex\AppData\Roaming"}, clear=True),
     ):
-        assert default_app_storage_dir() == str(Path(r"C:\Users\Alex\AppData\Roaming") / "Loka15 Studio")
+        assert default_app_storage_dir() == str(Path(r"C:\Users\Alex\AppData\Roaming") / APP_NAME)
 
 
 def test_default_app_storage_dir_uses_xdg_on_linux():
@@ -31,7 +31,7 @@ def test_default_app_storage_dir_uses_xdg_on_linux():
         mock.patch("config.settings.sys.platform", "linux"),
         mock.patch.dict(os.environ, {"XDG_DATA_HOME": "/home/alex/.local/state"}, clear=True),
     ):
-        assert default_app_storage_dir() == "/home/alex/.local/state/Loka15 Studio"
+        assert default_app_storage_dir() == f"/home/alex/.local/state/{APP_NAME}"
 
 
 def test_configured_app_storage_dir_honors_os_override():

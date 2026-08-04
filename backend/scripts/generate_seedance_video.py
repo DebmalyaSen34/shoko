@@ -7,11 +7,13 @@ import json
 import mimetypes
 import os
 import re
+import sqlite3
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import quote
 
 import requests
@@ -139,6 +141,120 @@ class CachedAsset:
     provider: str
     media_type: str
     source_hash: str | None = None
+
+
+class AssetUrlCache(Protocol):
+    def get(self, *, source_hash: str, provider: str, media_type: str) -> CachedAsset | None:
+        ...
+
+    def upsert(
+        self,
+        *,
+        source_hash: str,
+        provider: str,
+        media_type: str,
+        public_url: str,
+        source_path: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        ...
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _default_sqlite_asset_cache_path() -> Path:
+    from src.storage_paths import DATA_DIR
+
+    return DATA_DIR / "asset_url_cache.sqlite3"
+
+
+class SQLiteAssetUrlCache:
+    """Local default cache for public media URLs returned by providers."""
+
+    def __init__(self, db_path: str | os.PathLike[str] | None = None) -> None:
+        self.db_path = Path(db_path) if db_path is not None else _default_sqlite_asset_cache_path()
+        self._ensure_schema()
+
+    def _connect(self) -> sqlite3.Connection:
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def _ensure_schema(self) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS media_asset_urls (
+                    source_hash TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    media_type TEXT NOT NULL,
+                    public_url TEXT NOT NULL,
+                    source_path TEXT,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (source_hash, provider, media_type)
+                )
+                """
+            )
+
+    def get(self, *, source_hash: str, provider: str, media_type: str) -> CachedAsset | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT public_url, provider, media_type, source_hash
+                FROM media_asset_urls
+                WHERE source_hash = ? AND provider = ? AND media_type = ?
+                LIMIT 1
+                """,
+                (source_hash, provider, media_type),
+            ).fetchone()
+        if row is None:
+            return None
+        return CachedAsset(
+            public_url=row["public_url"],
+            provider=row["provider"],
+            media_type=row["media_type"],
+            source_hash=row["source_hash"],
+        )
+
+    def upsert(
+        self,
+        *,
+        source_hash: str,
+        provider: str,
+        media_type: str,
+        public_url: str,
+        source_path: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        now = _utc_now_iso()
+        metadata_json = json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO media_asset_urls (
+                    source_hash,
+                    provider,
+                    media_type,
+                    public_url,
+                    source_path,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_hash, provider, media_type) DO UPDATE SET
+                    public_url = excluded.public_url,
+                    source_path = excluded.source_path,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = excluded.updated_at
+                """,
+                (source_hash, provider, media_type, public_url, source_path, metadata_json, now, now),
+            )
 
 
 class SupabaseAssetUrlCache:
@@ -271,6 +387,26 @@ class SupabaseAssetUrlCache:
         return f"{self.supabase_url}/storage/v1/object/public/{self.audio_bucket}/{object_path}"
 
 
+def create_asset_url_cache() -> AssetUrlCache:
+    backend = os.environ.get("LOKA_ASSET_CACHE_BACKEND", "sqlite").strip().lower()
+    if backend in {"", "sqlite", "local"}:
+        return SQLiteAssetUrlCache()
+    if backend == "supabase":
+        cache = SupabaseAssetUrlCache()
+        if not cache.enabled:
+            raise RuntimeError(
+                "LOKA_ASSET_CACHE_BACKEND=supabase requires SUPABASE_URL and "
+                "SUPABASE_SERVICE_ROLE_KEY, SUPABASE_KEY, or SUPABASE_ANON_KEY."
+            )
+        return cache
+    raise RuntimeError(f"Unsupported LOKA_ASSET_CACHE_BACKEND value: {backend}")
+
+
+def _reference_audio_upload_enabled() -> bool:
+    value = os.environ.get("LOKA_ENABLE_REFERENCE_AUDIO_UPLOAD", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def upload_to_segmind(
     file_path: str | os.PathLike[str],
     *,
@@ -329,7 +465,7 @@ def _cached_segmind_image_url(
     image_ref: str,
     *,
     api_key: str,
-    cache: SupabaseAssetUrlCache | None,
+    cache: AssetUrlCache | None,
     session: requests.Session | None = None,
 ) -> str | None:
     if is_url(image_ref):
@@ -368,13 +504,16 @@ def _cached_segmind_image_url(
 def _cached_supabase_audio_url(
     audio_ref: str,
     *,
-    cache: SupabaseAssetUrlCache | None,
+    cache: AssetUrlCache | None,
 ) -> str | None:
     if not audio_ref:
         return None
     if is_url(audio_ref):
         return audio_ref
     if cache is None:
+        return None
+    upload_audio = getattr(cache, "upload_audio", None)
+    if not callable(upload_audio):
         return None
 
     source_path = None
@@ -397,7 +536,7 @@ def _cached_supabase_audio_url(
     if cached:
         return cached.public_url
 
-    public_url = cache.upload_audio(
+    public_url = upload_audio(
         data=data,
         source_hash=source_hash,
         filename=filename,
@@ -540,7 +679,7 @@ def build_segmind_payload(
     *,
     item: dict[str, Any],
     api_key: str,
-    cache: SupabaseAssetUrlCache | None,
+    cache: AssetUrlCache | None,
     upload_assets: bool = True,
     use_local_initial_frame: bool = True,
     initial_image_url: str | None = None,
@@ -658,7 +797,11 @@ def build_segmind_payload(
         )
         prompt_text = _reference_map_block(reference_descriptions, first_frame_url) + prompt_text
 
-    if bool(item.get("generate_audio", False)) and bool(item.get("allow_reference_audio", False)):
+    if (
+        bool(item.get("generate_audio", False))
+        and bool(item.get("allow_reference_audio", False))
+        and _reference_audio_upload_enabled()
+    ):
         audio_ref = (
             item.get("audio_reference_path")
             or item.get("trimmed_audio_path")
@@ -701,7 +844,7 @@ def attach_prepared_segmind_payload(
     item: dict[str, Any],
     *,
     api_key: str | None = None,
-    cache: SupabaseAssetUrlCache | None = None,
+    cache: AssetUrlCache | None = None,
     upload_assets: bool = True,
     strict: bool = False,
     session: requests.Session | None = None,
@@ -742,7 +885,7 @@ def attach_prepared_segmind_payload(
         )
         return enriched
 
-    resolved_cache = cache if cache is not None else SupabaseAssetUrlCache()
+    resolved_cache = cache if cache is not None else create_asset_url_cache()
     try:
         payload = build_segmind_payload(
             item=enriched,
@@ -1105,7 +1248,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Error: SEGMIND_API_KEY environment variable is not set.", file=sys.stderr)
         return 1
 
-    cache = SupabaseAssetUrlCache()
+    cache = create_asset_url_cache()
     payload = build_segmind_payload(
         item=item,
         api_key=api_key or "dry-run",

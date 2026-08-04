@@ -51,18 +51,18 @@ class TestVideoGenerationWorkflow(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.test_dir)
 
-    @mock.patch("src.workflows.video_generation.SupabaseAssetUrlCache")
+    @mock.patch("src.workflows.video_generation.create_asset_url_cache")
     @mock.patch("src.workflows.video_generation.build_segmind_payload")
     @mock.patch("src.workflows.video_generation.create_seedance_task")
     @mock.patch("src.workflows.video_generation.save_video_bytes")
     @mock.patch("os.rename")
     @mock.patch("os.makedirs")
     def test_run_video_generation_workflow_successful(
-        self, mock_makedirs, mock_rename, mock_save, mock_create, mock_build_payload, mock_cache_class
+        self, mock_makedirs, mock_rename, mock_save, mock_create, mock_build_payload, mock_cache_factory
     ):
         # Arrange
         mock_cache = mock.Mock()
-        mock_cache_class.return_value = mock_cache
+        mock_cache_factory.return_value = mock_cache
         mock_build_payload.return_value = {
             "prompt": "mock prompt",
             "duration": 5,

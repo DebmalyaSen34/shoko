@@ -37,7 +37,7 @@ from src.workflows.prompt_generation import (
 )
 from src.workflows.clip_context import analyze_clip_context
 from src.workflows.project_setup import setup_project_workspace
-from scripts.generate_seedance_video import SupabaseAssetUrlCache, attach_prepared_segmind_payload
+from scripts.generate_seedance_video import attach_prepared_segmind_payload, create_asset_url_cache
 
 load_dotenv()
 
@@ -686,7 +686,7 @@ def run_pipeline(
         )
 
     results = []
-    segmind_cache = SupabaseAssetUrlCache()
+    segmind_cache = create_asset_url_cache()
     for cluster, generated in zip(video_clusters, batch_results):
         feedback_items = cluster["feedback_items"]
         clip = cluster["matched_clip"]

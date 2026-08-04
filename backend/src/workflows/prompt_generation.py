@@ -26,8 +26,8 @@ from src.schemas import PromptResult
 from src.workflows.clip_context import analyze_clip_context
 from config.settings import OPENAI_REASONING_MODEL
 from scripts.generate_seedance_video import (
-    SupabaseAssetUrlCache,
     attach_prepared_segmind_payload,
+    create_asset_url_cache,
 )
 
 class DialogueAssessmentResult(BaseModel):
@@ -426,7 +426,7 @@ def generate_video_prompts_from_plan(
 
     # Keep track of generated prompts by clip name to supply as continuity context
     previous_clip_prompts = {}
-    segmind_cache = SupabaseAssetUrlCache()
+    segmind_cache = create_asset_url_cache()
     lesson_store = PromptLearningStore(
         Path(os.path.abspath(output_base_dir)) / project_name / "prompt_lessons.json"
     )

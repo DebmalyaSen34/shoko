@@ -1,20 +1,150 @@
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from scripts.generate_seedance_video import (
+    SQLiteAssetUrlCache,
+    SupabaseAssetUrlCache,
     attach_prepared_segmind_payload,
     build_seedance_content,
     build_segmind_payload,
     clamp_duration,
+    create_asset_url_cache,
     create_seedance_task,
     load_prompt_item,
 )
 
 
 class SeedanceVideoScriptTests(unittest.TestCase):
+    def test_sqlite_cache_creates_table_and_returns_none_for_miss(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "cache" / "asset_url_cache.sqlite3"
+            cache = SQLiteAssetUrlCache(db_path)
+
+            self.assertTrue(db_path.exists())
+            self.assertIsNone(cache.get(source_hash="missing", provider="segmind", media_type="image"))
+
+            with sqlite3.connect(db_path) as connection:
+                table_names = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    ).fetchall()
+                }
+            self.assertIn("media_asset_urls", table_names)
+
+    def test_sqlite_cache_upserts_and_retrieves_asset(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache = SQLiteAssetUrlCache(Path(temp_dir) / "asset_url_cache.sqlite3")
+
+            cache.upsert(
+                source_hash="hash-1",
+                provider="segmind",
+                media_type="image",
+                public_url="https://example.com/one.jpg",
+                source_path="/tmp/one.jpg",
+                metadata={"width": 1280},
+            )
+            first = cache.get(source_hash="hash-1", provider="segmind", media_type="image")
+
+            self.assertIsNotNone(first)
+            self.assertEqual("https://example.com/one.jpg", first.public_url)
+            self.assertEqual("segmind", first.provider)
+            self.assertEqual("image", first.media_type)
+            self.assertEqual("hash-1", first.source_hash)
+
+            cache.upsert(
+                source_hash="hash-1",
+                provider="segmind",
+                media_type="image",
+                public_url="https://example.com/two.jpg",
+                source_path="/tmp/two.jpg",
+                metadata={"width": 1920},
+            )
+            second = cache.get(source_hash="hash-1", provider="segmind", media_type="image")
+            self.assertEqual("https://example.com/two.jpg", second.public_url)
+
+            with sqlite3.connect(cache.db_path) as connection:
+                row = connection.execute(
+                    """
+                    SELECT metadata_json
+                    FROM media_asset_urls
+                    WHERE source_hash = ? AND provider = ? AND media_type = ?
+                    """,
+                    ("hash-1", "segmind", "image"),
+                ).fetchone()
+            self.assertEqual({"width": 1920}, json.loads(row[0]))
+
+    def test_cache_factory_defaults_to_sqlite_even_with_supabase_credentials(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "asset_url_cache.sqlite3"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "SUPABASE_URL": "https://example.supabase.co",
+                    "SUPABASE_SERVICE_ROLE_KEY": "secret",
+                },
+                clear=True,
+            ), mock.patch(
+                "scripts.generate_seedance_video._default_sqlite_asset_cache_path",
+                return_value=db_path,
+            ):
+                cache = create_asset_url_cache()
+
+        self.assertIsInstance(cache, SQLiteAssetUrlCache)
+
+    def test_cache_factory_selects_supabase_only_when_requested(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "LOKA_ASSET_CACHE_BACKEND": "supabase",
+                "SUPABASE_URL": "https://example.supabase.co",
+                "SUPABASE_SERVICE_ROLE_KEY": "secret",
+            },
+            clear=True,
+        ):
+            cache = create_asset_url_cache()
+
+        self.assertIsInstance(cache, SupabaseAssetUrlCache)
+
+    def test_cache_factory_supabase_mode_requires_credentials(self):
+        with mock.patch.dict(os.environ, {"LOKA_ASSET_CACHE_BACKEND": "supabase"}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "requires SUPABASE_URL"):
+                create_asset_url_cache()
+
+    @mock.patch("scripts.generate_seedance_video.upload_data_url_to_segmind")
+    def test_build_segmind_payload_caches_uploaded_image_url_in_sqlite(self, mock_upload):
+        mock_upload.return_value = "https://segmind.example/uploaded.jpg"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "frame.jpg"
+            image_path.write_bytes(b"fake image bytes")
+            cache = SQLiteAssetUrlCache(Path(temp_dir) / "asset_url_cache.sqlite3")
+
+            first_payload = build_segmind_payload(
+                item={
+                    "video_model_prompt": "use @image1",
+                    "selected_assets": [str(image_path)],
+                },
+                api_key="test-key",
+                cache=cache,
+            )
+            second_payload = build_segmind_payload(
+                item={
+                    "video_model_prompt": "use @image1",
+                    "selected_assets": [str(image_path)],
+                },
+                api_key="test-key",
+                cache=cache,
+            )
+
+        self.assertEqual(["https://segmind.example/uploaded.jpg"], first_payload["reference_images"])
+        self.assertEqual(["https://segmind.example/uploaded.jpg"], second_payload["reference_images"])
+        mock_upload.assert_called_once()
+
     def test_load_prompt_item_selects_successful_video_item(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             prompt_path = os.path.join(temp_dir, "prompts.json")
@@ -246,11 +376,12 @@ class SeedanceVideoScriptTests(unittest.TestCase):
             "generate_audio": True,
         }
 
-        enriched = attach_prepared_segmind_payload(
-            item,
-            api_key="test-key",
-            cache=None,
-        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            enriched = attach_prepared_segmind_payload(
+                item,
+                api_key="test-key",
+                cache=SQLiteAssetUrlCache(Path(temp_dir) / "asset_url_cache.sqlite3"),
+            )
 
         self.assertEqual("segmind", enriched["video_provider"])
         self.assertEqual("ready", enriched["segmind_payload_status"])
@@ -346,6 +477,46 @@ class SeedanceVideoScriptTests(unittest.TestCase):
         self.assertEqual(5, payload["duration"])
         self.assertFalse(payload["generate_audio"])
         self.assertNotIn("reference_audios", payload)
+
+    def test_build_segmind_payload_does_not_upload_audio_by_default(self):
+        cache = mock.Mock()
+        payload = build_segmind_payload(
+            item={
+                "video_model_prompt": "prompt",
+                "audio_url": "https://example.com/audio.mp3",
+                "generate_audio": True,
+                "allow_reference_audio": True,
+            },
+            api_key="test-key",
+            cache=cache,
+        )
+
+        self.assertNotIn("reference_audios", payload)
+        cache.get.assert_not_called()
+
+    def test_build_segmind_payload_uploads_audio_when_explicitly_enabled(self):
+        cache = mock.Mock()
+        cache.get.return_value = None
+        cache.upload_audio.return_value = "https://cdn.example.com/audio.mp3"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = Path(temp_dir) / "trimmed.mp3"
+            audio_path.write_bytes(b"audio bytes")
+            with mock.patch.dict(os.environ, {"LOKA_ENABLE_REFERENCE_AUDIO_UPLOAD": "1"}):
+                payload = build_segmind_payload(
+                    item={
+                        "video_model_prompt": "prompt",
+                        "audio_reference_path": str(audio_path),
+                        "generate_audio": True,
+                        "allow_reference_audio": True,
+                    },
+                    api_key="test-key",
+                    cache=cache,
+                )
+
+        self.assertEqual(["https://cdn.example.com/audio.mp3"], payload["reference_audios"])
+        cache.upload_audio.assert_called_once()
+        cache.upsert.assert_called_once()
 
     @mock.patch("scripts.generate_seedance_video.SegmindClient")
     def test_create_seedance_task_uses_segmind_sdk_and_downloads_output(self, mock_client_class):

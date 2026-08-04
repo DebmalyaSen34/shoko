@@ -7,8 +7,8 @@ import json
 from typing import List, Optional
 
 from scripts.generate_seedance_video import (
-    SupabaseAssetUrlCache,
     build_segmind_payload,
+    create_asset_url_cache,
     create_seedance_task,
     save_video_bytes,
 )
@@ -51,7 +51,7 @@ def run_video_generation_workflow(
     os.makedirs(resolved_output_dir, exist_ok=True)
 
     generated_clip_paths = []
-    cache = SupabaseAssetUrlCache()
+    cache = create_asset_url_cache()
 
     for item in prompt_items:
         clip_name = item.get("clip_used")

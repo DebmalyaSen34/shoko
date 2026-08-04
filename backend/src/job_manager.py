@@ -36,8 +36,8 @@ from src.project_manager import (
 from src.workflows.prompt_generation import extract_last_frame, get_video_duration
 from scripts.generate_seedance_video import (
     SeedanceGenerationRecoveryError,
-    SupabaseAssetUrlCache,
     build_segmind_payload,
+    create_asset_url_cache,
     create_seedance_task,
     save_video_bytes,
 )
@@ -981,7 +981,7 @@ def generate_clip_video(
     output_path = _next_generated_video_path(project_name, clip.get("clip", "clip.mp4"), next_version_number)
     is_latest_version = selected_index == len(versions) - 1
 
-    cache = SupabaseAssetUrlCache()
+    cache = create_asset_url_cache()
     payload = None
     try:
         payload = build_segmind_payload(

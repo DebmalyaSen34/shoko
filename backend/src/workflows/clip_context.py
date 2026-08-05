@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from src.generator.client import Provider, generate_structured
 from src.generator.media import _frame_offsets_for_duration
 from src.generator.upload import OpenAIFileReference, _openai_file_reference
+from src.utils import resolve_media_binary
 from config.settings import OPENAI_REASONING_MODEL
 
 
@@ -53,7 +54,7 @@ def trim_clip_segment(source_path: str, output_path: str, duration_s: float, sou
     if duration <= 0:
         return False
     command = [
-        "ffmpeg",
+        resolve_media_binary("ffmpeg"),
         "-y",
         "-ss",
         f"{max(float(source_offset_s or 0.0), 0.0):.3f}",
@@ -70,7 +71,7 @@ def trim_clip_segment(source_path: str, output_path: str, duration_s: float, sou
         return True
 
     fallback = [
-        "ffmpeg",
+        resolve_media_binary("ffmpeg"),
         "-y",
         "-ss",
         f"{max(float(source_offset_s or 0.0), 0.0):.3f}",
@@ -97,7 +98,7 @@ def extract_context_frames(video_path: str, output_dir: str, duration_s: float) 
     for index, offset in enumerate(_frame_offsets_for_duration(duration_s), start=1):
         frame_path = os.path.join(output_dir, f"frame_{index:03d}.jpg")
         command = [
-            "ffmpeg", "-y", "-ss", f"{offset:.3f}", "-i", video_path,
+            resolve_media_binary("ffmpeg"), "-y", "-ss", f"{offset:.3f}", "-i", video_path,
             "-frames:v", "1", "-q:v", "3", frame_path
         ]
         completed = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=False)
@@ -137,7 +138,7 @@ def extract_audio_segment(input_audio_path: str, output_audio_path: str, start_s
         return False
     os.makedirs(os.path.dirname(output_audio_path), exist_ok=True)
     command = [
-        "ffmpeg",
+        resolve_media_binary("ffmpeg"),
         "-y",
         "-ss",
         f"{max(float(start_s or 0.0), 0.0):.3f}",

@@ -8,7 +8,7 @@ from typing import List, Optional
 
 from src.generator.client import generate_structured, _detect_provider, _default_model_for_provider
 from src.clustering import find_matching_clip_occurrence
-from src.utils import parse_timestamp_to_seconds
+from src.utils import parse_timestamp_to_seconds, resolve_media_binary
 
 class ReferencedTimestamp(BaseModel):
     timestamp: str = Field(..., description="The referenced timestamp in HH:MM:SS or MM:SS format mentioned in the remark that refers to another part of the video.")
@@ -21,7 +21,7 @@ def extract_frame_at_offset(clip_path: str, offset_s: float, output_frame_path: 
     """Extract a single frame from clip_path at offset_s using ffmpeg."""
     os.makedirs(os.path.dirname(output_frame_path), exist_ok=True)
     command = [
-        "ffmpeg", "-y", "-ss", f"{offset_s:.3f}", "-i", clip_path,
+        resolve_media_binary("ffmpeg"), "-y", "-ss", f"{offset_s:.3f}", "-i", clip_path,
         "-frames:v", "1", "-q:v", "3", output_frame_path
     ]
     try:

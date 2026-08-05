@@ -1,6 +1,8 @@
 import os
 import json
+import subprocess
 import sys
+from pathlib import Path
 from pathlib import PureWindowsPath
 from config.premiere_pro_conf import TICKS_PER_SEC
 from typing import Optional
@@ -15,6 +17,77 @@ def app_resource_path(*parts: str) -> str:
     src_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(src_dir)
     return os.path.join(project_root, *parts)
+
+
+MEDIA_BINARY_ENV_VARS = {
+    "ffmpeg": "LOKA_FFMPEG_PATH",
+    "ffprobe": "LOKA_FFPROBE_PATH",
+}
+
+
+def resolve_media_binary(binary: str) -> str:
+    """Resolve bundled media tools, falling back to PATH for development."""
+    normalized = binary.lower().removesuffix(".exe")
+    env_var = MEDIA_BINARY_ENV_VARS.get(normalized)
+    if not env_var:
+        raise ValueError(f"Unsupported media binary: {binary}")
+
+    override = os.environ.get(env_var, "").strip()
+    if override:
+        return override
+
+    names = [f"{normalized}.exe", normalized] if sys.platform.startswith("win") else [normalized, f"{normalized}.exe"]
+    roots = []
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        roots.append(Path(bundle_root))
+    roots.append(Path(app_resource_path()))
+    if getattr(sys, "frozen", False):
+        roots.append(Path(sys.executable).resolve().parent)
+
+    seen = set()
+    for root in roots:
+        for name in names:
+            for candidate in (root / "bin" / name, root / name):
+                candidate_key = str(candidate)
+                if candidate_key in seen:
+                    continue
+                seen.add(candidate_key)
+                if candidate.exists():
+                    return candidate_key
+
+    return f"{normalized}.exe" if sys.platform.startswith("win") else normalized
+
+
+def media_binary_status() -> dict[str, dict[str, object]]:
+    status = {}
+    for binary in MEDIA_BINARY_ENV_VARS:
+        resolved = resolve_media_binary(binary)
+        details = {
+            "path": resolved,
+            "exists": os.path.isabs(resolved) and os.path.exists(resolved),
+            "available": False,
+            "version": "",
+            "error": "",
+        }
+        try:
+            completed = subprocess.run(
+                [resolved, "-version"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+                timeout=8,
+            )
+            details["available"] = completed.returncode == 0
+            output = (completed.stdout or completed.stderr or "").strip()
+            details["version"] = output.splitlines()[0] if output else ""
+            if completed.returncode != 0:
+                details["error"] = (completed.stderr or completed.stdout or "").strip()[:500]
+        except Exception as exc:
+            details["error"] = str(exc)
+        status[binary] = details
+    return status
 
 def parse_timestamp_to_seconds(ts_str: Optional[str]) -> Optional[float]:
     """Convert MM:SS, H:MM:SS, or raw seconds to seconds."""

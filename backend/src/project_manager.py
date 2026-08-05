@@ -23,6 +23,7 @@ from src.storage_paths import (
     stable_json_hash,
     write_json_file,
 )
+from src.utils import resolve_media_binary
 
 
 def get_project_data(project_name: str):
@@ -554,7 +555,7 @@ def _waveform_cache_path(project_name: str, audio_path: Path, segment: dict, bin
 
 def _decode_waveform_samples(audio_path: Path, start_s: float, duration: float) -> bytes:
     command = [
-        "ffmpeg",
+        resolve_media_binary("ffmpeg"),
         "-v",
         "error",
         "-ss",

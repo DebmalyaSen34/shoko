@@ -16,6 +16,7 @@ load_dotenv()
 
 from src.generator.client import generate_structured
 from src.generator.media import _frame_offsets_for_duration
+from src.utils import resolve_media_binary
 from src.generator.prompts import (
     build_prompt_lesson_query,
     format_prompt_lessons,
@@ -253,7 +254,7 @@ def extract_frames_per_second(video_path: str, output_dir: str, duration_s: floa
     for index, offset in enumerate(_frame_offsets_for_duration(duration_s), start=1):
         frame_path = os.path.join(output_dir, f"frame_{index:03d}.jpg")
         command = [
-            "ffmpeg", "-y", "-ss", f"{offset:.3f}", "-i", video_path,
+            resolve_media_binary("ffmpeg"), "-y", "-ss", f"{offset:.3f}", "-i", video_path,
             "-frames:v", "1", "-q:v", "3", frame_path
         ]
         try:
@@ -270,7 +271,7 @@ def extract_frames_per_second(video_path: str, output_dir: str, duration_s: floa
 def get_video_duration(video_path: str) -> float:
     """Gets the duration of a video file using ffprobe."""
     command = [
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+        resolve_media_binary("ffprobe"), "-v", "error", "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1", video_path
     ]
     try:
@@ -290,7 +291,7 @@ def extract_last_frame(video_path: str, output_dir: str, duration_s: float) -> O
     offset = max(0.0, duration - 0.1)
     frame_path = os.path.join(output_dir, "last_frame.jpg")
     command = [
-        "ffmpeg", "-y", "-ss", f"{offset:.3f}", "-i", video_path,
+        resolve_media_binary("ffmpeg"), "-y", "-ss", f"{offset:.3f}", "-i", video_path,
         "-frames:v", "1", "-q:v", "3", frame_path
     ]
     try:
@@ -309,7 +310,7 @@ def extract_audio_segment(input_audio_path: str, output_audio_path: str, start_s
     if duration <= 0:
         return False
     command = [
-        "ffmpeg", "-y",
+        resolve_media_binary("ffmpeg"), "-y",
         "-ss", f"{start_s:.3f}",
         "-t", f"{duration:.3f}",
         "-i", input_audio_path,

@@ -6,6 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from src.config import get_runtime_config, update_runtime_secrets
 from src.schema import RuntimeSecretsUpdate
 from src.storage_paths import APP_VERSION, BACKEND_STARTED_AT
+from src.utils import media_binary_status
 
 router = APIRouter(tags=["system"])
 
@@ -47,6 +48,11 @@ async def shutdown(request: Request, background_tasks: BackgroundTasks):
 @router.get("/api/config/runtime")
 def get_runtime_config_endpoint():
     return get_runtime_config()
+
+
+@router.get("/api/system/media-binaries")
+def get_media_binaries_endpoint():
+    return media_binary_status()
 
 
 @router.post("/api/config/secrets")

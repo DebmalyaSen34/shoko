@@ -50,6 +50,14 @@ def main() -> int:
         str(backend_root / "backend_server.py"),
     ]
 
+    ffmpeg_bin_dir = os.environ.get("LOKA_BUNDLE_FFMPEG_DIR", "").strip()
+    if ffmpeg_bin_dir:
+        for binary_name in ("ffmpeg.exe", "ffprobe.exe"):
+            binary_path = Path(ffmpeg_bin_dir) / binary_name
+            if not binary_path.exists():
+                raise FileNotFoundError(f"Missing bundled media binary: {binary_path}")
+            command.extend(["--add-binary", f"{binary_path}{os.pathsep}bin"])
+
     env = os.environ.copy()
     env["PYINSTALLER_CONFIG_DIR"] = str(pyinstaller_config_dir)
 

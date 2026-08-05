@@ -85,6 +85,28 @@ jobs:
         shell: bash
         run: uv pip install --python "$VENV_PYTHON" -r requirements.txt -r requirements-build.txt
 
+      - name: Download FFmpeg for Windows bundle
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          ffmpeg_url="https://github.com/GyanD/codexffmpeg/releases/download/7.1.1/ffmpeg-7.1.1-essentials_build.zip"
+          ffmpeg_sha256="04861d3339c5ebe38b56c19a15cf2c0cc97f5de4fa8910e4d47e5e6404e4a2d4"
+          ffmpeg_zip="$RUNNER_TEMP/ffmpeg-essentials.zip"
+          ffmpeg_extract_dir="$RUNNER_TEMP/ffmpeg-essentials"
+
+          curl -L --fail --retry 3 --output "$ffmpeg_zip" "$ffmpeg_url"
+          actual_sha256="$(sha256sum "$ffmpeg_zip" | awk '{print $1}')"
+          if [[ "$actual_sha256" != "$ffmpeg_sha256" ]]; then
+            echo "FFmpeg checksum mismatch. Expected $ffmpeg_sha256, got $actual_sha256."
+            exit 1
+          fi
+
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath '$ffmpeg_zip' -DestinationPath '$ffmpeg_extract_dir' -Force"
+          ffmpeg_bin_dir="$(dirname "$(find "$ffmpeg_extract_dir" -type f -name ffmpeg.exe -print -quit)")"
+          test -f "$ffmpeg_bin_dir/ffmpeg.exe"
+          test -f "$ffmpeg_bin_dir/ffprobe.exe"
+          echo "LOKA_BUNDLE_FFMPEG_DIR=$ffmpeg_bin_dir" >> "$GITHUB_ENV"
+
       - name: Run backend tests
         shell: bash
         run: '"$VENV_PYTHON" -m pytest backend/tests --ignore=backend/tests/test_supabase_client.py'
@@ -120,6 +142,10 @@ jobs:
             if curl -fsS http://127.0.0.1:8765/health >/dev/null; then
               curl -fsS http://127.0.0.1:8765/version
               curl -fsS http://127.0.0.1:8765/api/config/runtime >/dev/null
+              if [[ "${{ runner.os }}" == "Windows" ]]; then
+                media_json="$(curl -fsS http://127.0.0.1:8765/api/system/media-binaries)"
+                MEDIA_JSON="$media_json" "$VENV_PYTHON" -c "import json, os, sys; data=json.loads(os.environ['MEDIA_JSON']); print(data); missing=[name for name, details in data.items() if not details.get('available')]; sys.exit(1 if missing else 0)"
+              fi
               exit 0
             fi
             if ! kill -0 "$backend_pid" >/dev/null 2>&1; then

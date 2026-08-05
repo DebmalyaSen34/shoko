@@ -3,6 +3,8 @@ import os
 import subprocess
 from typing import List
 
+from src.utils import resolve_media_binary
+
 def _aspect_ratio(frame_size: str) -> str:
     try:
         width_text, height_text = frame_size.lower().split("x", 1)
@@ -87,7 +89,7 @@ def _extract_video_frames(
     for index, offset in enumerate(offsets, start=1):
         frame_path = os.path.join(output_dir, f"frame_{index:03d}.jpg")
         command = [
-            "ffmpeg",
+            resolve_media_binary("ffmpeg"),
             "-y",
             "-ss",
             f"{offset:.3f}",

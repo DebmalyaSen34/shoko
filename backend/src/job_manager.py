@@ -309,6 +309,8 @@ def append_prompt_version_to_records(
         new_entry = prompt_history_entry(gen_item, provider)
         history.append(new_entry)
         prompt_record["history"] = history
+        prompt_record["timestamp"] = new_entry.get("timestamp")
+        prompt_record["provider"] = provider
         prompt_record["video_model_prompt"] = gen_item.get("video_model_prompt")
         prompt_record["selected_assets"] = gen_item.get("selected_assets", [])
         prompt_record["explanation"] = gen_item.get("explanation")
@@ -328,6 +330,8 @@ def append_prompt_version_to_records(
         "clip_used": matched_clip,
         "matched_clip": gen_item.get("matched_clip") or matched_clip,
         "clip_occurrence": gen_item.get("clip_occurrence"),
+        "timestamp": new_entry.get("timestamp"),
+        "provider": provider,
         "category": gen_item.get("category", "video"),
         "generation_type": gen_item.get("prompt_format", gen_item.get("generation_type", "complex")),
         "video_model_prompt": gen_item.get("video_model_prompt"),

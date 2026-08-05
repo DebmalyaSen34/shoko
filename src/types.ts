@@ -244,6 +244,8 @@ export type PromptVersion = {
   is_latest?: boolean;
   clip_index?: number;
   timestamp?: string;
+  created_at?: string;
+  updated_at?: string;
   provider?: string;
   video_provider?: string;
   segmind_model?: string;

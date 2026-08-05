@@ -273,6 +273,24 @@ function CompactTimeline({
     return () => controller.abort();
   }, [projectData?.project_name, projectData?.timeline.length, selectedClipIndex, promptStateKey]);
 
+  async function refreshSelectedClipState(clipIndex: number) {
+    if (!projectData?.project_name) return;
+    try {
+      const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectData.project_name)}/clips/${clipIndex}/state`));
+      if (!response.ok) throw new Error("Failed to load clip state");
+      const state = (await response.json()) as ClipState;
+      setSelectedClipState(state);
+    } catch {
+      // Keep the last known state visible.
+    }
+  }
+
+  async function generateVideoAndRefreshClipState(clipIndex: number, promptVersionIndex?: number) {
+    const result = await onGenerateVideo(clipIndex, promptVersionIndex);
+    await refreshSelectedClipState(clipIndex);
+    return result;
+  }
+
   useEffect(() => {
     if (!projectData?.project_name) return;
     const controller = new AbortController();
@@ -534,7 +552,7 @@ function CompactTimeline({
         externalGeneratingVideo={generatingVideoKeys.has(`${clampedSelectedClipIndex}:${selectedVersionIndex}`)}
         executeWorkflow={executeWorkflow}
         onAddManualFeedback={onAddManualFeedback}
-        onGenerateVideo={onGenerateVideo}
+        onGenerateVideo={generateVideoAndRefreshClipState}
         onOpenDetails={openResultFromVersion}
         onPreview={onPreview}
         promptFeedbackTarget={promptFeedbackTarget}

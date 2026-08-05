@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { AssetFile, ClipAssetReference, ClipState, FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptFeedbackTarget, PromptVersion, ReferencedFrameState, TimelineClip } from "../../types";
 import { staticUrl } from "../../lib/api";
-import { basename, versionLabel } from "../../lib/format";
+import { basename, generatedVideoLabel, versionLabel } from "../../lib/format";
 import { FormattedPrompt } from "../FormattedPrompt";
 import { Icon } from "../Icon";
 
@@ -333,7 +333,7 @@ export function ClipInspectorPanel({
                   </span>
                 </div>
                 <div className="generated-video-meta">
-                  <strong>{video.label || `Generated video v${video.version}`}</strong>
+                  <strong>{generatedVideoLabel(video)}</strong>
                   <span>{versionLabel(versions[versionIndex], versionIndex)}</span>
                 </div>
               </button>

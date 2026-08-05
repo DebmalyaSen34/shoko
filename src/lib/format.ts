@@ -1,4 +1,4 @@
-import type { PromptRecord, PromptVersion } from "../types";
+import type { GeneratedVideo, PromptRecord, PromptVersion } from "../types";
 
 export function formatProjectName(name: string) {
   return name.replace(/-/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
@@ -18,11 +18,17 @@ export function getVersions(prompt?: PromptRecord | null) {
   if (prompt.video_model_prompt) {
     const topLevelVersion = { ...prompt };
     delete topLevelVersion.history;
+    topLevelVersion.timestamp = topLevelVersion.timestamp || topLevelVersion.updated_at || topLevelVersion.created_at;
     const lastVersion = versions[versions.length - 1];
     if (!lastVersion || promptVersionSignature(lastVersion) !== promptVersionSignature(topLevelVersion)) {
       versions.push(topLevelVersion);
     } else {
-      versions[versions.length - 1] = { ...lastVersion, ...topLevelVersion };
+      versions[versions.length - 1] = {
+        ...lastVersion,
+        ...topLevelVersion,
+        timestamp: topLevelVersion.timestamp || lastVersion.timestamp,
+        provider: topLevelVersion.provider || lastVersion.provider,
+      };
     }
   }
   return versions;
@@ -40,9 +46,22 @@ function promptVersionSignature(version: PromptVersion) {
 }
 
 export function versionLabel(version: PromptVersion, index: number) {
-  const date = version.timestamp ? new Date(version.timestamp) : new Date();
-  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return `Version ${index + 1} (${(version.provider || "AI").toUpperCase()} - ${time})`;
+  const time = formatOptionalClockTime(version.timestamp);
+  const provider = (version.provider || "AI").toUpperCase();
+  return time ? `Version ${index + 1} (${provider} - ${time})` : `Version ${index + 1} (${provider})`;
+}
+
+export function generatedVideoLabel(video: GeneratedVideo) {
+  const label = video.label || `Generated video v${video.version}`;
+  const time = formatOptionalClockTime(video.timestamp);
+  return time ? `${label} (${time})` : label;
+}
+
+function formatOptionalClockTime(value?: string | null) {
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime())
+    ? date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "";
 }
 
 export function formatSeconds(seconds?: number | null): string {

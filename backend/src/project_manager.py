@@ -15,6 +15,7 @@ from src.storage_paths import (
     ASSETS_DIR,
     DATA_DIR,
     atomic_write_json_file,
+    file_mtime_iso,
     now_iso,
     project_assets_dir,
     project_data_dir,
@@ -408,7 +409,17 @@ def generated_videos_for_version(version: Optional[dict]) -> list[dict]:
     if not version:
         return []
     videos = version.get("generated_videos")
-    return videos if isinstance(videos, list) else []
+    if not isinstance(videos, list):
+        return []
+    normalized = []
+    for video in videos:
+        if not isinstance(video, dict):
+            continue
+        item = dict(video)
+        if not item.get("timestamp") and item.get("path"):
+            item["timestamp"] = file_mtime_iso(Path(str(item.get("path"))))
+        normalized.append(item)
+    return normalized
 
 
 def wants_clip_media_gallery(text: str) -> bool:

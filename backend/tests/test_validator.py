@@ -3,6 +3,38 @@ from unittest import mock
 from src.generator.validator import merge_learning_eval_report, run_learning_eval, run_quality_check
 
 class ValidatorTests(unittest.TestCase):
+    @staticmethod
+    def unified_prompt(extra: str = "") -> str:
+        return (
+            "STYLE & LOOK:\n"
+            "Warm naturalistic interior light with soft contrast, grounded color, clear faces, and a calm handheld documentary feel. "
+            "The frame keeps a tactile room texture, stable skin tones, and a gentle emotional tone.\n\n"
+            "REFERENCE USE:\n"
+            "image 1: use for character facial identity, hair, skin tone, and wardrobe details only.\n"
+            "image 2: use for room layout, wall color, and daylight direction only.\n"
+            "original clip reference images: use for current framing, body scale, wardrobe continuity, and emotional state.\n\n"
+            "SUBJECTS & CONTINUITY:\n"
+            "Rian remains the same character from the original clip reference images, with matching face, hair, body proportions, shirt, and posture. "
+            "The room layout, lighting direction, and camera height remain continuous. Mother's presence and hand placement remain stable where visible.\n\n"
+            "FEEDBACK DIRECTIVES:\n"
+            "Make the emotional beat playful through a softened mouth, raised cheeks, relaxed shoulders, and attentive eyes. "
+            "Preserve visible wardrobe and slow deliberate hand movement. Keep all contact and expression changes readable.\n\n"
+            "SCENE ACTION:\n"
+            "The shot begins from the original clip composition and holds on Rian as his expression changes gradually. "
+            "He shifts attention toward the person beside him while his hands move with controlled weight. "
+            "The action stays simple, visible, and focused on the corrected performance note, with background motion kept subtle.\n\n"
+            "CAMERA & MOTION:\n"
+            "Use a locked medium close-up with a barely perceptible push-in. Rian stays centered while his attention and body angle remain clear. "
+            "If the frame adjusts, re-anchor him in the same room facing the same direction.\n\n"
+            "AUDIO:\n"
+            "No audio changes requested; preserve the supplied dialogue/audio behavior if present and do not invent new dialogue.\n\n"
+            "QUALITY & CONSTRAINTS:\n"
+            "Faces remain clear, stable, and recognizable. Wardrobe, hair, body proportions, skin tone, lighting, and room layout remain consistent across the shot. "
+            "Motion is natural and controlled, with stable hands, coherent eye direction, clean edges, sharp detail, and smooth frame-to-frame continuity. "
+            "Generate the video without subtitles, captions, logos, or watermarks. "
+            f"{extra}"
+        )
+
     def test_word_count_check(self):
         # Prompt under 150 words
         short_prompt = "A simple prompt with few words."
@@ -57,6 +89,26 @@ class ValidatorTests(unittest.TestCase):
         self.assertTrue(any("image 2" in s for s in res["suggestions"]))
         self.assertTrue(any("Original clip reference images" in s for s in res["suggestions"]))
 
+    def test_unified_prompt_structure_is_required(self):
+        prompt = (
+            "A long unstructured prompt with image 1 and original clip reference images "
+            "that includes enough detail to pass word count but omits the required section labels. "
+            * 20
+        )
+
+        res = run_quality_check(
+            provider="gemini",
+            client=mock.MagicMock(),
+            model="mock-model",
+            prompt=prompt,
+            feedback_items=[],
+            selected_assets=["char.png"],
+            has_clip=True,
+        )
+
+        self.assertFalse(res["passed"])
+        self.assertTrue(any("unified prompt section structure" in s for s in res["suggestions"]))
+
     @mock.patch("src.generator.validator.generate_structured")
     def test_semantic_checks(self, mock_generate_structured):
         # Mock semantic LLM evaluation response
@@ -69,9 +121,7 @@ class ValidatorTests(unittest.TestCase):
             "suggestions": []
         }
         
-        valid_prompt = (
-            "A long prompt with image 1 and image 2 that starts with original clip reference images and describes a character wearing a green shirt. " * 15
-        )
+        valid_prompt = self.unified_prompt("The character wears a green shirt.")
         
         res = run_quality_check(
             provider="gemini",
@@ -173,10 +223,7 @@ class ValidatorTests(unittest.TestCase):
             "suggestions": ["Prompt does not explicitly preserve wardrobe continuity."],
             "case_results": [{"case_id": "case-llm", "passed": False, "score": 0.45}],
         }
-        prompt = (
-            "A detailed prompt with image 1 and original clip reference images that must preserve visible wardrobe and slow deliberate hand movement. "
-            * 15
-        )
+        prompt = self.unified_prompt()
 
         res = run_learning_eval(
             provider="gemini",
@@ -202,10 +249,7 @@ class ValidatorTests(unittest.TestCase):
 
     @mock.patch("src.generator.validator.generate_structured", side_effect=RuntimeError("judge down"))
     def test_learning_eval_judge_failure_is_non_blocking(self, _mock_generate_structured):
-        prompt = (
-            "A detailed prompt with image 1 and original clip reference images that must preserve visible wardrobe and slow deliberate hand movement. "
-            * 15
-        )
+        prompt = self.unified_prompt()
 
         res = run_learning_eval(
             provider="gemini",

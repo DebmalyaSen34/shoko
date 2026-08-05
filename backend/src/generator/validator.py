@@ -19,7 +19,18 @@ NEGATIVE_PATTERNS = [
     r"\bno\s+flicker\b",
 ]
 
-SEGMIND_HANDLE_PATTERN = r"@(?:image|video|ref)\d+"
+SEGMIND_HANDLE_PATTERN = r"@(?:image|video|audio|ref)?\d+"
+
+REQUIRED_PROMPT_SECTIONS = [
+    "STYLE & LOOK:",
+    "REFERENCE USE:",
+    "SUBJECTS & CONTINUITY:",
+    "FEEDBACK DIRECTIVES:",
+    "SCENE ACTION:",
+    "CAMERA & MOTION:",
+    "AUDIO:",
+    "QUALITY & CONSTRAINTS:",
+]
 
 
 class LearningEvalJudgeResult(BaseModel):
@@ -44,6 +55,21 @@ def _mentions_original_clip_reference(prompt_lower: str) -> bool:
     )
 
 
+def _missing_or_misordered_sections(prompt: str) -> List[str]:
+    positions = []
+    missing = []
+    for section in REQUIRED_PROMPT_SECTIONS:
+        index = prompt.find(section)
+        if index < 0:
+            missing.append(section)
+        positions.append(index)
+    if missing:
+        return missing
+    if positions != sorted(positions):
+        return ["required sections are not in the mandated order"]
+    return []
+
+
 def _deterministic_learning_case_check(prompt: str, case: Dict[str, Any]) -> Dict[str, Any]:
     prompt_lower = prompt.lower()
     suggestions = []
@@ -53,6 +79,13 @@ def _deterministic_learning_case_check(prompt: str, case: Dict[str, Any]) -> Dic
     if word_count < 150:
         failed_checks.append("prompt_length")
         suggestions.append(f"Eval case {case.get('id')}: prompt is too short ({word_count} words).")
+
+    structure_issues = _missing_or_misordered_sections(prompt)
+    if structure_issues:
+        failed_checks.append("prompt_structure")
+        suggestions.append(
+            f"Eval case {case.get('id')}: use the unified prompt section structure; missing/misordered: {', '.join(structure_issues)}."
+        )
 
     forbidden_found = []
     for pat in FORBIDDEN_WORDS + NEGATIVE_PATTERNS:
@@ -236,6 +269,14 @@ def run_quality_check(
         suggestions.append(f"Prompt is too short ({word_count} words). Expand with more visual details to reach at least 150 words.")
         
     prompt_lower = prompt.lower()
+
+    structure_issues = _missing_or_misordered_sections(prompt)
+    if structure_issues:
+        suggestions.append(
+            "Use the unified prompt section structure in this exact order: "
+            + ", ".join(REQUIRED_PROMPT_SECTIONS)
+            + f" Missing/misordered: {', '.join(structure_issues)}."
+        )
     
     # Check for forbidden words
     for pat in FORBIDDEN_WORDS:
@@ -264,7 +305,7 @@ def run_quality_check(
     if stale_handles:
         forbidden_found.extend(stale_handles)
         suggestions.append(
-            "Replace all @image/@video/@ref handles with Segmind wording such as image 1, image 2, or original clip reference images."
+            "Replace all @image/@video/@audio/@ref/@1 handles with Segmind wording such as image 1, image 2, generated initial frame image, or original clip reference images."
         )
 
     # Check reference mentions

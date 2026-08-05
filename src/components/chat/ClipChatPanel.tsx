@@ -26,6 +26,7 @@ import type {
 import { getVersions } from "../../lib/format";
 import { apiUrl, createPromptFeedback, createPromptLesson, executeClipChatAction, revisePromptFromFeedback, staticUrl, suggestPromptLesson } from "../../lib/api";
 import { Icon } from "../Icon";
+import { FormattedPrompt } from "../FormattedPrompt";
 import { WorkflowRunningLabel } from "../WorkflowRunningLabel";
 import { PromptInputBox } from "../ui/ai-prompt-box";
 
@@ -1238,6 +1239,9 @@ function ChatVideoPreview({ item, posterUrl }: { item: ClipChatMedia; posterUrl?
 
 function MarkdownMessage({ text }: { text: string }) {
   const markdown = normalizeChatMarkdown(text);
+  if (containsUnifiedPrompt(markdown)) {
+    return <FormattedPrompt className="chat-formatted-prompt" text={markdown} />;
+  }
 
   return (
     <ReactMarkdown
@@ -1252,6 +1256,14 @@ function MarkdownMessage({ text }: { text: string }) {
     >
       {markdown}
     </ReactMarkdown>
+  );
+}
+
+function containsUnifiedPrompt(text: string) {
+  return (
+    /^\s*STYLE & LOOK:/im.test(text) &&
+    /^\s*REFERENCE USE:/im.test(text) &&
+    /^\s*QUALITY & CONSTRAINTS:/im.test(text)
   );
 }
 

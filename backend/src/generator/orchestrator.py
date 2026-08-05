@@ -173,8 +173,10 @@ def _refine_prompt(
         f"DRAFT PROMPT TO CORRECT:\n{draft_prompt}\n\n"
         f"Task:\n"
         f"Rewrite the draft prompt to address all suggestions. For example:\n"
+        f"- Preserve or restore the unified section labels in this exact order: STYLE & LOOK, REFERENCE USE, SUBJECTS & CONTINUITY, FEEDBACK DIRECTIVES, SCENE ACTION, CAMERA & MOTION, AUDIO, QUALITY & CONSTRAINTS.\n"
         f"- Convert any negative constraints (like 'no blur', 'no flickering') into positive statements (like 'crisp, stable motion').\n"
         f"- Remove any forbidden terms (like 'epic').\n"
+        f"- Replace any @image/@video/@audio/@ref/@1 style handles with Segmind-compatible wording like image 1, image 2, generated initial frame image, or original clip reference images.\n"
         f"- Ensure it meets length requirements while preserving all original staging, actions, character garments, and Segmind reference wording (like image 1 or original clip reference images).\n"
         f"Return the refined prompt in your structured output."
     )

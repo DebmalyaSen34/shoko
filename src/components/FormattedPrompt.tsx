@@ -7,20 +7,86 @@ type FormattedPromptProps = {
   style?: CSSProperties;
 };
 
+const CANONICAL_PROMPT_HEADERS = [
+  "REFERENCE IMAGE MAP",
+  "STYLE & LOOK",
+  "REFERENCE USE",
+  "SUBJECTS & CONTINUITY",
+  "FEEDBACK DIRECTIVES",
+  "SCENE ACTION",
+  "CAMERA & MOTION",
+  "AUDIO",
+  "QUALITY & CONSTRAINTS",
+];
+
+const LEGACY_PROMPT_HEADERS = [
+  "Style & Mood",
+  "Narrative Summary",
+  "Dynamic Description",
+  "Static Description",
+  "Quality",
+  "Prompt",
+  "Explanation",
+  "Initial Frame Prompt",
+  "Video Model Prompt",
+  "Dialogue & Audio",
+  "Audio Sync",
+  "Characters & Wardrobe",
+  "Camera Movement",
+  "Transition",
+];
+
+const PROMPT_HEADERS = [...CANONICAL_PROMPT_HEADERS, ...LEGACY_PROMPT_HEADERS];
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function displayHeader(header: string) {
+  const canonical = CANONICAL_PROMPT_HEADERS.find((candidate) => candidate === header.toUpperCase());
+  if (canonical) {
+    return canonical
+      .toLowerCase()
+      .split(" ")
+      .map((word) => (word === "&" ? word : word.charAt(0).toUpperCase() + word.slice(1)))
+      .join(" ");
+  }
+
+  return header
+    .split(/\s+/)
+    .map((word) => {
+      if (word.toLowerCase() === "&") return "&";
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join(" ");
+}
+
+function renderInlineMarkdown(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, index) => {
+    const bold = part.match(/^\*\*([^*]+)\*\*$/);
+    if (bold) {
+      return <strong key={index}>{bold[1]}</strong>;
+    }
+    return part;
+  });
+}
+
 export function FormattedPrompt({ text, className, style }: FormattedPromptProps) {
   if (!text) return null;
 
-  // Regex to match section headers (e.g., "Style & Mood:", "1. **Style & Mood:**", etc.)
-  const headerRegex = /(?:\d+\.\s*)?\*?\*?(Style\s*&\s*Mood|Narrative\s*Summary|Dynamic\s*Description|Static\s*Description|Quality|Prompt|Explanation|Initial\s*Frame\s*Prompt|Video\s*Model\s*Prompt|Dialogue\s*&\s*Audio|Audio\s*Sync|Characters\s*&\s*Wardrobe|Camera\s*Movement|Transition)\*?\*?:/gi;
+  const headerPattern = PROMPT_HEADERS.map(escapeRegex).join("|");
+  const headerRegex = new RegExp(`(?:^|\\n)(?:\\d+\\.\\s*)?\\*?\\*?(${headerPattern})\\*?\\*?:`, "gi");
 
   const matches: { index: number; header: string; raw: string }[] = [];
   let match;
   headerRegex.lastIndex = 0;
   while ((match = headerRegex.exec(text)) !== null) {
+    const lineBreakOffset = match[0].startsWith("\n") ? 1 : 0;
     matches.push({
-      index: match.index,
+      index: match.index + lineBreakOffset,
       header: match[1], // The matched section title (e.g., "Style & Mood")
-      raw: match[0],    // The raw matched string (e.g., "**Style & Mood**:")
+      raw: match[0].slice(lineBreakOffset),    // The raw matched string (e.g., "**Style & Mood**:")
     });
   }
 
@@ -32,7 +98,7 @@ export function FormattedPrompt({ text, className, style }: FormattedPromptProps
           const trimmed = para.trim();
           return trimmed ? (
             <p key={i} className="prompt-paragraph">
-              {trimmed}
+              {renderInlineMarkdown(trimmed)}
             </p>
           ) : null;
         })}
@@ -56,17 +122,8 @@ export function FormattedPrompt({ text, className, style }: FormattedPromptProps
     const endIdx = next ? next.index : text.length;
     const content = text.substring(startIdx, endIdx).trim();
 
-    // Normalize header name to Title Case
-    const normalizedHeader = current.header
-      .split(/\s+/)
-      .map((word) => {
-        if (word.toLowerCase() === "&") return "&";
-        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-      })
-      .join(" ");
-
     sections.push({
-      header: normalizedHeader,
+      header: displayHeader(current.header),
       content,
     });
   }
@@ -93,11 +150,9 @@ export function FormattedPrompt({ text, className, style }: FormattedPromptProps
             <div className="prompt-section-content">
               {section.content.split("\n").map((para, pIdx) => {
                 const trimmed = para.trim();
-                // Clean up any remaining markdown bold markers from the content paragraph
-                const cleanedPara = trimmed.replace(/\*\*([^*]+)\*\*/g, "$1");
-                return cleanedPara ? (
+                return trimmed ? (
                   <p key={pIdx} className="prompt-paragraph">
-                    {cleanedPara}
+                    {renderInlineMarkdown(trimmed)}
                   </p>
                 ) : null;
               })}

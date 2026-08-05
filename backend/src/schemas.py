@@ -45,13 +45,13 @@ class BatchPromptItem(BaseModel):
         description="Reference asset paths used to generate this clip prompt."
     )
     prompt_format: Literal["plain_text", "json", "production_prompt"] = Field(
-        description="Seedance output format selected using the supplied skill rules."
+        description="Compatibility field. Use 'plain_text'; the prompt body must follow the unified sectioned Seedance structure."
     )
     reference_legend: str = Field(
         description="English upload legend mapping selected images and the original clip to reference labels."
     )
     english_prompt: str = Field(
-        description="Detailed English-only Seedance 2.0 prompt with no timeline prompting."
+        description="Detailed English-only Seedance 2.0 prompt using the unified sectioned structure with no timeline prompting."
     )
     explanation: str = Field(
         description="How the feedback and selected references were applied."

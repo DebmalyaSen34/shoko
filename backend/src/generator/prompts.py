@@ -15,10 +15,11 @@ DEFAULT_PROJECT_OVERRIDES = """
 These rules override every conflicting instruction in the skill above:
 
 - English output for all prompt instructions and descriptions, except preserve supplied Hindi/English dialogue text exactly when `DIALOGUE_FOR_LIP_SYNC` is present. Never produce Chinese, ZH, unrelated bilingual output, or translations.
-- Never use timeline prompting, timestamp brackets, time-labelled beats, shot maps, or timed tables.
+- Never use timeline prompting, timestamp brackets, time-labelled beats, shot maps, timed tables, JSON prompt bodies, or multiple prompt formats.
 - Process visual feedback only. Do not invent or modify dialogue, voice, music, sound effects, or audio direction. When exact Hindi/English dialogue is supplied for lip sync, include it unchanged only as dialogue to be spoken/lip-synced.
 - Generate one detailed, scene-specific Seedance 2.0 prompt per cluster, at least 150 English words.
-- Choose `plain_text`, `json`, or `production_prompt` using the skill's scene routing, but remove timeline structures from every format.
+- Always use the unified sectioned prompt structure from the skill file for the final `english_prompt`, regardless of scene type or provider.
+- Set `prompt_format` to `plain_text` for compatibility, but the final prompt text itself must contain the exact required section labels in this order: STYLE & LOOK, REFERENCE USE, SUBJECTS & CONTINUITY, FEEDBACK DIRECTIVES, SCENE ACTION, CAMERA & MOTION, AUDIO, QUALITY & CONSTRAINTS.
 - Preserve every client feedback instruction and all observable continuity from the original clip.
 - Use the initial frame prompt as the first-frame visual anchor for the final video prompt.
 - Use Segmind API reference wording consistently. In the final prompt body, refer to uploaded references as `image 1`, `image 2`, ... exactly like the Segmind documentation examples. Do not use `@image1`, `@video1`, bracketed `[Image 1]`, or custom names in the final prompt body.

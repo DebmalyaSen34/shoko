@@ -2535,6 +2535,31 @@ button {
   line-height: 1.58;
 }
 
+.video-prompt-section .formatted-prompt {
+  min-height: 190px;
+  max-height: none;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: #fafbfc;
+  padding: 10px;
+}
+
+.video-prompt-section .prompt-section {
+  border-bottom-color: var(--border-color);
+}
+
+.video-prompt-section .prompt-section-header {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+}
+
+.video-prompt-section .prompt-paragraph,
+.video-prompt-section .prompt-intro-paragraph {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .supporting-prompts {
   margin-top: 10px;
   border-top: 1px solid var(--border-color);
@@ -4077,6 +4102,32 @@ button {
   color: var(--accent-secondary);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.chat-message-text .chat-formatted-prompt {
+  gap: 8px;
+}
+
+.chat-message-text .chat-formatted-prompt .prompt-section {
+  border-bottom-color: rgba(31, 35, 40, 0.1);
+  padding-bottom: 8px;
+}
+
+.chat-message-text .chat-formatted-prompt .prompt-section-header {
+  color: var(--text-primary);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+
+.chat-message-text .chat-formatted-prompt .prompt-section-content {
+  padding-left: 0;
+}
+
+.chat-message-text .chat-formatted-prompt .prompt-paragraph,
+.chat-message-text .chat-formatted-prompt .prompt-intro-paragraph {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.55;
 }
 
 .chat-message-info {

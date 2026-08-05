@@ -573,7 +573,9 @@ def revise_prompt_from_feedback(project_name: str, prompt_version_id: str, reque
         f"RELEVANT_EVAL_CASE_EXPECTATIONS:\n{_eval_case_revision_text(eval_cases) or 'None'}\n\n"
         f"PREVIOUS_QUALITY_REPORT:\n{json.dumps(previous_quality_report, ensure_ascii=False)}\n\n"
         "Return a revised prompt and a short explanation of what changed. The revised prompt must remain English-only, "
-        "provider-compatible, concrete, and detailed."
+        "provider-compatible, concrete, and detailed. Preserve or restore this exact section order in the revised prompt: "
+        "STYLE & LOOK, REFERENCE USE, SUBJECTS & CONTINUITY, FEEDBACK DIRECTIVES, SCENE ACTION, CAMERA & MOTION, AUDIO, QUALITY & CONSTRAINTS. "
+        "Use Segmind-compatible reference wording only: image 1, image 2, generated initial frame image, and original clip reference images."
     )
     try:
         revision = generate_structured(
@@ -665,5 +667,4 @@ def revise_prompt_from_feedback(project_name: str, prompt_version_id: str, reque
         "learning_report": learning_report,
         "clip_state": refreshed_state,
     }
-
 

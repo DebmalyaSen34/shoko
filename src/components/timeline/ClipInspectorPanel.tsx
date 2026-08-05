@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { AssetFile, ClipAssetReference, ClipState, FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptFeedbackTarget, PromptVersion, ReferencedFrameState, TimelineClip } from "../../types";
 import { staticUrl } from "../../lib/api";
 import { basename, versionLabel } from "../../lib/format";
+import { FormattedPrompt } from "../FormattedPrompt";
 import { Icon } from "../Icon";
 
 export type ClipInspectorTab = "feedback" | "prompts" | "references" | "assets" | "videos";
@@ -183,7 +184,7 @@ export function ClipInspectorPanel({
                       </button>
                     </div>
                   </div>
-                  <pre>{videoPromptSection?.text || "No video prompt was generated for this version."}</pre>
+                  <FormattedPrompt text={videoPromptSection?.text || "No video prompt was generated for this version."} />
                 </section>
                 {supportingPromptSections.length > 0 && (
                   <details className="supporting-prompts">

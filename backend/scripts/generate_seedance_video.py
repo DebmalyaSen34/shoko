@@ -10,6 +10,7 @@ import re
 import sqlite3
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -183,8 +184,17 @@ class SQLiteAssetUrlCache:
         connection.row_factory = sqlite3.Row
         return connection
 
+    @contextmanager
+    def _connection(self):
+        connection = self._connect()
+        try:
+            yield connection
+            connection.commit()
+        finally:
+            connection.close()
+
     def _ensure_schema(self) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS media_asset_urls (
@@ -202,7 +212,7 @@ class SQLiteAssetUrlCache:
             )
 
     def get(self, *, source_hash: str, provider: str, media_type: str) -> CachedAsset | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute(
                 """
                 SELECT public_url, provider, media_type, source_hash
@@ -233,7 +243,7 @@ class SQLiteAssetUrlCache:
     ) -> None:
         now = _utc_now_iso()
         metadata_json = json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True)
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 """
                 INSERT INTO media_asset_urls (

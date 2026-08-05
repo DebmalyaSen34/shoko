@@ -3,6 +3,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
@@ -28,13 +29,14 @@ class SeedanceVideoScriptTests(unittest.TestCase):
             self.assertTrue(db_path.exists())
             self.assertIsNone(cache.get(source_hash="missing", provider="segmind", media_type="image"))
 
-            with sqlite3.connect(db_path) as connection:
-                table_names = {
-                    row[0]
-                    for row in connection.execute(
-                        "SELECT name FROM sqlite_master WHERE type = 'table'"
-                    ).fetchall()
-                }
+            with closing(sqlite3.connect(db_path)) as connection:
+                with connection:
+                    table_names = {
+                        row[0]
+                        for row in connection.execute(
+                            "SELECT name FROM sqlite_master WHERE type = 'table'"
+                        ).fetchall()
+                    }
             self.assertIn("media_asset_urls", table_names)
 
     def test_sqlite_cache_upserts_and_retrieves_asset(self):
@@ -68,15 +70,16 @@ class SeedanceVideoScriptTests(unittest.TestCase):
             second = cache.get(source_hash="hash-1", provider="segmind", media_type="image")
             self.assertEqual("https://example.com/two.jpg", second.public_url)
 
-            with sqlite3.connect(cache.db_path) as connection:
-                row = connection.execute(
-                    """
-                    SELECT metadata_json
-                    FROM media_asset_urls
-                    WHERE source_hash = ? AND provider = ? AND media_type = ?
-                    """,
-                    ("hash-1", "segmind", "image"),
-                ).fetchone()
+            with closing(sqlite3.connect(cache.db_path)) as connection:
+                with connection:
+                    row = connection.execute(
+                        """
+                        SELECT metadata_json
+                        FROM media_asset_urls
+                        WHERE source_hash = ? AND provider = ? AND media_type = ?
+                        """,
+                        ("hash-1", "segmind", "image"),
+                    ).fetchone()
             self.assertEqual({"width": 1920}, json.loads(row[0]))
 
     def test_cache_factory_defaults_to_sqlite_even_with_supabase_credentials(self):

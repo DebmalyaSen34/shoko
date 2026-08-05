@@ -79,9 +79,10 @@ class TestReferencedFramesWorkflow(unittest.TestCase):
         # Configure mocks
         # Make os.path.exists return True for the clip path, and also true for the extracted frame
         def exists_side_effect(path):
-            if "clip2.mp4" in path:
+            path_text = str(path)
+            if "clip2.mp4" in path_text:
                 return True
-            if "referenced_frames" in path:
+            if "referenced_frames" in path_text:
                 # Mock that ffmpeg successfully created the file
                 return True
             return real_exists(path)

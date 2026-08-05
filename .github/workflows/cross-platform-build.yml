@@ -96,6 +96,7 @@ jobs:
 
           curl -L --fail --retry 3 --output "$ffmpeg_zip" "$ffmpeg_url"
           actual_sha256="$(sha256sum "$ffmpeg_zip" | awk '{print $1}')"
+          actual_sha256="${actual_sha256#\\}"
           if [[ "$actual_sha256" != "$ffmpeg_sha256" ]]; then
             echo "FFmpeg checksum mismatch. Expected $ffmpeg_sha256, got $actual_sha256."
             exit 1

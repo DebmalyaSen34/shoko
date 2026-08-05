@@ -52,7 +52,8 @@ def main() -> int:
 
     ffmpeg_bin_dir = os.environ.get("LOKA_BUNDLE_FFMPEG_DIR", "").strip()
     if ffmpeg_bin_dir:
-        for binary_name in ("ffmpeg.exe", "ffprobe.exe"):
+        binary_names = ("ffmpeg.exe", "ffprobe.exe") if sys.platform.startswith("win") else ("ffmpeg", "ffprobe")
+        for binary_name in binary_names:
             binary_path = Path(ffmpeg_bin_dir) / binary_name
             if not binary_path.exists():
                 raise FileNotFoundError(f"Missing bundled media binary: {binary_path}")

@@ -107,6 +107,36 @@ jobs:
           test -f "$ffmpeg_bin_dir/ffprobe.exe"
           echo "LOKA_BUNDLE_FFMPEG_DIR=$ffmpeg_bin_dir" >> "$GITHUB_ENV"
 
+      - name: Download FFmpeg for macOS bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ffmpeg_url="https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-arm64"
+          ffprobe_url="https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-darwin-arm64"
+          ffmpeg_sha256="a90e3db6a3fd35f6074b013f948b1aa45b31c6375489d39e572bea3f18336584"
+          ffprobe_sha256="bb2db6f5d8cef919da12fbf592119a987202a8c060a886f3cab091f9cab90b64"
+          ffmpeg_bin_dir="$RUNNER_TEMP/ffmpeg-macos-bin"
+
+          mkdir -p "$ffmpeg_bin_dir"
+          curl -L --fail --retry 3 --output "$ffmpeg_bin_dir/ffmpeg" "$ffmpeg_url"
+          curl -L --fail --retry 3 --output "$ffmpeg_bin_dir/ffprobe" "$ffprobe_url"
+
+          actual_ffmpeg_sha256="$(shasum -a 256 "$ffmpeg_bin_dir/ffmpeg" | awk '{print $1}')"
+          actual_ffprobe_sha256="$(shasum -a 256 "$ffmpeg_bin_dir/ffprobe" | awk '{print $1}')"
+          if [[ "$actual_ffmpeg_sha256" != "$ffmpeg_sha256" ]]; then
+            echo "macOS ffmpeg checksum mismatch. Expected $ffmpeg_sha256, got $actual_ffmpeg_sha256."
+            exit 1
+          fi
+          if [[ "$actual_ffprobe_sha256" != "$ffprobe_sha256" ]]; then
+            echo "macOS ffprobe checksum mismatch. Expected $ffprobe_sha256, got $actual_ffprobe_sha256."
+            exit 1
+          fi
+
+          chmod +x "$ffmpeg_bin_dir/ffmpeg" "$ffmpeg_bin_dir/ffprobe"
+          "$ffmpeg_bin_dir/ffmpeg" -version
+          "$ffmpeg_bin_dir/ffprobe" -version
+          echo "LOKA_BUNDLE_FFMPEG_DIR=$ffmpeg_bin_dir" >> "$GITHUB_ENV"
+
       - name: Run backend tests
         shell: bash
         run: '"$VENV_PYTHON" -m pytest backend/tests --ignore=backend/tests/test_supabase_client.py'
@@ -142,7 +172,7 @@ jobs:
             if curl -fsS http://127.0.0.1:8765/health >/dev/null; then
               curl -fsS http://127.0.0.1:8765/version
               curl -fsS http://127.0.0.1:8765/api/config/runtime >/dev/null
-              if [[ "${{ runner.os }}" == "Windows" ]]; then
+              if [[ -n "${LOKA_BUNDLE_FFMPEG_DIR:-}" ]]; then
                 media_json="$(curl -fsS http://127.0.0.1:8765/api/system/media-binaries)"
                 MEDIA_JSON="$media_json" "$VENV_PYTHON" -c "import json, os, sys; data=json.loads(os.environ['MEDIA_JSON']); print(data); missing=[name for name, details in data.items() if not details.get('available')]; sys.exit(1 if missing else 0)"
               fi

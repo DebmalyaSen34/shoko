@@ -124,6 +124,10 @@ def prompt_eval_case_store(project_name: str) -> PromptEvalCaseStore:
     return PromptEvalCaseStore(project_data_dir(project_name) / "prompt_eval_cases.json")
 
 
+def prompt_learning_store(project_name: str) -> PromptLearningStore:
+    return PromptLearningStore(prompt_lessons_path(project_name))
+
+
 def load_prompt_feedback(project_name: str) -> dict:
     data = read_json_file(prompt_feedback_path(project_name), {"schema_version": 1, "items": []})
     if not isinstance(data, dict):
@@ -667,4 +671,3 @@ def revise_prompt_from_feedback(project_name: str, prompt_version_id: str, reque
         "learning_report": learning_report,
         "clip_state": refreshed_state,
     }
-

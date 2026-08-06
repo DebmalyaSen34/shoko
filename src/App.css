@@ -2727,7 +2727,7 @@ button {
   min-height: 0;
   overflow-y: auto;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
   align-content: start;
   gap: 10px;
   padding-right: 2px;
@@ -2738,7 +2738,7 @@ button {
   min-height: 0;
   overflow-y: auto;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
   align-content: start;
   gap: 10px;
   padding-right: 2px;
@@ -2748,26 +2748,29 @@ button {
   min-width: 0;
   border: 1px solid var(--border-color);
   border-radius: 3px;
-  background: #ffffff;
+  background: rgba(45, 186, 78, 0.055);
   color: var(--text-primary);
   overflow: hidden;
   padding: 0;
   text-align: left;
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
 }
 
 .clip-reference-tile:hover,
 .clip-reference-tile:focus-visible {
   outline: none;
   border-color: var(--border-hover);
-  background: #fafbfc;
+  background: rgba(45, 186, 78, 0.095);
+  box-shadow: 0 8px 22px rgba(31, 136, 55, 0.08);
 }
 
 .clip-reference-thumb {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 10;
-  background: var(--bg-secondary);
+  aspect-ratio: 4 / 5;
+  background: rgba(255, 255, 255, 0.88);
   overflow: hidden;
+  padding: 4px;
 }
 
 .clip-reference-thumb img {
@@ -2786,7 +2789,9 @@ button {
 .clip-reference-meta {
   display: grid;
   gap: 3px;
-  padding: 7px 8px 8px;
+  min-height: 45px;
+  padding: 6px 8px 7px;
+  background: rgba(250, 255, 252, 0.78);
 }
 
 .clip-reference-meta strong,
@@ -2810,33 +2815,40 @@ button {
   min-width: 0;
   border: 1px solid var(--border-color);
   border-radius: 3px;
-  background: #ffffff;
+  background: rgba(45, 186, 78, 0.055);
   color: var(--text-primary);
   overflow: hidden;
   padding: 0;
   text-align: left;
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
 }
 
 .generated-video-tile:hover,
 .generated-video-tile:focus-visible {
   outline: none;
   border-color: var(--border-hover);
-  background: #fafbfc;
+  background: rgba(45, 186, 78, 0.095);
+  box-shadow: 0 8px 22px rgba(31, 136, 55, 0.08);
 }
 
 .generated-video-thumb {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 10;
-  background: #24292e;
+  aspect-ratio: 4 / 5;
+  background: rgba(255, 255, 255, 0.88);
   overflow: hidden;
+  padding: 4px;
 }
 
 .generated-video-thumb video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+  position: absolute;
+  inset: 4px;
+  width: calc(100% - 8px);
+  height: calc(100% - 8px);
+  object-fit: contain;
+  object-position: center;
   display: block;
+  border-radius: 3px;
 }
 
 .generated-video-thumb span {
@@ -2856,7 +2868,9 @@ button {
 .generated-video-meta {
   display: grid;
   gap: 2px;
-  padding: 8px 9px 9px;
+  min-height: 45px;
+  padding: 6px 8px 7px;
+  background: rgba(250, 255, 252, 0.78);
 }
 
 .generated-video-meta strong,

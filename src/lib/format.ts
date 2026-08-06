@@ -52,9 +52,9 @@ export function versionLabel(version: PromptVersion, index: number) {
 }
 
 export function generatedVideoLabel(video: GeneratedVideo) {
-  const label = video.label || `Generated video v${video.version}`;
+  const label = `v${video.version}`;
   const time = formatOptionalClockTime(video.timestamp);
-  return time ? `${label} (${time})` : label;
+  return time ? `${label} - ${time}` : label;
 }
 
 function formatOptionalClockTime(value?: string | null) {

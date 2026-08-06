@@ -45,7 +45,8 @@ The section labels are mandatory and must be uppercase exactly as written. Do no
 
 Segmind prompt text must use plain reference wording:
 
-- Use `image 1`, `image 2`, `image 3` for uploaded image references.
+- Use `image 1`, `image 2`, `image 3` through `image 8` for uploaded image references.
+- Never describe more than eight total Segmind reference images in the final prompt.
 - Use `original clip reference images` for extracted frames from the source clip.
 - Use `generated initial frame image` only when a generated first-frame image is supplied.
 - Do not write `@image1`, `@video1`, `@audio1`, `@ref1`, `@1`, `[Image 1]`, file names, local paths, or custom labels in the final prompt body.

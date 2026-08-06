@@ -16,6 +16,7 @@ cryptography
 decorator
 distro
 dotenv
+elevenlabs
 fastapi
 filelock
 frozenlist

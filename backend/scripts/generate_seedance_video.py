@@ -33,6 +33,7 @@ DEFAULT_RESOLUTION = "720p"
 DEFAULT_BITRATE_MODE = "standard"
 SEGMIND_DURATION_SECONDS = 5
 SEGMIND_UPLOAD_URL = "https://workflows-api.segmind.com/upload-asset"
+SEGMIND_MAX_REFERENCE_IMAGES = 8
 MAX_DURATION_SECONDS = 15
 MIN_DURATION_SECONDS = 4
 OUTPUT_DOWNLOAD_RETRY_SECONDS = 300
@@ -610,23 +611,58 @@ def _reference_map_block(reference_descriptions: list[str], first_frame_url: str
     return "\n".join(lines) + "\n\n"
 
 
+def _sample_paths_for_budget(paths: list[Any], budget: int) -> list[Any]:
+    cleaned = [path for path in paths or [] if path]
+    if budget <= 0:
+        return []
+    if len(cleaned) <= budget:
+        return cleaned
+    if budget == 1:
+        return [cleaned[0]]
+
+    last_index = len(cleaned) - 1
+    selected = []
+    seen_indices = set()
+    for slot in range(budget):
+        index = round(slot * last_index / (budget - 1))
+        if index not in seen_indices:
+            selected.append(cleaned[index])
+            seen_indices.add(index)
+
+    for index, path in enumerate(cleaned):
+        if len(selected) >= budget:
+            break
+        if index not in seen_indices:
+            selected.append(path)
+    return selected
+
+
 def _reference_descriptions_from_item(item: dict[str, Any]) -> list[str]:
     descriptions = []
     image_number = 0
-    for path in item.get("selected_assets", []):
+    selected_assets = _sample_paths_for_budget(item.get("selected_assets", []), SEGMIND_MAX_REFERENCE_IMAGES)
+    for path in selected_assets:
         image_number += 1
         descriptions.append(
             f"image {image_number}: {_get_asset_type(str(path))} from {os.path.basename(str(path))}."
         )
-    for path in item.get("clip_frame_paths", []):
-        image_number += 1
-        descriptions.append(
-            f"image {image_number}: original clip frame from {os.path.basename(str(path))}; use for motion, composition, wardrobe, lighting, and continuity."
-        )
-    for path, label in zip(item.get("referenced_frame_paths", []), item.get("referenced_frame_labels", [])):
+    referenced_frame_paths = _sample_paths_for_budget(
+        item.get("referenced_frame_paths", []),
+        SEGMIND_MAX_REFERENCE_IMAGES - image_number,
+    )
+    for path in referenced_frame_paths:
         image_number += 1
         descriptions.append(
             f"image {image_number}: referenced cutaway/reaction frame from {os.path.basename(str(path))}."
+        )
+    clip_frame_paths = _sample_paths_for_budget(
+        item.get("clip_frame_paths", []),
+        SEGMIND_MAX_REFERENCE_IMAGES - image_number,
+    )
+    for path in clip_frame_paths:
+        image_number += 1
+        descriptions.append(
+            f"image {image_number}: original clip frame from {os.path.basename(str(path))}; use for motion, composition, wardrobe, lighting, and continuity."
         )
     return descriptions
 
@@ -635,6 +671,8 @@ def _normalize_prepared_payload(item: dict[str, Any], payload: dict[str, Any]) -
     normalized = dict(payload)
     normalized["duration"] = clamp_duration(item.get("duration") if item.get("duration") is not None else SEGMIND_DURATION_SECONDS)
     normalized["generate_audio"] = bool(item.get("generate_audio", False))
+    if isinstance(normalized.get("reference_images"), list):
+        normalized["reference_images"] = normalized["reference_images"][:SEGMIND_MAX_REFERENCE_IMAGES]
     if not bool(item.get("allow_reference_audio", False)):
         normalized.pop("reference_audios", None)
     prompt = str(normalized.get("prompt") or item.get("video_model_prompt") or "").strip()
@@ -744,7 +782,10 @@ def build_segmind_payload(
                 elif is_data_url(image_path) or os.path.exists(image_path):
                     first_frame_url = image_path
 
-        selected_assets = item.get("selected_assets", [])
+        selected_assets = _sample_paths_for_budget(
+            item.get("selected_assets", []),
+            SEGMIND_MAX_REFERENCE_IMAGES - len(reference_images),
+        )
         for idx, path in enumerate(selected_assets):
             handle = f"@image{idx + 1}"
             image_url = (
@@ -762,8 +803,32 @@ def build_segmind_payload(
             else:
                 image_labels[handle] = f"the {_get_asset_type(path)}"
 
+        referenced_frame_labels = {}
+        referenced_frame_pairs = list(zip(item.get("referenced_frame_paths", []), item.get("referenced_frame_labels", [])))
+        for path, label in _sample_paths_for_budget(
+            referenced_frame_pairs,
+            SEGMIND_MAX_REFERENCE_IMAGES - len(reference_images),
+        ):
+            image_url = (
+                _cached_segmind_image_url(path, api_key=api_key, cache=cache, session=session)
+                if upload_assets
+                else path
+            )
+            if image_url:
+                reference_images.append(image_url)
+                image_number = len(reference_images)
+                referenced_frame_labels[label] = f"image {image_number}"
+                reference_descriptions.append(
+                    f"image {image_number}: referenced cutaway/reaction frame from {os.path.basename(str(path))}."
+                )
+            else:
+                referenced_frame_labels[label] = "the referenced cutaway frame"
+
         clip_image_indices = []
-        for path in item.get("clip_frame_paths", []):
+        for path in _sample_paths_for_budget(
+            item.get("clip_frame_paths", []),
+            SEGMIND_MAX_REFERENCE_IMAGES - len(reference_images),
+        ):
             image_url = (
                 _cached_segmind_image_url(path, api_key=api_key, cache=cache, session=session)
                 if upload_assets
@@ -781,23 +846,6 @@ def build_segmind_payload(
             if clip_image_indices
             else "the original clip"
         )
-
-        referenced_frame_labels = {}
-        for path, label in zip(item.get("referenced_frame_paths", []), item.get("referenced_frame_labels", [])):
-            image_url = (
-                _cached_segmind_image_url(path, api_key=api_key, cache=cache, session=session)
-                if upload_assets
-                else path
-            )
-            if image_url:
-                reference_images.append(image_url)
-                image_number = len(reference_images)
-                referenced_frame_labels[label] = f"image {image_number}"
-                reference_descriptions.append(
-                    f"image {image_number}: referenced cutaway/reaction frame from {os.path.basename(str(path))}."
-                )
-            else:
-                referenced_frame_labels[label] = "the referenced cutaway frame"
 
         prompt_text = _replace_handles_for_segmind(
             prompt_text,

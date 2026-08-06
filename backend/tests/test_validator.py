@@ -160,7 +160,7 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual("A refined prompt that complies with suggestions.", res)
         mock_generate_structured.assert_called_once()
 
-    def test_resolve_selected_asset_paths_expansion(self):
+    def test_resolve_selected_asset_paths_does_not_expand_versioned_sheets(self):
         from src.generator.prompts import _resolve_selected_asset_paths
         
         reference_assets = [
@@ -172,15 +172,16 @@ class ValidatorTests(unittest.TestCase):
             "/path/to/location-v2.png",
         ]
         
-        # When only v1 is selected, it should expand to include v2 and v3
+        # The selector must choose the best matching version; resolution should
+        # not silently add sibling versions and exceed the provider image budget.
         selected = ["vir-sheet-v1.png", "location-v1.png"]
         resolved = _resolve_selected_asset_paths(selected, reference_assets)
         
         self.assertIn("/path/to/vir-sheet-v1.png", resolved)
-        self.assertIn("/path/to/vir-sheet-v2.png", resolved)
-        self.assertIn("/path/to/vir-sheet-v3.png", resolved)
+        self.assertNotIn("/path/to/vir-sheet-v2.png", resolved)
+        self.assertNotIn("/path/to/vir-sheet-v3.png", resolved)
         self.assertIn("/path/to/location-v1.png", resolved)
-        self.assertIn("/path/to/location-v2.png", resolved)
+        self.assertNotIn("/path/to/location-v2.png", resolved)
         self.assertNotIn("/path/to/unused-rian.png", resolved)
 
     def test_learning_eval_deterministic_checks(self):

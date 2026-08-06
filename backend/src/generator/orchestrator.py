@@ -20,6 +20,7 @@ from ..schemas import (
     BatchPromptResult,
     BatchSelectedAssetsResult,
     RefinedPromptResult,
+    VariantSelectionResult,
 )
 from ..utils import get_prompt_template
 
@@ -48,6 +49,9 @@ from .prompts import (
 from .validator import merge_learning_eval_report, run_learning_eval, run_quality_check
 
 
+VERSIONED_ASSET_PATTERN = re.compile(r"^(?P<prefix>.+?)[-_ ]v\d+(?P<suffix>\.[^.]+)$", re.IGNORECASE)
+
+
 def _openai_input_from_contents(contents: List[Any]) -> List[Dict[str, Any]]:
     # Re-use or adapt for batch usage if needed, or import from .client
     # Let's import it from .client to keep client-related input parsing centralized
@@ -73,8 +77,13 @@ def _select_reference_assets_for_batch(
             "from REFERENCE_ASSET_CANDIDATES. Prefer the original clip frames "
             "for pose, framing, action, and room continuity; select asset images "
             "only for identity, wardrobe, props, or named locations that are "
-            "explicitly needed. Return at most 3 assets per cluster, and never "
-            "select raw clips or audio."
+            "explicitly needed. If multiple versioned sheets appear to describe "
+            "the same character or location, compare them against the extracted "
+            "original clip frames and choose only the single sheet that best "
+            "matches the visible face, hair, wardrobe, body shape, and setting. "
+            "Return at most 3 assets per cluster, fewer when clip/reference "
+            "frames already carry the needed visual context, and never select "
+            "raw clips or audio."
         ),
         f"REFERENCE_ASSET_CANDIDATES:\n{_reference_asset_manifest(reference_assets)}",
     ]
@@ -107,6 +116,129 @@ def _select_reference_assets_for_batch(
             reference_assets,
         )
     return selected_by_id
+
+
+def _versioned_asset_family_key(path: str) -> tuple[str, str] | None:
+    basename = os.path.basename(str(path))
+    match = VERSIONED_ASSET_PATTERN.match(basename)
+    if not match:
+        return None
+    return (os.path.dirname(str(path)), match.group("prefix").lower())
+
+
+def _versioned_asset_siblings(path: str, reference_assets: List[str]) -> List[str]:
+    family_key = _versioned_asset_family_key(path)
+    if not family_key:
+        return []
+    siblings = []
+    for candidate in reference_assets:
+        if _versioned_asset_family_key(candidate) == family_key:
+            siblings.append(candidate)
+    return siblings
+
+
+def _replace_selected_asset_variant(selected_assets: List[str], original: str, replacement: str) -> List[str]:
+    updated = []
+    seen = set()
+    for path in selected_assets:
+        next_path = replacement if path == original else path
+        if next_path not in seen:
+            updated.append(next_path)
+            seen.add(next_path)
+    return updated
+
+
+def _resolve_versioned_asset_variants(
+    *,
+    provider: Provider,
+    client,
+    model: str,
+    batch: List[tuple[int, Dict[str, Any]]],
+    reference_assets: List[str],
+    selected_assets_by_id: Dict[int, List[str]],
+    clip_handles: Dict[int, Any],
+    reference_handles: Dict[str, Any],
+    uploaded_refs: List[Any],
+) -> None:
+    """Visually choose one best sheet when a selected asset has sibling versions."""
+    for cluster_id, cluster in batch:
+        selected_assets = selected_assets_by_id.get(cluster_id, [])
+        if not selected_assets:
+            continue
+
+        for selected_asset in list(selected_assets):
+            siblings = _versioned_asset_siblings(selected_asset, reference_assets)
+            if len(siblings) <= 1:
+                continue
+
+            candidate_refs = {}
+            transient_refs = []
+            for sibling in siblings:
+                if not os.path.exists(sibling):
+                    continue
+                if provider == "openai":
+                    ref = _openai_file_reference(client, sibling)
+                else:
+                    ref = upload._prepare_media_reference(client, sibling, provider)
+                    if ref is not None:
+                        transient_refs.append(ref)
+                if ref is not None:
+                    candidate_refs[sibling] = ref
+                    reference_handles.setdefault(sibling, ref)
+
+            if not candidate_refs:
+                continue
+
+            try:
+                contents: List[Any] = [
+                    (
+                        "Choose the single best matching versioned reference sheet for this clip. "
+                        "Compare the candidate sheets against the extracted original clip frames. "
+                        "Prioritize visible wardrobe/attire first, then face, hair, body shape, and overall continuity. "
+                        "Return only one selected_asset path from VARIANT_CANDIDATES."
+                    ),
+                    _cluster_prompt_context(cluster_id, cluster),
+                    "ORIGINAL_CLIP_FRAMES_TO_MATCH:",
+                ]
+                for frame_ref in clip_handles.get(cluster_id, []) or []:
+                    _append_media_reference(contents, frame_ref)
+                contents.append("VARIANT_CANDIDATES:")
+                for index, sibling in enumerate(siblings, start=1):
+                    contents.append(f"candidate {index}: {sibling}")
+                    ref = candidate_refs.get(sibling)
+                    if ref is not None:
+                        _append_media_reference(contents, ref)
+
+                response_json = generate_structured(
+                    provider=provider,
+                    client=client,
+                    model=model,
+                    contents=contents,
+                    schema=VariantSelectionResult,
+                    system_instruction=get_prompt_template(
+                        "variant_asset_selector_system",
+                        "You select the one reference sheet variant that visually matches the clip frames. Return only supplied paths.",
+                    ),
+                    temperature=0.05,
+                )
+                result = next(
+                    (
+                        item
+                        for item in response_json.get("results", [])
+                        if item.get("original_selected_asset") == selected_asset
+                        or item.get("selected_asset") in siblings
+                    ),
+                    None,
+                )
+                replacement = result.get("selected_asset") if result else None
+                if replacement in siblings:
+                    selected_assets = _replace_selected_asset_variant(selected_assets, selected_asset, replacement)
+                    selected_assets_by_id[cluster_id] = selected_assets
+            except Exception as exc:
+                print(f"Versioned asset visual resolution failed for {selected_asset}; keeping original selection: {exc}")
+            finally:
+                for ref in transient_refs:
+                    uploaded_refs.append(ref)
 
 
 def _generate_openai_initial_frame_image(
@@ -361,6 +493,21 @@ def generate_video_prompts_batch(
                 print(f"Reference asset selection failed; continuing with clip frames only: {exc}")
                 for cluster_id, _ in batch:
                     selected_assets_by_id[cluster_id] = []
+
+            try:
+                _resolve_versioned_asset_variants(
+                    provider=provider,
+                    client=client,
+                    model=model,
+                    batch=batch,
+                    reference_assets=reference_assets,
+                    selected_assets_by_id=selected_assets_by_id,
+                    clip_handles=clip_handles,
+                    reference_handles=reference_handles,
+                    uploaded_refs=uploaded_refs,
+                )
+            except Exception as exc:
+                print(f"Versioned reference asset resolution failed; continuing with preflight selection: {exc}")
 
             for path in dict.fromkeys(
                 asset

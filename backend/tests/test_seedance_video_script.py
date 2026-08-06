@@ -368,6 +368,28 @@ class SeedanceVideoScriptTests(unittest.TestCase):
         self.assertEqual("9:16", payload["aspect_ratio"])
         self.assertFalse(payload["generate_audio"])
 
+    def test_build_segmind_payload_caps_reference_images_at_eight(self):
+        payload = build_segmind_payload(
+            item={
+                "video_model_prompt": "use image 1 and original clip reference images",
+                "selected_assets": [f"https://example.com/asset-{index}.jpg" for index in range(5)],
+                "referenced_frame_paths": [f"https://example.com/ref-{index}.jpg" for index in range(3)],
+                "referenced_frame_labels": [f"ref-{index}" for index in range(3)],
+                "clip_frame_paths": [f"https://example.com/frame-{index}.jpg" for index in range(5)],
+            },
+            api_key="test-key",
+            cache=None,
+            upload_assets=False,
+        )
+
+        self.assertEqual(8, len(payload["reference_images"]))
+        self.assertEqual(
+            [f"https://example.com/asset-{index}.jpg" for index in range(5)]
+            + [f"https://example.com/ref-{index}.jpg" for index in range(3)],
+            payload["reference_images"],
+        )
+        self.assertNotIn("image 9:", payload["prompt"])
+
     def test_attach_prepared_segmind_payload_adds_ready_provider_fields(self):
         item = {
             "video_model_prompt": "use @image1 and @video1",

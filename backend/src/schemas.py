@@ -78,6 +78,22 @@ class BatchSelectedAssetsResult(BaseModel):
     results: List[SelectedAssetItem]
 
 
+class VariantSelectionItem(BaseModel):
+    original_selected_asset: str = Field(
+        description="The asset path that was selected before visual variant resolution."
+    )
+    selected_asset: str = Field(
+        description="The single best matching asset path chosen from the supplied variant candidates."
+    )
+    reasoning: str = Field(
+        description="Brief visual reason for choosing this variant, based on extracted clip frames."
+    )
+
+
+class VariantSelectionResult(BaseModel):
+    results: List[VariantSelectionItem]
+
+
 class InitialFramePromptItem(BaseModel):
     cluster_id: int = Field(
         description="Stable identifier of the input clip cluster."

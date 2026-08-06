@@ -475,6 +475,75 @@ class BatchGeneratorTests(unittest.TestCase):
             for unused_asset in unused_assets:
                 self.assertNotIn(unused_asset, text_contents)
 
+    def test_batch_generation_visually_resolves_versioned_character_sheet(self):
+        clusters = self.make_clusters(1)
+        character_v1 = os.path.join(self.assets_dir, "rian-sheet-v1.png")
+        character_v2 = os.path.join(self.assets_dir, "rian-sheet-v2.png")
+        for path in (character_v1, character_v2):
+            with open(path, "w", encoding="utf-8") as file:
+                file.write("versioned character reference")
+
+        client = mock.MagicMock()
+        client.models.generate_content.side_effect = [
+            SimpleNamespace(
+                text=json.dumps(
+                    {
+                        "results": [
+                            {
+                                "cluster_id": 0,
+                                "selected_assets": [character_v1],
+                                "reasoning": "Rian needs an identity sheet.",
+                            }
+                        ]
+                    }
+                )
+            ),
+            SimpleNamespace(
+                text=json.dumps(
+                    {
+                        "results": [
+                            {
+                                "original_selected_asset": character_v1,
+                                "selected_asset": character_v2,
+                                "reasoning": "v2 wardrobe matches the extracted clip frames.",
+                            }
+                        ]
+                    }
+                )
+            ),
+            self.initial_frame_response_for_ids(range(1)),
+            self.response_for_ids(range(1)),
+        ]
+
+        with mock.patch(
+            "src.generator.upload.upload_file_and_wait",
+            side_effect=lambda _client, path: SimpleNamespace(name=f"uploaded-{path}"),
+        ):
+            results = generate_video_prompts_batch(
+                client=client,
+                clusters=clusters,
+                reference_assets=[character_v1, character_v2],
+                assets_dir=self.assets_dir,
+                batch_size=1,
+            )
+
+        self.assertEqual([character_v2], results[0]["selected_assets"])
+        variant_call_text = "\n".join(
+            item
+            for item in client.models.generate_content.call_args_list[1].kwargs["contents"]
+            if isinstance(item, str)
+        )
+        self.assertIn("ORIGINAL_CLIP_FRAMES_TO_MATCH", variant_call_text)
+        self.assertIn(character_v1, variant_call_text)
+        self.assertIn(character_v2, variant_call_text)
+        final_call_text = "\n".join(
+            item
+            for item in client.models.generate_content.call_args_list[3].kwargs["contents"]
+            if isinstance(item, str)
+        )
+        self.assertIn(character_v2, final_call_text)
+        self.assertNotIn(f"REFERENCE_ASSET_PATH: {character_v1}", final_call_text)
+
     def test_openai_provider_sends_typed_responses_content(self):
         clusters = self.make_clusters(1)
         client = mock.MagicMock()

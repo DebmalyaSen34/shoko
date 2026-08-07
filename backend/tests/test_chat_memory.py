@@ -624,6 +624,119 @@ def test_clip_selection_persists_active_prompt_video_and_assets(tmp_path, monkey
     assert stored["clips"]["clip.mp4::0"]["selected_assets"][0]["path"] == str(pinned_asset)
 
 
+def _seed_prompt_delete_project(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    assets_dir = tmp_path / "assets"
+    project_dir = data_dir / "project-a"
+    generated_dir = assets_dir / "project-a" / "generated_videos"
+    generated_dir.mkdir(parents=True, exist_ok=True)
+    project_dir.mkdir(parents=True)
+    (project_dir / "timeline.json").write_text(
+        json.dumps({
+            "video_timeline": [
+                {
+                    "clip": "clip.mp4",
+                    "start_tc": "00:00",
+                    "end_tc": "00:01",
+                    "start_s": 0,
+                    "end_s": 1,
+                    "duration_s": 1,
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+    (project_dir / "video_prompts.json").write_text(
+        json.dumps([
+            {
+                "clip_used": "clip.mp4",
+                "clip_occurrence": 0,
+                "video_model_prompt": "Second prompt.",
+                "timestamp": "2026-07-28T00:02:00",
+                "history": [
+                    {
+                        "timestamp": "2026-07-28T00:00:00",
+                        "provider": "openai",
+                        "video_model_prompt": "First prompt.",
+                        "generated_videos": [
+                            {
+                                "version": 1,
+                                "timestamp": "2026-07-28T00:01:00",
+                                "path": str(generated_dir / "clip_v001.mp4"),
+                            }
+                        ],
+                    },
+                    {
+                        "timestamp": "2026-07-28T00:02:00",
+                        "provider": "openai",
+                        "video_model_prompt": "Second prompt.",
+                    },
+                ],
+            }
+        ]),
+        encoding="utf-8",
+    )
+    patch_storage_dirs(monkeypatch, data_dir, assets_dir)
+    return project_dir
+
+
+def test_prompt_version_delete_hides_non_active_version_and_keeps_data(tmp_path, monkeypatch):
+    project_dir = _seed_prompt_delete_project(tmp_path, monkeypatch)
+    client = TestClient(server.app)
+    state = client.get("/api/projects/project-a/clips/0/state").json()
+    first_version_id = state["active_prompt"]["versions"][0]["prompt_version_id"]
+
+    response = client.request(
+        "DELETE",
+        f"/api/projects/project-a/clips/0/prompts/{first_version_id}",
+        json={"delete_reason": "cleanup"},
+    )
+
+    assert response.status_code == 200
+    state = response.json()["clip_state"]
+    assert len(state["active_prompt"]["versions"]) == 1
+    assert state["active_prompt"]["versions"][0]["video_model_prompt"] == "Second prompt."
+    prompts = json.loads((project_dir / "video_prompts.json").read_text(encoding="utf-8"))
+    deleted_history = prompts[0]["history"][0]
+    assert deleted_history["deleted_by"] == "user"
+    assert deleted_history["delete_reason"] == "cleanup"
+    assert deleted_history["generated_videos"][0]["path"].endswith("clip_v001.mp4")
+
+
+def test_prompt_version_delete_active_version_falls_back(tmp_path, monkeypatch):
+    _seed_prompt_delete_project(tmp_path, monkeypatch)
+    client = TestClient(server.app)
+    state = client.get("/api/projects/project-a/clips/0/state").json()
+    first_version_id = state["active_prompt"]["versions"][0]["prompt_version_id"]
+    second_version_id = state["active_prompt"]["versions"][1]["prompt_version_id"]
+    client.patch(
+        "/api/projects/project-a/clips/0/selection",
+        json={"active_prompt_version_id": second_version_id},
+    )
+
+    response = client.request("DELETE", f"/api/projects/project-a/clips/0/prompts/{second_version_id}", json={})
+
+    assert response.status_code == 200
+    state = response.json()["clip_state"]
+    assert state["active_prompt"]["version_id"] == first_version_id
+    stored = server.load_clip_selections("project-a")
+    assert stored["clips"]["clip.mp4::0"]["active_prompt_version_id"] == first_version_id
+
+
+def test_prompt_version_delete_rejects_only_remaining_version(tmp_path, monkeypatch):
+    _seed_prompt_delete_project(tmp_path, monkeypatch)
+    client = TestClient(server.app)
+    state = client.get("/api/projects/project-a/clips/0/state").json()
+    first_version_id = state["active_prompt"]["versions"][0]["prompt_version_id"]
+    client.request("DELETE", f"/api/projects/project-a/clips/0/prompts/{first_version_id}", json={})
+    remaining_id = client.get("/api/projects/project-a/clips/0/state").json()["active_prompt"]["version_id"]
+
+    response = client.request("DELETE", f"/api/projects/project-a/clips/0/prompts/{remaining_id}", json={})
+
+    assert response.status_code == 400
+    assert "only remaining prompt version" in response.text
+
+
 def test_clip_selection_accepts_structured_asset_references(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     assets_dir = tmp_path / "assets"

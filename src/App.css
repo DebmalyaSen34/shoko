@@ -2371,6 +2371,49 @@ button {
   stroke-width: 2.4;
 }
 
+.prompt-version-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.prompt-version-icon-button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: #ffffff;
+  color: var(--text-secondary);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.prompt-version-icon-button:hover:not(:disabled),
+.prompt-version-icon-button:focus-visible:not(:disabled) {
+  color: var(--accent-primary);
+  border-color: rgba(45, 186, 78, 0.42);
+  background: rgba(45, 186, 78, 0.08);
+}
+
+.prompt-version-icon-button.danger:hover:not(:disabled),
+.prompt-version-icon-button.danger:focus-visible:not(:disabled) {
+  color: #dc2626;
+  border-color: rgba(220, 38, 38, 0.28);
+  background: rgba(220, 38, 38, 0.08);
+}
+
+.prompt-version-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.prompt-version-icon-button .icon {
+  width: 15px;
+  height: 15px;
+}
+
 .prompt-version-toolbar select {
   min-width: 0;
   height: 32px;
@@ -2380,6 +2423,20 @@ button {
   color: var(--text-primary);
   padding: 0 9px;
   font-size: 12px;
+}
+
+.prompt-version-message {
+  margin-top: -2px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.prompt-version-message.success {
+  color: var(--accent-primary);
+}
+
+.prompt-version-message.error {
+  color: var(--error);
 }
 
 .clip-prompt-card {

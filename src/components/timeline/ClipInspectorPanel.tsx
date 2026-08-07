@@ -19,6 +19,8 @@ type ClipInspectorPanelProps = {
   setActiveTab: (tab: ClipInspectorTab) => void;
   onAddManualFeedback: (clipName: string) => void;
   onPromptFeedback: (target: PromptFeedbackTarget) => void;
+  onRevertPromptVersion: (version: PromptVersion) => Promise<void> | void;
+  onDeletePromptVersion: (version: PromptVersion) => Promise<void> | void;
   onPreview: (preview: PreviewState) => void;
 };
 
@@ -38,10 +40,15 @@ export function ClipInspectorPanel({
   setActiveTab,
   onAddManualFeedback,
   onPromptFeedback,
+  onRevertPromptVersion,
+  onDeletePromptVersion,
   onPreview,
 }: ClipInspectorPanelProps) {
   const [showAllAssets, setShowAllAssets] = useState(false);
   const [promptVersionIndex, setPromptVersionIndex] = useState(selectedVersionIndex);
+  const [promptActionPending, setPromptActionPending] = useState<"revert" | "delete" | null>(null);
+  const [promptActionMessage, setPromptActionMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [deleteConfirmVersionId, setDeleteConfirmVersionId] = useState<string | null>(null);
   const promptVersions = versions
     .map((version, index) => ({ version, index, sections: promptSections(version) }))
     .filter((item) => item.sections.length > 0);
@@ -67,6 +74,7 @@ export function ClipInspectorPanel({
 
   useEffect(() => {
     setPromptVersionIndex(selectedVersionIndex);
+    setDeleteConfirmVersionId(null);
   }, [clip.clip, selectedVersionIndex]);
 
   useEffect(() => {
@@ -74,6 +82,43 @@ export function ClipInspectorPanel({
       setActiveTab("assets");
     }
   }, [activeTab, generatedVideos.length, setActiveTab]);
+
+  async function handleRevertPromptVersion() {
+    if (!selectedPromptVersion || selectedPromptVersion.index === selectedVersionIndex) return;
+    setPromptActionPending("revert");
+    setPromptActionMessage(null);
+    try {
+      await onRevertPromptVersion(selectedPromptVersion.version);
+      setPromptActionMessage({ type: "success", text: "Active prompt version updated." });
+    } catch (error) {
+      setPromptActionMessage({ type: "error", text: error instanceof Error ? error.message : "Failed to revert prompt version." });
+    } finally {
+      setPromptActionPending(null);
+    }
+  }
+
+  async function handleDeletePromptVersion() {
+    if (!selectedPromptVersion || promptVersions.length <= 1) return;
+    const label = versionLabel(selectedPromptVersion.version, selectedPromptVersion.index);
+    const versionId = selectedPromptVersion.version.prompt_version_id;
+    if (!versionId) return;
+    if (deleteConfirmVersionId !== versionId) {
+      setDeleteConfirmVersionId(versionId);
+      setPromptActionMessage({ type: "error", text: `Click delete again to hide ${label}. Data and generated videos will be retained.` });
+      return;
+    }
+    setPromptActionPending("delete");
+    setPromptActionMessage(null);
+    try {
+      await onDeletePromptVersion(selectedPromptVersion.version);
+      setPromptActionMessage({ type: "success", text: `${label} deleted.` });
+      setDeleteConfirmVersionId(null);
+    } catch (error) {
+      setPromptActionMessage({ type: "error", text: error instanceof Error ? error.message : "Failed to delete prompt version." });
+    } finally {
+      setPromptActionPending(null);
+    }
+  }
 
   return (
     <section className="clip-inspector-panel">
@@ -133,7 +178,14 @@ export function ClipInspectorPanel({
               <div className="prompt-version-toolbar">
                 <label>
                   <span>Version</span>
-                  <select value={selectedPromptVersion.index} onChange={(event) => setPromptVersionIndex(Number(event.target.value))}>
+                  <select
+                    value={selectedPromptVersion.index}
+                    onChange={(event) => {
+                      setPromptVersionIndex(Number(event.target.value));
+                      setDeleteConfirmVersionId(null);
+                      setPromptActionMessage(null);
+                    }}
+                  >
                     {promptVersions.map(({ version, index }) => (
                       <option value={index} key={`${version.prompt_version_id || version.timestamp || "prompt"}-${index}`}>
                         {versionLabel(version, index)}
@@ -141,12 +193,39 @@ export function ClipInspectorPanel({
                     ))}
                   </select>
                 </label>
+                <div className="prompt-version-actions">
+                  <button
+                    className="prompt-version-icon-button"
+                    type="button"
+                    onClick={handleRevertPromptVersion}
+                    disabled={selectedPromptVersion.index === selectedVersionIndex || promptActionPending !== null || !selectedPromptVersion.version.prompt_version_id}
+                    title={selectedPromptVersion.index === selectedVersionIndex ? "This version is already active" : "Revert to this prompt version"}
+                  >
+                    <Icon name="refresh" />
+                  </button>
+                  <button
+                    className="prompt-version-icon-button danger"
+                    type="button"
+                    onClick={handleDeletePromptVersion}
+                    disabled={promptVersions.length <= 1 || promptActionPending !== null || !selectedPromptVersion.version.prompt_version_id}
+                    title={
+                      promptVersions.length <= 1
+                        ? "At least one prompt version must remain"
+                        : deleteConfirmVersionId === selectedPromptVersion.version.prompt_version_id
+                        ? "Confirm delete"
+                        : "Delete this prompt version"
+                    }
+                  >
+                    <Icon name="trash" />
+                  </button>
+                </div>
                 {selectedPromptVersion.index === selectedVersionIndex && (
                   <span className="prompt-version-status" title="Selected version" aria-label="Selected version">
                     <Icon name="check" />
                   </span>
                 )}
               </div>
+              {promptActionMessage && <div className={`prompt-version-message ${promptActionMessage.type}`}>{promptActionMessage.text}</div>}
 
               <article className="clip-prompt-card single">
                 <section className="clip-prompt-section video-prompt-section">

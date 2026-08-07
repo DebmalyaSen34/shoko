@@ -83,6 +83,35 @@ export async function updatePromptFeedback(projectName: string, feedbackId: stri
   return response.json() as Promise<{ item: PromptFeedbackItem; clip_state: ClipState }>;
 }
 
+export async function setActivePromptVersion(projectName: string, clipIndex: number, promptVersionId: string) {
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectName)}/clips/${clipIndex}/selection`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ active_prompt_version_id: promptVersionId }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<{ clip_state: ClipState }>;
+}
+
+export async function deletePromptVersion(projectName: string, clipIndex: number, promptVersionId: string, deleteReason = "") {
+  const params = new URLSearchParams();
+  if (deleteReason) params.set("delete_reason", deleteReason);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectName)}/clips/${clipIndex}/prompts/${encodeURIComponent(promptVersionId)}${suffix}`), {
+    method: "DELETE",
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<{
+    project_name: string;
+    clip_index: number;
+    clip_key: string;
+    prompt_version_id: string;
+    deleted_at: string;
+    fallback_prompt_version_id?: string | null;
+    clip_state: ClipState;
+  }>;
+}
+
 export async function listPromptLessons(projectName: string, options: { clipKey?: string; category?: string; includeArchived?: boolean } = {}) {
   const params = new URLSearchParams();
   if (options.clipKey) params.set("clip_key", options.clipKey);

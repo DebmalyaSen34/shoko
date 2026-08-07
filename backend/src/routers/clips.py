@@ -4,12 +4,13 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from src.job_manager import soft_delete_prompt_version
 from src.storage_paths import (
     project_data_dir,
     read_json_file,
     safe_project_name,
 )
-from src.project_manager import static_url_for_path
+from src.project_manager import append_project_event, static_url_for_path
 from src.reference_frames import _resolve_raw_clip_path
 from src.clip_state import build_clip_state, clip_selection_for_key, update_clip_selection
 from src.generator.media import _frame_offsets_for_duration
@@ -27,6 +28,10 @@ class ClipSelectionUpdate(BaseModel):
     selected_asset_paths: Optional[list[str]] = None
     pinned_asset_ids: Optional[list[str]] = None
     pinned_asset_paths: Optional[list[str]] = None
+
+
+class PromptVersionDeleteRequest(BaseModel):
+    delete_reason: Optional[str] = None
 
 
 def _safe_timeline_filmstrip_stem(clip_name: str, clip_index: int) -> str:
@@ -96,7 +101,41 @@ def patch_clip_selection(project_name: str, clip_index: int, request: ClipSelect
     state = build_clip_state(project_name, clip_index)
     updates = request.model_dump(exclude_none=True)
     selection = update_clip_selection(project_name, state["clip_key"], updates)
+    if updates.get("active_prompt_version_id"):
+        versions = state.get("active_prompt", {}).get("versions") or []
+        match = next((version for version in versions if version.get("prompt_version_id") == updates["active_prompt_version_id"]), None)
+        append_project_event(
+            project_name,
+            "active_prompt_version_set",
+            actor="backend",
+            clip_index=clip_index,
+            clip_key=state["clip_key"],
+            entity="prompt_version",
+            entity_id=updates["active_prompt_version_id"],
+            payload={
+                "version_index": (match or {}).get("version_index"),
+                "prompt_id": (match or {}).get("prompt_id"),
+                "source": "clip_selection_api",
+            },
+        )
     return {
         "selection": selection,
         "clip_state": build_clip_state(project_name, clip_index),
     }
+
+
+@router.delete("/api/projects/{project_name}/clips/{clip_index}/prompts/{prompt_version_id}")
+def delete_prompt_version(
+    project_name: str,
+    clip_index: int,
+    prompt_version_id: str,
+    delete_reason: Optional[str] = None,
+    request: PromptVersionDeleteRequest | None = None,
+):
+    project_name = safe_project_name(project_name)
+    return soft_delete_prompt_version(
+        project_name,
+        clip_index,
+        prompt_version_id,
+        delete_reason=delete_reason or (request.delete_reason if request else None) or "",
+    )

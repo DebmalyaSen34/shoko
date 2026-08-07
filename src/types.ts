@@ -246,6 +246,9 @@ export type PromptVersion = {
   timestamp?: string;
   created_at?: string;
   updated_at?: string;
+  deleted_at?: string;
+  deleted_by?: string;
+  delete_reason?: string;
   provider?: string;
   video_provider?: string;
   segmind_model?: string;

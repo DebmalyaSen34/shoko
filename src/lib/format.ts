@@ -12,7 +12,7 @@ export function clipBasename(path?: string) {
   return basename((path || "").replace(/\\/g, "/"));
 }
 
-export function getVersions(prompt?: PromptRecord | null) {
+export function getVersions(prompt?: PromptRecord | null, options: { includeDeleted?: boolean } = {}) {
   if (!prompt) return [];
   const versions = prompt.history?.length ? [...prompt.history] : [];
   if (prompt.video_model_prompt) {
@@ -31,7 +31,7 @@ export function getVersions(prompt?: PromptRecord | null) {
       };
     }
   }
-  return versions;
+  return options.includeDeleted ? versions : versions.filter((version) => !version.deleted_at);
 }
 
 function promptVersionSignature(version: PromptVersion) {

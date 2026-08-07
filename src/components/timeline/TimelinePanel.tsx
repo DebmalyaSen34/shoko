@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, MouseEvent, RefObject, SetStateAction } from "react";
 import type { ClipState, FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptFeedbackTarget, PromptRecord, PromptVersion, Provider, TimelineClip, TimelineFilmstripFrame, TimelineWaveformSegment } from "../../types";
 import { basename, formatSeconds, formatTimecode, getVersions } from "../../lib/format";
-import { apiUrl, staticUrl } from "../../lib/api";
+import { apiUrl, deletePromptVersion, setActivePromptVersion, staticUrl } from "../../lib/api";
 import { EmptyState } from "../EmptyState";
 import { Icon } from "../Icon";
 import { ClipChatPanel } from "../chat/ClipChatPanel";
@@ -291,6 +291,18 @@ function CompactTimeline({
     return result;
   }
 
+  async function revertPromptVersionAndRefresh(clipIndex: number, version: PromptVersion) {
+    if (!projectData?.project_name || !version.prompt_version_id) return;
+    const result = await setActivePromptVersion(projectData.project_name, clipIndex, version.prompt_version_id);
+    setSelectedClipState(result.clip_state);
+  }
+
+  async function deletePromptVersionAndRefresh(clipIndex: number, version: PromptVersion) {
+    if (!projectData?.project_name || !version.prompt_version_id) return;
+    const result = await deletePromptVersion(projectData.project_name, clipIndex, version.prompt_version_id);
+    setSelectedClipState(result.clip_state);
+  }
+
   useEffect(() => {
     if (!projectData?.project_name) return;
     const controller = new AbortController();
@@ -553,6 +565,8 @@ function CompactTimeline({
         executeWorkflow={executeWorkflow}
         onAddManualFeedback={onAddManualFeedback}
         onGenerateVideo={generateVideoAndRefreshClipState}
+        onRevertPromptVersion={(version) => revertPromptVersionAndRefresh(clampedSelectedClipIndex, version)}
+        onDeletePromptVersion={(version) => deletePromptVersionAndRefresh(clampedSelectedClipIndex, version)}
         onOpenDetails={openResultFromVersion}
         onPreview={onPreview}
         promptFeedbackTarget={promptFeedbackTarget}
@@ -732,6 +746,8 @@ function SelectedClipDock({
   executeWorkflow,
   onAddManualFeedback,
   onGenerateVideo,
+  onRevertPromptVersion,
+  onDeletePromptVersion,
   onOpenDetails,
   onPreview,
   promptFeedbackTarget,
@@ -755,6 +771,8 @@ function SelectedClipDock({
   executeWorkflow: (feedbackIndex: number) => Promise<void> | void;
   onAddManualFeedback: (clipName: string) => void;
   onGenerateVideo: (clipIndex: number, promptVersionIndex?: number) => Promise<{ video: GeneratedVideo; generated_videos: GeneratedVideo[] }>;
+  onRevertPromptVersion: (version: PromptVersion) => Promise<void> | void;
+  onDeletePromptVersion: (version: PromptVersion) => Promise<void> | void;
   onOpenDetails: (version: PromptVersion) => void;
   onPreview: (preview: PreviewState) => void;
   promptFeedbackTarget: PromptFeedbackTarget | null;
@@ -781,6 +799,8 @@ function SelectedClipDock({
         setActiveTab={setActiveTab}
         onAddManualFeedback={onAddManualFeedback}
         onPromptFeedback={onPromptFeedback}
+        onRevertPromptVersion={onRevertPromptVersion}
+        onDeletePromptVersion={onDeletePromptVersion}
         onPreview={onPreview}
       />
       <ClipChatPanel

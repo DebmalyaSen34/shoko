@@ -26,6 +26,7 @@ from src.storage_paths import (
     project_jobs_path,
     read_json_file,
     safe_project_name,
+    stable_state_id,
     write_json_file,
 )
 from src.logging_utils import log_event
@@ -885,18 +886,171 @@ def _top_level_prompt_version(prompt: dict) -> Optional[dict]:
     return entry
 
 
-def prompt_versions_for_record(prompt: dict) -> list[dict]:
+def prompt_version_deleted(version: dict) -> bool:
+    return bool(version.get("deleted_at"))
+
+
+def prompt_versions_for_record(prompt: dict, include_deleted: bool = False) -> list[dict]:
     history = prompt.get("history")
     versions = []
     if isinstance(history, list) and history:
         versions = [version for version in history if isinstance(version, dict)]
     top_level_version = _top_level_prompt_version(prompt)
     if top_level_version:
-        if not versions or _prompt_version_signature(versions[-1]) != _prompt_version_signature(top_level_version):
+        matching_index = next(
+            (
+                index
+                for index in range(len(versions) - 1, -1, -1)
+                if _prompt_version_signature(versions[index]) == _prompt_version_signature(top_level_version)
+            ),
+            None,
+        )
+        if matching_index is not None:
+            versions[matching_index] = {**versions[matching_index], **top_level_version}
+        elif not versions:
             versions.append(top_level_version)
         else:
-            versions[-1] = {**versions[-1], **top_level_version}
+            versions.append(top_level_version)
+    if not include_deleted:
+        versions = [version for version in versions if not prompt_version_deleted(version)]
     return versions
+
+
+def _prompt_version_id_for(project_name: str, prompt_record: dict, version: dict, index: int) -> str:
+    prompt_id = stable_state_id(
+        "prompt",
+        project_name,
+        prompt_record.get("clip_used") or prompt_record.get("matched_clip"),
+        prompt_record.get("clip_occurrence"),
+    )
+    return stable_state_id(
+        "version",
+        prompt_id,
+        index,
+        version.get("timestamp"),
+        version.get("video_model_prompt"),
+    )
+
+
+def _sync_prompt_record_to_latest_version(prompt_record: dict, latest_version: dict) -> None:
+    for key in list(prompt_record.keys()):
+        if key in {"clip_used", "matched_clip", "clip_occurrence", "category", "generation_type", "history", "latest_error"}:
+            continue
+        prompt_record.pop(key, None)
+    prompt_record.update({
+        key: value
+        for key, value in latest_version.items()
+        if key not in {"prompt_id", "prompt_version_id", "version_index", "is_latest", "clip_index", "feedback_summary"}
+    })
+    prompt_record["status"] = "success"
+
+
+def soft_delete_prompt_version(project_name: str, clip_index: int, prompt_version_id: str, delete_reason: str = "") -> dict:
+    project_name = safe_project_name(project_name)
+    if not prompt_version_id:
+        raise HTTPException(status_code=400, detail="prompt_version_id is required.")
+
+    timeline_data = read_json_file(project_data_dir(project_name) / "timeline.json", {})
+    timeline = timeline_data.get("video_timeline", [])
+    if clip_index < 0 or clip_index >= len(timeline):
+        raise HTTPException(status_code=404, detail="Clip index not found")
+
+    prompts_path = project_data_dir(project_name) / "video_prompts.json"
+    prompts_data = read_json_file(prompts_path, [])
+    if not isinstance(prompts_data, list):
+        raise HTTPException(status_code=404, detail="Prompt history was not found.")
+
+    from src.clip_chat import matching_prompt
+    from src.clip_state import build_clip_state, clip_selection_for_key, update_clip_selection
+
+    clip = timeline[clip_index]
+    prompt_record = matching_prompt({"prompts": prompts_data}, clip, clip_index)
+    if not prompt_record:
+        raise HTTPException(status_code=404, detail="No generated prompt exists for this clip.")
+
+    all_versions = prompt_versions_for_record(prompt_record, include_deleted=True)
+    active_versions = [
+        version for version in all_versions
+        if not prompt_version_deleted(version)
+    ]
+    if len(active_versions) <= 1:
+        raise HTTPException(status_code=400, detail="Cannot delete the only remaining prompt version.")
+
+    target_index = None
+    for index, version in enumerate(all_versions):
+        if _prompt_version_id_for(project_name, prompt_record, version, index) == prompt_version_id:
+            target_index = index
+            break
+    if target_index is None:
+        raise HTTPException(status_code=404, detail="Prompt version not found.")
+    target_version = all_versions[target_index]
+    if prompt_version_deleted(target_version):
+        raise HTTPException(status_code=400, detail="Prompt version is already deleted.")
+
+    history = prompt_record.get("history")
+    if not isinstance(history, list):
+        history = []
+        prompt_record["history"] = history
+
+    deleted_at = now_iso()
+    if target_index < len(history) and isinstance(history[target_index], dict):
+        history[target_index]["deleted_at"] = deleted_at
+        history[target_index]["deleted_by"] = "user"
+        if delete_reason:
+            history[target_index]["delete_reason"] = delete_reason
+    else:
+        target_snapshot = {
+            key: value
+            for key, value in target_version.items()
+            if key not in {"prompt_id", "prompt_version_id", "version_index", "is_latest", "clip_index", "feedback_summary"}
+        }
+        target_snapshot["deleted_at"] = deleted_at
+        target_snapshot["deleted_by"] = "user"
+        if delete_reason:
+            target_snapshot["delete_reason"] = delete_reason
+        history.append(target_snapshot)
+
+    remaining_versions = prompt_versions_for_record(prompt_record)
+    if not remaining_versions:
+        raise HTTPException(status_code=400, detail="Cannot delete the only remaining prompt version.")
+    _sync_prompt_record_to_latest_version(prompt_record, remaining_versions[-1])
+    write_json_file(prompts_path, prompts_data)
+
+    clip_key = clip_chat_key(clip.get("clip", ""), clip_index)
+    selection = clip_selection_for_key(project_name, clip_key)
+    fallback_version_id = None
+    if selection.get("active_prompt_version_id") == prompt_version_id:
+        refreshed_versions = build_clip_state(project_name, clip_index)["active_prompt"]["versions"]
+        fallback_version = refreshed_versions[-1] if refreshed_versions else None
+        fallback_version_id = fallback_version.get("prompt_version_id") if fallback_version else None
+        if fallback_version_id:
+            update_clip_selection(project_name, clip_key, {"active_prompt_version_id": fallback_version_id})
+
+    append_project_event(
+        project_name,
+        "prompt_version_deleted",
+        actor="backend",
+        clip_index=clip_index,
+        clip_key=clip_key,
+        entity="prompt_version",
+        entity_id=prompt_version_id,
+        payload={
+            "deleted_at": deleted_at,
+            "deleted_by": "user",
+            "delete_reason": delete_reason,
+            "fallback_prompt_version_id": fallback_version_id,
+        },
+    )
+
+    return {
+        "project_name": project_name,
+        "clip_index": clip_index,
+        "clip_key": clip_key,
+        "prompt_version_id": prompt_version_id,
+        "deleted_at": deleted_at,
+        "fallback_prompt_version_id": fallback_version_id,
+        "clip_state": build_clip_state(project_name, clip_index),
+    }
 
 
 def _safe_video_stem(clip_name: str) -> str:

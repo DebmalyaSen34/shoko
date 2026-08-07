@@ -37,6 +37,7 @@ export function Icon({ name, className = "" }: { name: string; className?: strin
     copy: "M8 8h11v11H8z M5 16H4V4h12v1",
     check: "M20 6L9 17l-5-5",
     refresh: "M20 12a8 8 0 0 1-14 5 M4 12a8 8 0 0 1 14-5 M18 3v4h-4 M6 21v-4h4",
+    trash: "M4 7h16 M10 11v6 M14 11v6 M6 7l1 14h10l1-14 M9 7V4h6v3",
     magic: "M5 19L19 5 M14 5h5v5 M4 5l1 2 2 1-2 1-1 2-1-2-2-1 2-1z",
     link: "M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1 M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1",
   };

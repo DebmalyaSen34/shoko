@@ -30,6 +30,9 @@ import { FormattedPrompt } from "../FormattedPrompt";
 import { WorkflowRunningLabel } from "../WorkflowRunningLabel";
 import { PromptInputBox } from "../ui/ai-prompt-box";
 
+const MIN_DOCK_CHAT_WIDTH = 270;
+const MAX_DOCK_CHAT_WIDTH = 760;
+
 type ClipChatPanelProps = {
   variant?: "panel" | "dock";
   clipIndex: number;
@@ -47,6 +50,10 @@ type ClipChatPanelProps = {
   promptFeedbackTarget?: PromptFeedbackTarget | null;
   onClosePromptFeedback?: () => void;
   onPromptFeedbackSaved?: (clipState: ClipState) => void;
+  dockExpanded?: boolean;
+  dockWidth?: number;
+  onDockExpandedChange?: (expanded: boolean) => void;
+  onDockWidthChange?: (width: number) => void;
 };
 
 function localToolMessage(content: string): ClipChatMessage {
@@ -92,6 +99,10 @@ export function ClipChatPanel({
   promptFeedbackTarget,
   onClosePromptFeedback,
   onPromptFeedbackSaved,
+  dockExpanded = false,
+  dockWidth = 420,
+  onDockExpandedChange,
+  onDockWidthChange,
 }: ClipChatPanelProps) {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ClipChatMessage[]>([]);
@@ -107,6 +118,7 @@ export function ClipChatPanel({
     return saved ? Number(saved) || 420 : 420;
   });
   const prefersReducedMotion = useReducedMotion();
+  const panelRef = useRef<HTMLElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const feedbackItems = feedback?.feedback_items || [];
@@ -481,12 +493,33 @@ export function ClipChatPanel({
   }
 
   function resizePanel(clientX: number) {
-    const nextWidth = Math.min(760, Math.max(320, window.innerWidth - clientX));
+    const maxWidth = Math.min(MAX_DOCK_CHAT_WIDTH, Math.floor(window.innerWidth * 0.62));
+    const nextWidth = Math.min(maxWidth, Math.max(MIN_DOCK_CHAT_WIDTH, window.innerWidth - clientX));
+    if (variant === "dock" && onDockWidthChange) {
+      onDockExpandedChange?.(true);
+      onDockWidthChange(nextWidth);
+      window.localStorage.setItem("loka15.clip-chat.dock-width", String(nextWidth));
+      return;
+    }
     setPanelWidth(nextWidth);
     window.localStorage.setItem("loka15.clip-chat.width", String(nextWidth));
   }
 
+  function toggleDockExpanded() {
+    if (!onDockExpandedChange) return;
+    if (!dockExpanded) {
+      const currentWidth = panelRef.current?.getBoundingClientRect().width;
+      if (currentWidth && onDockWidthChange) {
+        const nextWidth = Math.min(MAX_DOCK_CHAT_WIDTH, Math.max(MIN_DOCK_CHAT_WIDTH, Math.round(currentWidth)));
+        onDockWidthChange(nextWidth);
+        window.localStorage.setItem("loka15.clip-chat.dock-width", String(nextWidth));
+      }
+    }
+    onDockExpandedChange(!dockExpanded);
+  }
+
   const panelStyle = variant === "panel" && window.innerWidth > 900 ? { width: panelWidth, minWidth: panelWidth } : undefined;
+  const showResizeHandle = variant === "panel" || (variant === "dock" && onDockWidthChange);
   const panelMotion = prefersReducedMotion
     ? {
         initial: { opacity: 0 },
@@ -510,22 +543,30 @@ export function ClipChatPanel({
         },
         transition: {
           type: "spring" as const,
-          stiffness: 360,
-          damping: 34,
-          mass: 0.8,
+          stiffness: 260,
+          damping: 30,
+          mass: 0.9,
+          layout: {
+            type: "spring" as const,
+            stiffness: 260,
+            damping: 32,
+            mass: 0.9,
+          },
         },
       };
 
   if (promptFeedbackTarget) {
     return (
       <motion.aside
+        ref={panelRef}
+        layout
         key="prompt-feedback-panel"
         className={`clip-chat-panel prompt-feedback-panel ${variant === "dock" ? "dock-chat-panel" : ""}`}
         style={panelStyle}
         aria-label="Prompt feedback"
         {...panelMotion}
       >
-        {variant === "panel" && (
+        {showResizeHandle && (
           <div
             className="clip-chat-resize-handle"
             role="separator"
@@ -542,7 +583,15 @@ export function ClipChatPanel({
               }
             }}
             onKeyDown={(event) => {
-              if (event.key === "ArrowLeft") setPanelWidth((width) => Math.min(760, width + 24));
+              if (variant === "dock" && onDockWidthChange) {
+                if (event.key === "ArrowLeft") {
+                  onDockExpandedChange?.(true);
+                  onDockWidthChange(Math.min(MAX_DOCK_CHAT_WIDTH, dockWidth + 24));
+                }
+                if (event.key === "ArrowRight") onDockWidthChange(Math.max(MIN_DOCK_CHAT_WIDTH, dockWidth - 24));
+                return;
+              }
+              if (event.key === "ArrowLeft") setPanelWidth((width) => Math.min(MAX_DOCK_CHAT_WIDTH, width + 24));
               if (event.key === "ArrowRight") setPanelWidth((width) => Math.max(320, width - 24));
             }}
           />
@@ -563,13 +612,15 @@ export function ClipChatPanel({
 
   return (
     <motion.aside
+      ref={panelRef}
+      layout
       key="clip-chat-panel"
       className={`clip-chat-panel ${variant === "dock" ? "dock-chat-panel" : ""}`}
       style={panelStyle}
       aria-label="Clip chat"
       {...panelMotion}
     >
-      {variant === "panel" && (
+      {showResizeHandle && (
         <div
           className="clip-chat-resize-handle"
           role="separator"
@@ -586,7 +637,15 @@ export function ClipChatPanel({
             }
           }}
           onKeyDown={(event) => {
-            if (event.key === "ArrowLeft") setPanelWidth((width) => Math.min(760, width + 24));
+            if (variant === "dock" && onDockWidthChange) {
+              if (event.key === "ArrowLeft") {
+                onDockExpandedChange?.(true);
+                onDockWidthChange(Math.min(MAX_DOCK_CHAT_WIDTH, dockWidth + 24));
+              }
+              if (event.key === "ArrowRight") onDockWidthChange(Math.max(MIN_DOCK_CHAT_WIDTH, dockWidth - 24));
+              return;
+            }
+            if (event.key === "ArrowLeft") setPanelWidth((width) => Math.min(MAX_DOCK_CHAT_WIDTH, width + 24));
             if (event.key === "ArrowRight") setPanelWidth((width) => Math.max(320, width - 24));
           }}
         />
@@ -602,6 +661,17 @@ export function ClipChatPanel({
         {onClose && (
           <button className="icon-btn" type="button" title="Close Chat" onClick={onClose}>
             <Icon name="close" />
+          </button>
+        )}
+        {variant === "dock" && onDockExpandedChange && (
+          <button
+            className="icon-btn"
+            type="button"
+            title={dockExpanded ? "Collapse Chat" : "Expand Chat"}
+            aria-pressed={dockExpanded}
+            onClick={toggleDockExpanded}
+          >
+            <Icon name={dockExpanded ? "collapsePanelRight" : "expand"} />
           </button>
         )}
       </div>

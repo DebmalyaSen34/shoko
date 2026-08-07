@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Dispatch, MouseEvent, RefObject, SetStateAction } from "react";
+import type { CSSProperties, Dispatch, MouseEvent, RefObject, SetStateAction } from "react";
 import type { ClipState, FeedbackGroup, GeneratedVideo, PreviewState, ProjectData, PromptFeedbackTarget, PromptRecord, PromptVersion, Provider, TimelineClip, TimelineFilmstripFrame, TimelineWaveformSegment } from "../../types";
 import { basename, formatSeconds, formatTimecode, getVersions } from "../../lib/format";
 import { apiUrl, deletePromptVersion, setActivePromptVersion, staticUrl } from "../../lib/api";
@@ -191,6 +191,11 @@ function CompactTimeline({
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [filmstrips, setFilmstrips] = useState<Record<number, FilmstripLoadState>>({});
   const [waveform, setWaveform] = useState<WaveformLoadState>({ status: "idle", segments: [] });
+  const [dockChatExpanded, setDockChatExpanded] = useState(() => window.localStorage.getItem("loka15.clip-chat.dock-expanded") === "true");
+  const [dockChatWidth, setDockChatWidth] = useState(() => {
+    const saved = window.localStorage.getItem("loka15.clip-chat.dock-width");
+    return saved ? Number(saved) || 420 : 420;
+  });
   const promptStateKey = useMemo(
     () => (projectData?.prompts || [])
       .map((prompt) => {
@@ -252,6 +257,14 @@ function CompactTimeline({
     setSelectedClipState(null);
     setPromptFeedbackTarget(null);
   }, [projectData?.project_name]);
+
+  useEffect(() => {
+    window.localStorage.setItem("loka15.clip-chat.dock-expanded", String(dockChatExpanded));
+  }, [dockChatExpanded]);
+
+  useEffect(() => {
+    window.localStorage.setItem("loka15.clip-chat.dock-width", String(dockChatWidth));
+  }, [dockChatWidth]);
 
   useEffect(() => {
     if (!projectData?.project_name || projectData.timeline.length === 0) return;
@@ -456,7 +469,10 @@ function CompactTimeline({
   };
 
   return (
-    <div className="compact-timeline-workspace">
+    <div
+      className={`compact-timeline-workspace ${dockChatExpanded ? "chat-expanded" : ""}`}
+      style={{ "--dock-chat-width": `${dockChatWidth}px` } as CSSProperties}
+    >
       <div
         ref={refEl}
         className="compact-timeline-scroll"
@@ -574,6 +590,10 @@ function CompactTimeline({
         onClosePromptFeedback={() => setPromptFeedbackTarget(null)}
         onPromptFeedbackSaved={setSelectedClipState}
         playheadOffsetSeconds={playheadOffsetForSelectedClip}
+        chatExpanded={dockChatExpanded}
+        onChatExpandedChange={setDockChatExpanded}
+        chatWidth={dockChatWidth}
+        onChatWidthChange={setDockChatWidth}
       />
     </div>
   );
@@ -755,6 +775,10 @@ function SelectedClipDock({
   onClosePromptFeedback,
   onPromptFeedbackSaved,
   playheadOffsetSeconds,
+  chatExpanded,
+  onChatExpandedChange,
+  chatWidth,
+  onChatWidthChange,
 }: {
   projectData: ProjectData;
   provider: Provider;
@@ -780,29 +804,35 @@ function SelectedClipDock({
   onClosePromptFeedback: () => void;
   onPromptFeedbackSaved: (state: ClipState) => void;
   playheadOffsetSeconds?: number;
+  chatExpanded: boolean;
+  onChatExpandedChange: (expanded: boolean) => void;
+  chatWidth: number;
+  onChatWidthChange: (width: number) => void;
 }) {
   const feedbackItems = feedback?.feedback_items || [];
   const [activeTab, setActiveTab] = useState<ClipInspectorTab>("assets");
 
   return (
     <aside className="lower-context-panels">
-      <ClipPreviewPanel clip={clip} playheadOffsetSeconds={playheadOffsetSeconds} />
-      <ClipInspectorPanel
-        activeTab={activeTab}
-        clip={clip}
-        feedbackItems={feedbackItems}
-        projectData={projectData}
-        clipState={clipState}
-        versions={versions}
-        selectedVersion={selectedVersion}
-        selectedVersionIndex={selectedVersionIndex}
-        setActiveTab={setActiveTab}
-        onAddManualFeedback={onAddManualFeedback}
-        onPromptFeedback={onPromptFeedback}
-        onRevertPromptVersion={onRevertPromptVersion}
-        onDeletePromptVersion={onDeletePromptVersion}
-        onPreview={onPreview}
-      />
+      <div className="lower-context-primary">
+        <ClipPreviewPanel clip={clip} playheadOffsetSeconds={playheadOffsetSeconds} />
+        <ClipInspectorPanel
+          activeTab={activeTab}
+          clip={clip}
+          feedbackItems={feedbackItems}
+          projectData={projectData}
+          clipState={clipState}
+          versions={versions}
+          selectedVersion={selectedVersion}
+          selectedVersionIndex={selectedVersionIndex}
+          setActiveTab={setActiveTab}
+          onAddManualFeedback={onAddManualFeedback}
+          onPromptFeedback={onPromptFeedback}
+          onRevertPromptVersion={onRevertPromptVersion}
+          onDeletePromptVersion={onDeletePromptVersion}
+          onPreview={onPreview}
+        />
+      </div>
       <ClipChatPanel
         variant="dock"
         clipIndex={clipIndex}
@@ -819,6 +849,10 @@ function SelectedClipDock({
         promptFeedbackTarget={promptFeedbackTarget}
         onClosePromptFeedback={onClosePromptFeedback}
         onPromptFeedbackSaved={onPromptFeedbackSaved}
+        dockExpanded={chatExpanded}
+        dockWidth={chatWidth}
+        onDockExpandedChange={onChatExpandedChange}
+        onDockWidthChange={onChatWidthChange}
       />
     </aside>
   );

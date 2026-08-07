@@ -17,6 +17,7 @@ export function Icon({ name, className = "" }: { name: string; className?: strin
     plus: "M12 5v14 M5 12h14",
     minus: "M5 12h14",
     expand: "M8 3H3v5 M16 3h5v5 M3 16v5h5 M21 16v5h-5 M3 3l6 6 M21 3l-6 6 M3 21l6-6 M21 21l-6-6",
+    collapsePanelRight: "M4 5h16v14H4z M15 5v14 M10 9l3 3-3 3",
     play: "M8 5v14l11-7-11-7z",
     pause: "M7 5h4v14H7z M13 5h4v14h-4z",
     export: "M12 3v12 M7 8l5-5 5 5 M5 15v4h14v-4",
